@@ -1,0 +1,133 @@
+//! Hotkey strings like "Ctrl+Shift+PrintScreen" <-> (modifiers, virtual key).
+
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Combo {
+    pub mods: u32,
+    pub vk: u32,
+}
+
+const MODS: [(u32, &str); 4] = [(MOD_CONTROL, "Ctrl"), (MOD_ALT, "Alt"), (MOD_SHIFT, "Shift"), (MOD_WIN, "Win")];
+
+fn key_name(vk: u32) -> Option<String> {
+    let named = match vk as u16 {
+        VK_SNAPSHOT => "PrintScreen",
+        VK_PAUSE => "Pause",
+        VK_SCROLL => "ScrollLock",
+        VK_INSERT => "Insert",
+        VK_DELETE => "Delete",
+        VK_HOME => "Home",
+        VK_END => "End",
+        VK_PRIOR => "PageUp",
+        VK_NEXT => "PageDown",
+        VK_LEFT => "Left",
+        VK_RIGHT => "Right",
+        VK_UP => "Up",
+        VK_DOWN => "Down",
+        VK_SPACE => "Space",
+        VK_TAB => "Tab",
+        VK_RETURN => "Enter",
+        VK_BACK => "Backspace",
+        VK_ESCAPE => "Esc",
+        VK_OEM_3 => "`",
+        VK_OEM_MINUS => "-",
+        VK_OEM_PLUS => "=",
+        VK_OEM_4 => "[",
+        VK_OEM_6 => "]",
+        VK_OEM_1 => ";",
+        VK_OEM_7 => "'",
+        VK_OEM_COMMA => ",",
+        VK_OEM_PERIOD => ".",
+        VK_OEM_2 => "/",
+        VK_OEM_5 => "\\",
+        _ => "",
+    };
+    if !named.is_empty() {
+        return Some(named.into());
+    }
+    match vk {
+        0x30..=0x39 | 0x41..=0x5A => Some(char::from_u32(vk).unwrap().to_string()),
+        v if (VK_F1 as u32..=VK_F24 as u32).contains(&v) => Some(format!("F{}", v - VK_F1 as u32 + 1)),
+        v if (VK_NUMPAD0 as u32..=VK_NUMPAD9 as u32).contains(&v) => {
+            Some(format!("Num{}", v - VK_NUMPAD0 as u32))
+        }
+        _ => None,
+    }
+}
+
+fn key_from_name(name: &str) -> Option<u32> {
+    // Brute-force the reverse mapping; the table is tiny.
+    (1u32..=0xFE).find(|&vk| key_name(vk).is_some_and(|n| n.eq_ignore_ascii_case(name)))
+}
+
+pub fn parse(s: &str) -> Option<Combo> {
+    let mut mods = 0;
+    let mut vk = None;
+    for part in s.split('+').map(str::trim).filter(|p| !p.is_empty()) {
+        if let Some((m, _)) = MODS.iter().find(|(_, n)| n.eq_ignore_ascii_case(part)) {
+            mods |= m;
+        } else if part.eq_ignore_ascii_case("control") {
+            mods |= MOD_CONTROL;
+        } else {
+            vk = Some(key_from_name(part)?);
+        }
+    }
+    vk.map(|vk| Combo { mods, vk })
+}
+
+pub fn format(c: Combo) -> String {
+    let mut parts: Vec<String> =
+        MODS.iter().filter(|(m, _)| c.mods & m != 0).map(|(_, n)| n.to_string()).collect();
+    parts.push(key_name(c.vk).unwrap_or_else(|| format!("0x{:02X}", c.vk)));
+    parts.join("+")
+}
+
+/// Short labels for keycaps.
+pub fn display_parts(s: &str) -> Vec<String> {
+    s.split('+')
+        .filter(|p| !p.is_empty())
+        .map(|p| match p {
+            "PrintScreen" => "prtsc".to_string(),
+            "PageUp" => "pgup".to_string(),
+            "PageDown" => "pgdn".to_string(),
+            other => other.to_lowercase(),
+        })
+        .collect()
+}
+
+/// Polls the physical keyboard; returns a combo once a non-modifier key is down.
+/// Used by the hotkey recorder (global hotkeys are suspended meanwhile).
+pub fn poll_pressed() -> Option<Combo> {
+    use crate::win::key_down;
+    let modifier_vks = [
+        VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN, VK_LSHIFT, VK_RSHIFT, VK_LCONTROL,
+        VK_RCONTROL, VK_LMENU, VK_RMENU,
+    ];
+    for vk in 0x08u32..=0xFE {
+        if modifier_vks.contains(&(vk as u16)) || key_name(vk).is_none() {
+            continue;
+        }
+        if key_down(vk) {
+            let mut mods = 0;
+            if key_down(VK_CONTROL as u32) {
+                mods |= MOD_CONTROL;
+            }
+            if key_down(VK_MENU as u32) {
+                mods |= MOD_ALT;
+            }
+            if key_down(VK_SHIFT as u32) {
+                mods |= MOD_SHIFT;
+            }
+            if key_down(VK_LWIN as u32) || key_down(VK_RWIN as u32) {
+                mods |= MOD_WIN;
+            }
+            return Some(Combo { mods, vk });
+        }
+    }
+    None
+}
+
+pub fn is_escape(c: Combo) -> bool {
+    c.mods == 0 && c.vk == VK_ESCAPE as u32
+}
