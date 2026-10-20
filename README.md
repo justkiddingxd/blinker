@@ -68,7 +68,7 @@ All global hotkeys can be changed in settings → hotkeys.
 
 ## Download
 
-Grab `blinker.exe` from [Releases](https://github.com/justkiddingxd/blinker/releases/latest) and run it. It is a single file with nothing to install. It starts in the tray, and settings → system turns on autostart.
+Grab `blinker.exe` from [Releases](https://github.com/justkiddingxd/blinker/releases/latest) and run it. It is a single file with nothing to install. It opens the settings window and keeps running in the tray. Autostart is in settings → system.
 
 Windows SmartScreen may warn about an unsigned app: click *More info → Run anyway*.
 
