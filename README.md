@@ -37,6 +37,11 @@ Capture, annotate and share in a couple of keystrokes. It lives in the tray and 
 
 ### Screen recording
 
+<div align="center">
+<img src="docs/record-en.gif" width="100%" alt="selecting an area in record mode, recording it with a timer pill, then stopping">
+<sub>press <code>Ctrl+Shift+PrtSc</code> → select an area → record → stop: the video is saved</sub>
+</div>
+
 - **An area, a window or a whole monitor** to MP4 (H.264 or HEVC) on the GPU's hardware encoder. Frames go GPU → encoder with no copies through memory.
 - **Window recording** keeps following the window even when it's covered or moved, and the control pill follows it too.
 - **System sound and microphone on separate tracks**, pause and resume, and visible clicks and key combos (plain typing is never shown).
@@ -120,7 +125,7 @@ X-Filename: <file name, percent-encoded UTF-8>
 | `overlay.rs` · `toast.rs` · `home.rs` · `editor/` | windows |
 | `record/` | recording: Windows Graphics Capture, WASAPI, Media Foundation, the HUD |
 | `vedit/` · `media.rs` | video editor, MP4/GIF export, reading files |
-| `demo.rs` | `--demo <dir> [en\|ru]`: plays the animation above off-screen and saves its frames |
+| `demo.rs` | `--demo <dir> [en\|ru] [record]`: plays the animations above off-screen and saves their frames |
 
 ## License
 

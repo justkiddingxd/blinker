@@ -55,7 +55,8 @@ fn main() {
         return;
     }
     if let Some(dir) = arg_after("--demo") {
-        demo::run(PathBuf::from(dir), args.last().map(String::as_str).unwrap_or(""));
+        let lang = arg_after(&dir).unwrap_or_default();
+        demo::run(PathBuf::from(dir), &lang, has("record"));
         return;
     }
     if has("--settings") {

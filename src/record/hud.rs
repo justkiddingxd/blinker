@@ -26,7 +26,7 @@ const CLASS: &str = "BlinkerRecHud";
 const REC: Color32 = Color32::from_rgb(0xE5, 0x48, 0x4D);
 
 #[derive(Clone, Copy, PartialEq)]
-enum Btn {
+pub(crate) enum Btn {
     Pause,
     Stop,
 }
@@ -52,7 +52,7 @@ struct State {
 
 /// Pill position under `area` (centered), above it when the bottom has no
 /// room, inside along the bottom edge when neither fits.
-fn pill_position(area: IRect, monitor: &Monitor, size: (i32, i32), scale: f32) -> (i32, i32) {
+pub(crate) fn pill_position(area: IRect, monitor: &Monitor, size: (i32, i32), scale: f32) -> (i32, i32) {
     let px = |v: f32| (v * scale).round() as i32;
     let gap = px(8.0);
     let margin = px(5.0);
@@ -157,7 +157,7 @@ impl Hud {
             let px = |v: f32| (v * s).round() as i32;
             let m = px(5.0);
             let frame_r = IRect::new(area.x - m, area.y - m, area.w + 2 * m, area.h + 2 * m);
-            let pill_size = (px(150.0), px(30.0));
+            let (pill_size, pause_x, stop_x) = pill_layout(s);
             let pill_pos = pill_position(area, &monitor, pill_size, s);
             let frame_hwnd = if frame { unsafe { layered(frame_r, true) } } else { null_mut() };
             let pill = unsafe { layered(IRect::new(pill_pos.0, pill_pos.1, pill_size.0, pill_size.1), false) };
@@ -166,8 +166,8 @@ impl Hud {
                     pill,
                     pill_pos,
                     pill_size,
-                    pause_x: (pill_size.0 - px(64.0), pill_size.0 - px(34.0)),
-                    stop_x: (pill_size.0 - px(34.0), pill_size.0),
+                    pause_x,
+                    stop_x,
                     hover: None,
                     tracking: false,
                     shown: Instant::now(),
@@ -217,13 +217,19 @@ impl Hud {
     }
 }
 
-/// Dashed hairline + solid corner brackets just outside the recorded area.
 fn paint_frame(hwnd: HWND, frame_r: IRect, area: IRect, s: f32) {
     let Some(mut pm) = sk::Pixmap::new(frame_r.w as u32, frame_r.h as u32) else { return };
     let o = (area.x - frame_r.x) as f32;
-    let (w, h) = (area.w as f32, area.h as f32);
+    draw_frame(&mut pm, (o, o), (area.w as f32, area.h as f32), s);
+    unsafe { present(hwnd, &pm, (frame_r.x, frame_r.y)) };
+}
+
+/// Dashed hairline + solid corner brackets just outside the recorded area
+/// (`size` at `o` in `pm`).
+pub(crate) fn draw_frame(pm: &mut sk::Pixmap, o: (f32, f32), size: (f32, f32), s: f32) {
+    let (w, h) = size;
     let inset = 2.5 * s;
-    let (l, t, r, b) = (o - inset, o - inset, o + w + inset, o + h + inset);
+    let (l, t, r, b) = (o.0 - inset, o.1 - inset, o.0 + w + inset, o.1 + h + inset);
     let white = Color32::from_rgba_unmultiplied(240, 238, 232, 235);
     let shadow = Color32::from_black_alpha(110);
     let mut pb = sk::PathBuilder::new();
@@ -253,7 +259,6 @@ fn paint_frame(hwnd: HWND, frame_r: IRect, area: IRect, s: f32) {
             }
         }
     }
-    unsafe { present(hwnd, &pm, (frame_r.x, frame_r.y)) };
 }
 
 fn fmt_time(secs: u64) -> String {
@@ -274,72 +279,99 @@ fn paint_pill() {
     HUD.with(|cell| {
         let guard = cell.borrow();
         let Some(st) = guard.as_ref() else { return };
-        let (w, h) = st.pill_size;
-        let Some(mut pm) = sk::Pixmap::new(w as u32, h as u32) else { return };
-        let s = st.scale;
-        if let Some(bg) = theme::rounded_rect_path(0.5, 0.5, w as f32 - 1.0, h as f32 - 1.0, h as f32 / 2.0 - 0.5) {
-            pm.fill_path(&bg, &paint_of(Color32::from_rgba_unmultiplied(22, 22, 21, 240)), sk::FillRule::Winding, sk::Transform::identity(), None);
-            let line = sk::Stroke { width: 1.0, ..Default::default() };
-            pm.stroke_path(&bg, &paint_of(theme::LINE), &line, sk::Transform::identity(), None);
-        }
-        let paused = st.clock.is_paused();
-        let cy = h as f32 / 2.0;
-        let blink = (st.shown.elapsed().as_millis() % 1000) as f32 / 1000.0;
-        // dot: pulsing red while recording, steady grey while paused
-        let dot = if paused {
-            theme::FAINT
-        } else {
-            let a = 0.55 + 0.45 * (blink * std::f32::consts::TAU).cos().abs();
-            Color32::from_rgba_unmultiplied(REC.r(), REC.g(), REC.b(), (255.0 * a) as u8)
+        let look = PillLook {
+            secs: (st.clock.now().max(0) / HNS) as u64,
+            paused: st.clock.is_paused(),
+            blink: (st.shown.elapsed().as_millis() % 1000) as f32 / 1000.0,
+            hover: st.hover,
         };
-        fill(&mut pm, sk::PathBuilder::from_circle(14.0 * s, cy, 4.5 * s), dot);
-        if let Ok(f) = FontRef::try_from_slice(theme::FONT_MONO_MEDIUM) {
-            let secs = (st.clock.now().max(0) / HNS) as u64;
-            // the time blinks while paused
-            let col = if paused && blink > 0.5 { theme::FAINT } else { theme::TEXT };
-            draw_text(&mut pm, &f, 12.5 * s, 26.0 * s, cy, &fmt_time(secs), col);
+        if let Some(pm) = draw_pill(&look, st.scale) {
+            unsafe { present(st.pill, &pm, st.pill_pos) };
         }
-        let x0 = st.pause_x.0 as f32;
-        if let Some(sep) = sk::Rect::from_xywh(x0 - 2.0 * s, 7.0 * s, 1.0, h as f32 - 14.0 * s) {
-            pm.fill_rect(sep, &paint_of(theme::LINE), sk::Transform::identity(), None);
-        }
-        for (btn, (a, b)) in [(Btn::Pause, st.pause_x), (Btn::Stop, st.stop_x)] {
-            let c = ((a + b) as f32 / 2.0, cy);
-            let hovered = st.hover == Some(btn);
-            if hovered {
-                fill(&mut pm, sk::PathBuilder::from_circle(c.0, c.1, 11.0 * s), theme::HOVER);
-            }
-            let fg = if hovered && btn == Btn::Stop {
-                REC
-            } else if hovered {
-                theme::ACCENT
-            } else {
-                theme::TEXT
-            };
-            match btn {
-                Btn::Stop => {
-                    let sq = 9.0 * s;
-                    fill(&mut pm, theme::rounded_rect_path(c.0 - sq / 2.0, c.1 - sq / 2.0, sq, sq, 1.5 * s), fg);
-                }
-                Btn::Pause if paused => {
-                    // resume: play triangle
-                    let mut pb = sk::PathBuilder::new();
-                    pb.move_to(c.0 - 3.5 * s, c.1 - 5.5 * s);
-                    pb.line_to(c.0 + 5.5 * s, c.1);
-                    pb.line_to(c.0 - 3.5 * s, c.1 + 5.5 * s);
-                    pb.close();
-                    fill(&mut pm, pb.finish(), fg);
-                }
-                Btn::Pause => {
-                    for dx in [-3.0, 3.0] {
-                        let x = c.0 + dx * s - 1.5 * s;
-                        fill(&mut pm, theme::rounded_rect_path(x, c.1 - 5.0 * s, 3.0 * s, 10.0 * s, 1.0 * s), fg);
-                    }
-                }
-            }
-        }
-        unsafe { present(st.pill, &pm, st.pill_pos) };
     });
+}
+
+/// What the pill shows.
+pub(crate) struct PillLook {
+    pub secs: u64,
+    pub paused: bool,
+    /// Phase of the 1 s blink, 0..1.
+    pub blink: f32,
+    pub hover: Option<Btn>,
+}
+
+/// Pill size and the x ranges of its pause and stop buttons at scale `s`.
+pub(crate) fn pill_layout(s: f32) -> ((i32, i32), (i32, i32), (i32, i32)) {
+    let px = |v: f32| (v * s).round() as i32;
+    let size = (px(150.0), px(30.0));
+    (size, (size.0 - px(64.0), size.0 - px(34.0)), (size.0 - px(34.0), size.0))
+}
+
+/// "● 0:12 | ⏸ ■" on a dark rounded plate.
+pub(crate) fn draw_pill(look: &PillLook, s: f32) -> Option<sk::Pixmap> {
+    let ((w, h), pause_x, stop_x) = pill_layout(s);
+    let mut pm = sk::Pixmap::new(w as u32, h as u32)?;
+    if let Some(bg) = theme::rounded_rect_path(0.5, 0.5, w as f32 - 1.0, h as f32 - 1.0, h as f32 / 2.0 - 0.5) {
+        pm.fill_path(&bg, &paint_of(Color32::from_rgba_unmultiplied(22, 22, 21, 240)), sk::FillRule::Winding, sk::Transform::identity(), None);
+        let line = sk::Stroke { width: 1.0, ..Default::default() };
+        pm.stroke_path(&bg, &paint_of(theme::LINE), &line, sk::Transform::identity(), None);
+    }
+    let paused = look.paused;
+    let cy = h as f32 / 2.0;
+    let blink = look.blink;
+    // dot: pulsing red while recording, steady grey while paused
+    let dot = if paused {
+        theme::FAINT
+    } else {
+        let a = 0.55 + 0.45 * (blink * std::f32::consts::TAU).cos().abs();
+        Color32::from_rgba_unmultiplied(REC.r(), REC.g(), REC.b(), (255.0 * a) as u8)
+    };
+    fill(&mut pm, sk::PathBuilder::from_circle(14.0 * s, cy, 4.5 * s), dot);
+    if let Ok(f) = FontRef::try_from_slice(theme::FONT_MONO_MEDIUM) {
+        // the time blinks while paused
+        let col = if paused && blink > 0.5 { theme::FAINT } else { theme::TEXT };
+        draw_text(&mut pm, &f, 12.5 * s, 26.0 * s, cy, &fmt_time(look.secs), col);
+    }
+    let x0 = pause_x.0 as f32;
+    if let Some(sep) = sk::Rect::from_xywh(x0 - 2.0 * s, 7.0 * s, 1.0, h as f32 - 14.0 * s) {
+        pm.fill_rect(sep, &paint_of(theme::LINE), sk::Transform::identity(), None);
+    }
+    for (btn, (a, b)) in [(Btn::Pause, pause_x), (Btn::Stop, stop_x)] {
+        let c = ((a + b) as f32 / 2.0, cy);
+        let hovered = look.hover == Some(btn);
+        if hovered {
+            fill(&mut pm, sk::PathBuilder::from_circle(c.0, c.1, 11.0 * s), theme::HOVER);
+        }
+        let fg = if hovered && btn == Btn::Stop {
+            REC
+        } else if hovered {
+            theme::ACCENT
+        } else {
+            theme::TEXT
+        };
+        match btn {
+            Btn::Stop => {
+                let sq = 9.0 * s;
+                fill(&mut pm, theme::rounded_rect_path(c.0 - sq / 2.0, c.1 - sq / 2.0, sq, sq, 1.5 * s), fg);
+            }
+            Btn::Pause if paused => {
+                // resume: play triangle
+                let mut pb = sk::PathBuilder::new();
+                pb.move_to(c.0 - 3.5 * s, c.1 - 5.5 * s);
+                pb.line_to(c.0 + 5.5 * s, c.1);
+                pb.line_to(c.0 - 3.5 * s, c.1 + 5.5 * s);
+                pb.close();
+                fill(&mut pm, pb.finish(), fg);
+            }
+            Btn::Pause => {
+                for dx in [-3.0, 3.0] {
+                    let x = c.0 + dx * s - 1.5 * s;
+                    fill(&mut pm, theme::rounded_rect_path(x, c.1 - 5.0 * s, 3.0 * s, 10.0 * s, 1.0 * s), fg);
+                }
+            }
+        }
+    }
+    Some(pm)
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {

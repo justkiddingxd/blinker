@@ -1,6 +1,7 @@
-//! `blinker.exe --demo <dir> [en|ru]`: plays a scripted capture on a made-up
-//! desktop in an off-screen window and saves every frame as a PNG (for the
-//! README animation). The real mouse and keyboard are never touched.
+//! `blinker.exe --demo <dir> [en|ru] [record]`: plays a scripted capture (or
+//! screen recording) on a made-up desktop in an off-screen window and saves
+//! every frame as a PNG (for the README animations). The real mouse and
+//! keyboard are never touched.
 
 use crate::capture::Snapshot;
 use crate::config::{Config, ToolsPos};
@@ -15,12 +16,14 @@ pub const H: u32 = 640;
 /// Virtual frames per second (the overlay's clock steps at most 1/60 s).
 const FPS: f64 = 60.0;
 
-pub fn run(dir: PathBuf, lang: &str) {
+pub fn run(dir: PathBuf, lang: &str, record: bool) {
     let _ = std::fs::create_dir_all(&dir);
     let cfg = Config { tools_pos: ToolsPos::Below, magnifier: true, sound_enabled: false, ..Config::default() };
     let shared = crate::runtime::Shared::new(cfg);
     crate::i18n::apply(lang);
-    let image = scene();
+    // while recording, the chart keeps growing
+    let reveal0 = if record { 0.5 } else { 1.0 };
+    let image = scene(reveal0);
     // a beat of the plain desktop before the overlay appears
     for i in 0..30 {
         save(&dir, i, &image, Some((pos2(180.0, 120.0), Cursor::Arrow)));
@@ -34,17 +37,73 @@ pub fn run(dir: PathBuf, lang: &str) {
         windows: Vec::new(),
         monitors: vec![Monitor { rect: full, work: full, scale: 1.0 }],
     };
-    let player = Player::new(dir.clone(), 30);
+    let player = Player::new(dir.clone(), 30, if record { record_script() } else { script() });
     let count = player.out.clone();
-    crate::overlay::run_demo(&shared, snap, player);
-    let last = count.get();
-    // the shot is taken: back to the desktop, with a note that it's copied
+    crate::overlay::run_demo(&shared, snap, player, record);
+    let mut last = count.get();
+    if record {
+        last = recording(&dir, last, reveal0, Monitor { rect: full, work: full, scale: 1.0 });
+    }
+    // back to the desktop, with a note about the result
+    let image = scene(1.0);
     let mut done = image.clone();
-    copied_note(&mut done, crate::i18n::l("скопировано в буфер", "copied to clipboard"));
+    let note = if record { crate::i18n::l("видео сохранено", "video saved") } else { crate::i18n::l("скопировано в буфер", "copied to clipboard") };
+    copied_note(&mut done, note);
+    let rest = if record { pos2(560.0, 540.0) } else { pos2(940.0, 330.0) };
     for i in 0..90 {
         let img = if i < 6 { &image } else { &done };
-        save(&dir, last + i, img, Some((pos2(940.0, 330.0), Cursor::Arrow)));
+        save(&dir, last + i, img, Some((rest, Cursor::Arrow)));
     }
+}
+
+/// The area being recorded (the cards and the chart).
+const REC_AREA: (f32, f32, f32, f32) = (268.0, 172.0, 912.0, 480.0);
+
+/// What the screen looks like while recording: the chart grows, the frame and
+/// the timer pill sit around the area, the pointer wanders and presses stop.
+/// Returns the number of the next frame.
+fn recording(dir: &std::path::Path, first: usize, reveal0: f32, monitor: Monitor) -> usize {
+    use crate::record::hud;
+    let (l, t, r, b) = REC_AREA;
+    let area = IRect::new(l as i32, t as i32, (r - l) as i32, (b - t) as i32);
+    let (size, _, stop_x) = hud::pill_layout(1.0);
+    let pill_at = hud::pill_position(area, &monitor, size, 1.0);
+    let stop = pos2(pill_at.0 as f32 + (stop_x.0 + stop_x.1) as f32 / 2.0, pill_at.1 as f32 + size.1 as f32 / 2.0);
+    // pointer keyframes: (time, position)
+    let keys = [
+        (0.0, pos2(l + (r - l) / 2.0, b + 40.0)),
+        (0.4, pos2(l + (r - l) / 2.0, b + 40.0)),
+        (1.6, pos2(560.0, 400.0)),
+        (3.0, pos2(640.0, 350.0)),
+        (4.4, pos2(760.0, 330.0)),
+        (5.4, stop),
+        (6.6, stop),
+    ];
+    let len = 6.6;
+    let click_at = 6.1;
+    let n = (len * FPS) as usize;
+    for i in 0..n {
+        let tm = i as f64 / FPS;
+        let k = keys.windows(2).find(|w| tm <= w[1].0).unwrap_or(&keys[keys.len() - 2..]);
+        let f = ease(((tm - k[0].0) / (k[1].0 - k[0].0)) as f32);
+        let p = k[0].1 + (k[1].1 - k[0].1) * f;
+        let reveal = reveal0 + (1.0 - reveal0) * ease((tm / 5.4) as f32);
+        let mut img = scene(reveal);
+        let mut pm = sk::Pixmap::new(W, H).unwrap();
+        hud::draw_frame(&mut pm, (l, t), (r - l, b - t), 1.0);
+        let hover = ((p - stop).length() < 12.0).then_some(hud::Btn::Stop);
+        let look = hud::PillLook { secs: tm as u64, paused: false, blink: (tm % 1.0) as f32, hover };
+        image::imageops::overlay(&mut img, &crate::theme::pixmap_to_image(&pm), 0, 0);
+        if let Some(pill) = hud::draw_pill(&look, 1.0) {
+            image::imageops::overlay(&mut img, &crate::theme::pixmap_to_image(&pill), pill_at.0 as i64, pill_at.1 as i64);
+        }
+        if tm >= click_at + 0.12 {
+            // stopped: the frame and the pill are gone
+            img = scene(1.0);
+        }
+        save(dir, first + i, &img, Some((p, Cursor::Arrow)));
+    }
+    first + n
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -68,6 +127,28 @@ enum Step {
     Move(Target, f64),
     Press,
     Release,
+}
+
+/// Record mode: select the cards and the chart, press record.
+fn record_script() -> Vec<Step> {
+    use Step::*;
+    use Target::*;
+    let (l, t, r, b) = REC_AREA;
+    vec![
+        Wait(0.5),
+        Move(At(l, t), 0.7),
+        Wait(0.25),
+        Press,
+        Move(At(r, b), 1.0),
+        Release,
+        Wait(0.7),
+        Move(Action(0), 0.7),
+        Wait(0.25),
+        Press,
+        Wait(0.08),
+        Release,
+        Wait(1.0),
+    ]
 }
 
 fn script() -> Vec<Step> {
@@ -128,7 +209,7 @@ pub struct Player {
 }
 
 impl Player {
-    fn new(dir: PathBuf, first: usize) -> Self {
+    fn new(dir: PathBuf, first: usize, steps: Vec<Step>) -> Self {
         let start = pos2(180.0, 120.0);
         Self {
             dir,
@@ -137,7 +218,7 @@ impl Player {
             frame: 0,
             saved: 0,
             shots: Default::default(),
-            steps: script(),
+            steps,
             step: 0,
             step_t: 0.0,
             from: start,
@@ -327,7 +408,8 @@ fn rrect(pm: &mut sk::Pixmap, x: f32, y: f32, w: f32, h: f32, r: f32, c: sk::Col
     }
 }
 
-fn scene() -> image::RgbaImage {
+/// `reveal`: how much of the chart is drawn (0..1); the cards follow it.
+fn scene(reveal: f32) -> image::RgbaImage {
     let (w, h) = (W as f32, H as f32);
     let mut pm = sk::Pixmap::new(W, H).unwrap();
     let id = sk::Transform::identity();
@@ -409,6 +491,10 @@ fn scene() -> image::RgbaImage {
     area.line_to(main.last().unwrap().0, cy + ch - 20.0);
     area.line_to(main[0].0, cy + ch - 20.0);
     area.close();
+    // only the part up to `reveal` is drawn
+    let end_x = main[0].0 + (main[main.len() - 1].0 - main[0].0) * reveal;
+    let mut clip = sk::Mask::new(W, H).unwrap();
+    clip.fill_path(&sk::PathBuilder::from_rect(sk::Rect::from_ltrb(0.0, 0.0, end_x + 1.5, h).unwrap()), sk::FillRule::Winding, true, id);
     let fill = sk::LinearGradient::new(
         sk::Point::from_xy(0.0, cy + 30.0),
         sk::Point::from_xy(0.0, cy + ch),
@@ -420,11 +506,20 @@ fn scene() -> image::RgbaImage {
     let mut p = sk::Paint::default();
     p.anti_alias = true;
     p.shader = fill;
-    pm.fill_path(&area.finish().unwrap(), &p, sk::FillRule::Winding, id, None);
+    pm.fill_path(&area.finish().unwrap(), &p, sk::FillRule::Winding, id, Some(&clip));
     let st = |w: f32| sk::Stroke { width: w, line_cap: sk::LineCap::Round, ..Default::default() };
-    pm.stroke_path(&line(&second).finish().unwrap(), &paint(rgba(0x7FA7C9, 255)), &st(2.0), id, None);
-    pm.stroke_path(&line(&main).finish().unwrap(), &paint(rgba(0xD8D5CD, 255)), &st(2.5), id, None);
-    let (px, py) = main[10];
+    pm.stroke_path(&line(&second).finish().unwrap(), &paint(rgba(0x7FA7C9, 255)), &st(2.0), id, Some(&clip));
+    pm.stroke_path(&line(&main).finish().unwrap(), &paint(rgba(0xD8D5CD, 255)), &st(2.5), id, Some(&clip));
+    // marker: on the newest point while growing, on the peak when complete
+    let (px, py) = if reveal >= 1.0 {
+        main[10]
+    } else {
+        let f = reveal * (main.len() - 1) as f32;
+        let (i, k) = (f.floor() as usize, f.fract());
+        let (a, b) = (main[i], main[(i + 1).min(main.len() - 1)]);
+        // the curve is flat at both ends of a segment (smoothstep in y)
+        (a.0 + (b.0 - a.0) * k, a.1 + (b.1 - a.1) * k * k * (3.0 - 2.0 * k))
+    };
     pm.fill_path(&sk::PathBuilder::from_circle(px, py, 5.0).unwrap(), &paint(rgba(0xD8D5CD, 255)), sk::FillRule::Winding, id, None);
     pm.fill_path(&sk::PathBuilder::from_circle(px, py, 2.5).unwrap(), &paint(rgba(0x252523, 255)), sk::FillRule::Winding, id, None);
     // contact line pill
@@ -442,7 +537,13 @@ fn scene() -> image::RgbaImage {
     }
     text(&mut img, &med, 24.0, 278.0, 140.0, text_c, "revenue");
     text(&mut img, &reg, 13.0, 278.0, 164.0, faint, "last 12 weeks · updated 2 min ago");
-    for (i, (label, value)) in [("revenue", "$48.2k"), ("growth", "+12.4%"), ("customers", "1,284")].iter().enumerate() {
+    let customers = (700.0 + 584.0 * reveal).round() as u32;
+    let values = [
+        format!("${:.1}k", 21.0 + 27.2 * reveal),
+        format!("+{:.1}%", 1.6 + 10.8 * reveal),
+        format!("{},{:03}", customers / 1000, customers % 1000).trim_start_matches("0,").to_string(),
+    ];
+    for (i, (label, value)) in ["revenue", "growth", "customers"].iter().zip(&values).enumerate() {
         let x = mx + i as f32 * 212.0 + 16.0;
         text(&mut img, &reg, 12.0, x, my + 24.0, faint, label);
         text(&mut img, &med, 26.0, x, my + 60.0, text_c, value);

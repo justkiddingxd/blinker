@@ -53,8 +53,8 @@ pub fn run(shared: &Arc<Shared>, snap: Snapshot, record: bool, gif: bool) -> Opt
 
 /// Scripted run for the README animation (see `demo`): off-screen, cloaked,
 /// driven by `player` instead of the mouse.
-pub fn run_demo(shared: &Arc<Shared>, snap: Snapshot, player: crate::demo::Player) {
-    run_with(shared, snap, false, false, Some(player));
+pub fn run_demo(shared: &Arc<Shared>, snap: Snapshot, player: crate::demo::Player, record: bool) {
+    run_with(shared, snap, record, false, Some(player));
 }
 
 fn run_with(shared: &Arc<Shared>, snap: Snapshot, record: bool, gif: bool, demo: Option<crate::demo::Player>) -> Option<Output> {
