@@ -66,6 +66,12 @@ All global hotkeys can be changed in settings → hotkeys.
 
 > If `PrtSc` opens the Windows Snipping Tool instead, turn off *Settings → Accessibility → Keyboard → Use the Print Screen key to open screen capture*.
 
+## Download
+
+Grab `blinker.exe` from [Releases](https://github.com/justkiddingxd/blinker/releases/latest) and run it. It is a single file with nothing to install. It starts in the tray, and settings → system turns on autostart.
+
+Windows SmartScreen may warn about an unsigned app: click *More info → Run anyway*.
+
 ## Build
 
 You need [Rust](https://rustup.rs) (stable, edition 2024) and Windows 10 1903+ or Windows 11.
