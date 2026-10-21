@@ -70,7 +70,11 @@ fn main() {
     }
     if let Some(dir) = arg_after("--demo") {
         let lang = arg_after(&dir).unwrap_or_default();
-        demo::run(PathBuf::from(dir), &lang, has("record"));
+        if has("replay") {
+            demo::run_replay(PathBuf::from(dir), &lang);
+        } else {
+            demo::run(PathBuf::from(dir), &lang, has("record"));
+        }
         return;
     }
     if has("--settings") {

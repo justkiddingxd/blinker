@@ -1,7 +1,7 @@
-//! `blinker.exe --demo <dir> [en|ru] [record]`: plays a scripted capture (or
-//! screen recording) on a made-up desktop in an off-screen window and saves
-//! every frame as a PNG (for the README animations). The real mouse and
-//! keyboard are never touched.
+//! `blinker.exe --demo <dir> [en|ru] [record|replay]`: plays a scripted
+//! capture (or screen recording, or saving the instant replay) on a made-up
+//! desktop in an off-screen window and saves every frame as a PNG (for the
+//! README animations). The real mouse and keyboard are never touched.
 
 use crate::capture::Snapshot;
 use crate::config::{Config, ToolsPos};
@@ -56,6 +56,114 @@ pub fn run(dir: PathBuf, lang: &str, record: bool) {
         let img = if i < 6 { &image } else { &done };
         save(&dir, last + i, img, Some((rest, Cursor::Arrow)));
     }
+}
+
+/// The instant replay: the chart takes off, the replay hotkey is pressed and
+/// the card of the saved clip slides in. Drawn without the overlay.
+pub fn run_replay(dir: PathBuf, lang: &str) {
+    let _ = std::fs::create_dir_all(&dir);
+    crate::i18n::apply(lang);
+    let reveal0 = 0.42;
+    for i in 0..30 {
+        save(&dir, i, &scene(reveal0), Some((pos2(420.0, 430.0), Cursor::Arrow)));
+    }
+    let keys_at = 4.2;
+    let card_at = 4.7;
+    let len = 8.6;
+    let pointer = [(0.0, pos2(420.0, 430.0)), (1.2, pos2(520.0, 400.0)), (3.4, pos2(700.0, 352.0)), (len, pos2(700.0, 352.0))];
+    let clip = scene(1.0);
+    let n = (len * FPS) as usize;
+    for i in 0..n {
+        let tm = i as f64 / FPS;
+        let reveal = reveal0 + (1.0 - reveal0) * ease((tm / 3.8) as f32);
+        let mut img = scene(reveal);
+        let k = pointer.windows(2).find(|w| tm <= w[1].0).unwrap_or(&pointer[pointer.len() - 2..]);
+        let p = k[0].1 + (k[1].1 - k[0].1) * ease(((tm - k[0].0) / (k[1].0 - k[0].0)) as f32);
+        if (keys_at..keys_at + 1.1).contains(&tm) {
+            let down = tm < keys_at + 0.45;
+            keycaps(&mut img, &["Ctrl", "Alt", "PrtSc"], down);
+        }
+        if tm >= card_at {
+            let slide = ease(((tm - card_at) / 0.35) as f32);
+            clip_card(&mut img, &clip, (1.0 - slide) * 340.0);
+        }
+        save(&dir, 30 + i, &img, Some((p, Cursor::Arrow)));
+    }
+}
+
+/// A hotkey as it's pressed: keycaps in the bottom middle.
+fn keycaps(img: &mut image::RgbaImage, keys: &[&str], down: bool) {
+    let med = FontRef::try_from_slice(FONT_MED).unwrap();
+    let sf = med.as_scaled(PxScale::from(15.0));
+    let widths: Vec<f32> = keys.iter().map(|k| k.chars().map(|c| sf.h_advance(sf.glyph_id(c))).sum::<f32>() + 28.0).collect();
+    let gap = 10.0;
+    let total: f32 = widths.iter().sum::<f32>() + gap * (keys.len() - 1) as f32;
+    let (h, y) = (40.0, 548.0);
+    let mut x = (W as f32 - total) / 2.0;
+    let press = if down { 2.0 } else { 0.0 };
+    let mut pm = sk::Pixmap::new(W, H).unwrap();
+    let mut spots = Vec::new();
+    for w in &widths {
+        rrect(&mut pm, x, y + 3.0, *w, h, 8.0, rgba(0x0B0B0A, 200));
+        rrect(&mut pm, x - 1.0, y + press - 1.0, w + 2.0, h + 2.0, 9.0, rgba(0x45453F, 255));
+        rrect(&mut pm, x, y + press, *w, h, 8.0, rgba(if down { 0x2B2B28 } else { 0x232321 }, 255));
+        spots.push(x);
+        x += w + gap;
+    }
+    image::imageops::overlay(img, &crate::theme::pixmap_to_image(&pm), 0, 0);
+    for (k, x) in keys.iter().zip(spots) {
+        text(img, &med, 15.0, x + 14.0, y + press + 26.0, [0xE6, 0xE4, 0xDE], k);
+    }
+}
+
+/// The card of the saved replay in the bottom right corner (as the real one
+/// looks): a preview with a play button and the length, the red mark of the
+/// replay and a caption. `dx` moves it right, off the screen.
+fn clip_card(img: &mut image::RgbaImage, clip: &image::RgbaImage, dx: f32) {
+    let (pad, caption) = (8.0, 50.0);
+    let iw = 284.0;
+    let ih = (iw * clip.height() as f32 / clip.width() as f32).round();
+    let (w, h) = (iw + pad * 2.0, pad + ih + caption);
+    let (x, y) = (W as f32 - w - 20.0 + dx, H as f32 - h - 20.0);
+    let mut pm = sk::Pixmap::new(W, H).unwrap();
+    for i in 0..8 {
+        let e = 1.0 + i as f32 * 2.5;
+        rrect(&mut pm, x - e, y - e + 6.0, w + e * 2.0, h + e * 2.0, 14.0 + e, rgba(0, 14));
+    }
+    rrect(&mut pm, x - 1.0, y - 1.0, w + 2.0, h + 2.0, 15.0, rgba(0x3A3A36, 255));
+    rrect(&mut pm, x, y, w, h, 14.0, rgba(0x1C1C1A, 255));
+    // the preview, rounded
+    let thumb = image::imageops::resize(clip, iw as u32, ih as u32, image::imageops::FilterType::Triangle);
+    let (tx, ty) = (x + pad, y + pad);
+    // the scene is opaque: its pixels are already premultiplied
+    let tp = sk::IntSize::from_wh(thumb.width(), thumb.height()).and_then(|sz| sk::Pixmap::from_vec(thumb.into_raw(), sz));
+    if let (Some(tp), Some(path)) = (tp, crate::theme::rounded_rect_path(tx, ty, iw, ih, 8.0)) {
+        let mut p = sk::Paint::default();
+        p.anti_alias = true;
+        p.shader = sk::Pattern::new(tp.as_ref(), sk::SpreadMode::Pad, sk::FilterQuality::Bilinear, 1.0, sk::Transform::from_translate(tx, ty));
+        pm.fill_path(&path, &p, sk::FillRule::Winding, sk::Transform::identity(), None);
+    }
+    let id = sk::Transform::identity();
+    // play button
+    let (cx, cy) = (tx + iw / 2.0, ty + ih / 2.0);
+    pm.fill_path(&sk::PathBuilder::from_circle(cx, cy, 20.0).unwrap(), &paint(rgba(0x121211, 190)), sk::FillRule::Winding, id, None);
+    let mut pb = sk::PathBuilder::new();
+    pb.move_to(cx - 5.0, cy - 8.0);
+    pb.line_to(cx + 9.0, cy);
+    pb.line_to(cx - 5.0, cy + 8.0);
+    pb.close();
+    pm.fill_path(&pb.finish().unwrap(), &paint(rgba(0xE6E4DE, 255)), sk::FillRule::Winding, id, None);
+    // the length
+    rrect(&mut pm, tx + iw - 46.0, ty + ih - 28.0, 38.0, 20.0, 5.0, rgba(0x121211, 200));
+    image::imageops::overlay(img, &crate::theme::pixmap_to_image(&pm), 0, 0);
+    let reg = FontRef::try_from_slice(FONT).unwrap();
+    let med = FontRef::try_from_slice(FONT_MED).unwrap();
+    text(img, &reg, 12.0, tx + iw - 39.0, ty + ih - 14.0, [0xE6, 0xE4, 0xDE], "0:30");
+    let mark = crate::theme::mark_image_in(16, crate::theme::DANGER);
+    let cap = ty + ih + 10.0;
+    image::imageops::overlay(img, &mark, (x + 14.0) as i64, (cap + 3.0) as i64);
+    text(img, &med, 13.5, x + 38.0, cap + 15.0, [0xE6, 0xE4, 0xDE], crate::i18n::l("повтор сохранён", "replay saved"));
+    text(img, &reg, 12.0, x + 38.0, cap + 32.0, [0x8C, 0x8A, 0x84], crate::i18n::l("последние 30 секунд · mp4", "the last 30 seconds · mp4"));
 }
 
 /// The area being recorded (the cards and the chart).
@@ -163,7 +271,7 @@ fn script() -> Vec<Step> {
     click(&mut v);
     v.extend([Wait(0.3), Move(At(392.0, 452.0), 0.5), Press, Move(At(548.0, 336.0), 0.5), Release, Wait(0.4)]);
     // numbered steps on two cards
-    v.extend([Move(Tool(4), 0.6), Wait(0.1)]);
+    v.extend([Move(Tool(5), 0.6), Wait(0.1)]);
     click(&mut v);
     v.extend([Wait(0.2), Move(At(452.0, 222.0), 0.5)]);
     click(&mut v);
@@ -171,7 +279,7 @@ fn script() -> Vec<Step> {
     click(&mut v);
     v.push(Wait(0.4));
     // blur the contact line
-    v.extend([Move(Tool(5), 0.6), Wait(0.1)]);
+    v.extend([Move(Tool(6), 0.6), Wait(0.1)]);
     click(&mut v);
     v.extend([Wait(0.2), Move(At(292.0, 489.0), 0.5), Press, Move(At(700.0, 513.0), 0.6), Release, Wait(0.6)]);
     // copy
@@ -235,11 +343,11 @@ impl Player {
     fn resolve(&self, t: Target, view: &View) -> Pos2 {
         match t {
             Target::At(x, y) => pos2(x, y),
-            // 36 px buttons 2 px apart after a 4 px margin; a 9 px separator follows the first
+            // 42 px buttons 1 px apart after a 6 px margin; a 10 px separator follows the first
             Target::Tool(i) => view.tools.map_or(self.pos, |r| {
-                pos2(r.left() + 4.0 + 18.0 + i as f32 * 38.0 + if i > 0 { 11.0 } else { 0.0 }, r.center().y)
+                pos2(r.left() + 6.0 + 21.0 + i as f32 * 43.0 + if i > 0 { 10.0 } else { 0.0 }, r.center().y)
             }),
-            Target::Action(i) => view.actions.map_or(self.pos, |r| pos2(r.center().x, r.top() + 3.0 + 18.0 + i as f32 * 38.0)),
+            Target::Action(i) => view.actions.map_or(self.pos, |r| pos2(r.center().x, r.top() + 6.0 + 21.0 + i as f32 * 43.0)),
         }
     }
 

@@ -52,6 +52,11 @@ Capture, annotate and share in a couple of keystrokes. It lives in the tray (the
 - **Upload and share:** by default to [post.blinker.cool](https://post.blinker.cool) (no sign-up, 3 days, videos up to 100 MB): every link has a page with an image viewer or a player that shows the video's markers. Or your own server, or any ShareX uploader (`.sxcu`).
 - **Moving from ShareX** in one click: hotkeys, folder, format, after-capture steps, notification, sound and the uploader.
 
+<div align="center">
+<img src="docs/replay-en.gif" width="100%" alt="the replay records in the background, Ctrl+Alt+PrtSc saves the last 30 seconds">
+<sub>something happened on screen → <code>Ctrl+Alt+PrtSc</code> → the last 30 seconds are already a video</sub>
+</div>
+
 ### Everyday
 
 - Saves to `Pictures/Blinker/<date>/pics` and `…/videos` (or a single folder) as PNG, lossless WebP or JPEG.

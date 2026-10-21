@@ -176,6 +176,7 @@ impl OverlayApp {
             title,
             yield_focus: false,
             palette_open: false,
+            glass: None,
         }
     }
 
@@ -367,6 +368,9 @@ const BAR_BTN: f32 = 42.0;
 const BAR_ICON: f32 = 19.0;
 
 struct OverlayApp {
+    /// macOS 26: a blurred copy of the screenshot the panels are made of,
+    /// so they look like Liquid Glass over what's under them.
+    glass: Option<TextureHandle>,
     /// The colors are shown in the panel (after a click on the swatch).
     palette_open: bool,
     shared: Arc<Shared>,
@@ -1197,14 +1201,18 @@ impl OverlayApp {
         if t < 1.0 {
             ctx.request_repaint();
         }
+        let at = pos2(x - (1.0 - t) * 8.0, y);
+        self.paint_glass(ctx, Rect::from_min_size(at, size), t, ppp, "toolbar-glass");
         let resp = egui::Area::new(Id::unique("toolbar"))
             .order(egui::Order::Foreground)
-            .fixed_pos(pos2(x - (1.0 - t) * 8.0, y))
+            .fixed_pos(at)
             .show(ctx, |ui| {
                 ui.set_opacity(t);
+                // on glass the panel is clear: the backdrop below shows through
+                let glass = self.glass.is_some();
                 egui::Frame::new()
-                    .fill(PANEL)
-                    .stroke(Stroke::new(1.0, LINE))
+                    .fill(if glass { Color32::TRANSPARENT } else { PANEL })
+                    .stroke(Stroke::new(1.0, if glass { Color32::TRANSPARENT } else { LINE }))
                     .corner_radius(9)
                     .inner_margin(egui::Margin::same(5))
                     .show(ui, |ui| {
@@ -1593,14 +1601,17 @@ impl OverlayApp {
         }
         self.bar_pos = Some(next);
         let pos = next - vec2(0.0, (1.0 - t) * 14.0);
+        self.paint_glass(ctx, Rect::from_min_size(pos, size), t, ppp, "tools-glass");
         let resp = egui::Area::new(Id::unique("tools-bar"))
             .order(egui::Order::Foreground)
             .fixed_pos(pos)
             .show(ctx, |ui| {
                 ui.set_opacity(t);
+                // on glass the panel is clear: the backdrop below shows through
+                let glass = self.glass.is_some();
                 egui::Frame::new()
-                    .fill(PANEL)
-                    .stroke(Stroke::new(1.0, LINE))
+                    .fill(if glass { Color32::TRANSPARENT } else { PANEL })
+                    .stroke(Stroke::new(1.0, if glass { Color32::TRANSPARENT } else { LINE }))
                     .corner_radius(9)
                     .inner_margin(egui::Margin::same(5))
                     .show(ui, |ui| {
@@ -1635,6 +1646,36 @@ impl OverlayApp {
                     });
             });
         self.top_rect = Some(resp.response.rect);
+    }
+
+    /// A pane of glass at `rect` (points): the blurred screenshot under it, a
+    /// dark tint, a light rim and a highlight along the top edge.
+    fn paint_glass(&mut self, ctx: &egui::Context, rect: Rect, alpha: f32, ppp: f32, id: &str) {
+        if !glass() || alpha <= 0.0 {
+            return;
+        }
+        if self.glass.is_none() {
+            // an eighth of the size, blurred: cheap, and it's all a pane shows
+            let img = &self.snap.image;
+            let (w, h) = ((img.width() / 8).max(1), (img.height() / 8).max(1));
+            let small = image::imageops::resize(img, w, h, image::imageops::FilterType::Triangle);
+            let blurred = image::imageops::blur(&small, 2.2);
+            self.glass = Some(ctx.load_texture("glass", color_image(&blurred), TextureOptions::LINEAR));
+        }
+        let Some(tex) = &self.glass else { return };
+        let img = vec2(self.snap.image.width() as f32, self.snap.image.height() as f32);
+        let uv = Rect::from_min_max(
+            pos2(rect.min.x * ppp / img.x, rect.min.y * ppp / img.y),
+            pos2(rect.max.x * ppp / img.x, rect.max.y * ppp / img.y),
+        );
+        let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, Id::unique(id)));
+        let r = egui::CornerRadius::same(9);
+        p.add(egui::epaint::RectShape::filled(rect, r, Color32::WHITE.gamma_multiply(alpha)).with_texture(tex.id(), uv));
+        p.rect_filled(rect, r, Color32::from_rgba_unmultiplied(20, 20, 19, (125.0 * alpha) as u8));
+        p.rect_stroke(rect, r, Stroke::new(1.0, Color32::from_white_alpha((42.0 * alpha) as u8)), StrokeKind::Inside);
+        // light catching the top edge
+        let top = Rect::from_min_size(rect.min + vec2(9.0, 1.0), vec2(rect.width() - 18.0, 1.0));
+        p.rect_filled(top, 0, Color32::from_white_alpha((36.0 * alpha) as u8));
     }
 
     /// The current color as one swatch; a click unfolds the others next to it.

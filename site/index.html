@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" data-os="mac">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>blinker — скриншоты и запись экрана</title>
+<title>blinker · скриншоты и запись экрана</title>
 <meta name="description" content="Быстрая и тихая программа для скриншотов и записи экрана для macOS и Windows. Снять, разметить и отправить за пару нажатий.">
 <meta property="og:title" content="blinker">
 <meta property="og:description" content="Скриншоты и запись экрана для macOS и Windows: снять, разметить и отправить за пару нажатий.">
@@ -18,19 +18,23 @@
 @font-face { font-family: "Fira Sans"; font-weight: 600; font-display: swap; src: url("assets/fonts/FiraSans-SemiBold.ttf") format("truetype"); }
 @font-face { font-family: "Fira Mono"; font-weight: 400; font-display: swap; src: url("assets/fonts/FiraMono-Regular.ttf") format("truetype"); }
 
+/* the app's "Graphite" palette */
 :root {
   --bg: #161615;
   --panel: #1c1c1a;
   --canvas: #121211;
   --line: #2b2b28;
   --line-soft: #232321;
+  --line-hi: #3a3a36;
+  --hover: #232321;
   --text: #e6e4de;
+  --text2: #b9b6ad;
   --dim: #9a978e;
   --faint: #6e6c66;
   --accent: #d8d5cd;
   --accent-hi: #e9e6df;
   --on-accent: #161615;
-  --radius: 10px;
+  --danger: #e5484d;
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
@@ -43,131 +47,156 @@ body {
 }
 a { color: var(--text); text-decoration-color: var(--faint); text-underline-offset: 3px; }
 a:hover { text-decoration-color: var(--accent); }
-code, kbd, .mono { font-family: "Fira Mono", ui-monospace, Menlo, monospace; font-size: .9em; }
+code, kbd { font-family: "Fira Mono", ui-monospace, Menlo, monospace; font-size: .88em; }
 kbd {
-  display: inline-block; padding: 0 6px; border: 1px solid var(--line); border-bottom-width: 2px;
-  border-radius: 4px; background: var(--canvas); color: var(--text); line-height: 1.5; white-space: nowrap;
+  display: inline-block; padding: 0 6px; border: 1px solid var(--line-hi); border-bottom-width: 2px;
+  border-radius: 5px; background: var(--canvas); color: var(--text); line-height: 1.55; white-space: nowrap;
 }
-.wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
-@media (max-width: 600px) {
-  .wrap { padding: 0 16px; }
-  .step { padding-left: 44px; }
-  .hero { padding-top: 48px; }
-  .hero p.lead { font-size: 17px; }
-  .dl { width: 100%; }
-}
+.wrap { max-width: 1160px; margin: 0 auto; padding: 0 24px; }
+@media (max-width: 600px) { .wrap { padding: 0 16px; } }
+
+/* one system at a time: html[data-os] picks it */
+html[data-os="mac"] .only-win, html[data-os="win"] .only-mac { display: none !important; }
 
 /* header */
-header { border-bottom: 1px solid var(--line-soft); }
-header .wrap { display: flex; align-items: center; gap: 20px; height: 64px; }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 18px; text-decoration: none; }
-.brand img { width: 28px; height: 28px; border-radius: 6px; }
+header { position: sticky; top: 0; z-index: 5; background: rgba(22, 22, 21, .86); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-bottom: 1px solid var(--line-soft); }
+header .wrap { display: flex; align-items: center; gap: 20px; height: 56px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 17px; text-decoration: none; }
+.brand img { width: 26px; height: 26px; border-radius: 6px; }
 nav { margin-left: auto; display: flex; align-items: center; gap: 18px; font-size: 15px; }
 nav a { color: var(--dim); text-decoration: none; }
 nav a:hover { color: var(--text); }
-.lang { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-.lang button {
-  background: none; border: 0; color: var(--faint); font: 500 13px "Fira Sans", sans-serif;
-  padding: 4px 9px; cursor: pointer;
-}
-.lang button[aria-pressed="true"] { background: var(--line); color: var(--text); }
-@media (max-width: 600px) { nav .hide-sm { display: none; } }
+@media (max-width: 640px) { nav .hide-sm { display: none; } }
 
-/* hero */
-.hero { padding: 72px 0 40px; text-align: center; }
-.hero h1 { font-weight: 600; font-size: clamp(32px, 5.4vw, 52px); line-height: 1.12; letter-spacing: -0.01em; margin: 0 auto 18px; max-width: 760px; }
-.hero p.lead { color: var(--dim); font-size: 19px; margin: 0 auto 34px; max-width: 600px; }
-.downloads { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
-.dl {
-  display: flex; align-items: center; gap: 12px; min-width: 240px; padding: 12px 20px 12px 16px;
-  border-radius: var(--radius); border: 1px solid var(--line); background: var(--panel);
-  text-decoration: none; text-align: left; transition: background .15s, border-color .15s, transform .15s;
+/* segmented control, as in the app's settings */
+.seg { display: inline-flex; padding: 2px; gap: 2px; background: var(--canvas); border: 1px solid var(--line); border-radius: 8px; }
+.seg button {
+  background: none; border: 0; border-radius: 6px; color: var(--dim); cursor: pointer;
+  font: 500 14px "Fira Sans", sans-serif; padding: 5px 12px; line-height: 1.4;
 }
-.dl:hover { border-color: var(--faint); transform: translateY(-1px); }
+.seg button:hover { color: var(--text); }
+.seg button[aria-pressed="true"] { background: var(--line); color: var(--text); }
+.seg.small button { font-size: 13px; padding: 3px 9px; }
+
+/* top: the text on the left, the footage on the right */
+.top { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 48px; align-items: center; padding-top: 48px; }
+@media (max-width: 920px) { .top { grid-template-columns: minmax(0, 1fr); gap: 32px; padding-top: 36px; } }
+.hero h1 { font-weight: 600; font-size: clamp(30px, 3.6vw, 44px); line-height: 1.12; letter-spacing: -0.01em; margin: 0 0 16px; }
+.hero .lead { color: var(--dim); font-size: 17px; margin: 0 0 26px; max-width: 520px; }
+.get { display: flex; align-items: center; gap: 12px 20px; flex-wrap: wrap; }
+.dl {
+  display: inline-flex; align-items: center; gap: 12px; padding: 11px 20px 11px 16px;
+  border-radius: 10px; border: 1px solid var(--line); background: var(--panel);
+  text-decoration: none; transition: background .15s, border-color .15s;
+}
+.dl:hover { border-color: var(--faint); }
 .dl.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .dl.primary:hover { background: var(--accent-hi); }
-.dl svg { width: 26px; height: 26px; flex: none; }
+.dl svg { width: 24px; height: 24px; flex: none; }
 .dl b { display: block; font-weight: 600; font-size: 16px; line-height: 1.3; }
-.dl small { display: block; font-size: 13px; opacity: .7; line-height: 1.3; }
-.dl.off { opacity: .7; }
-.hero .meta { margin-top: 16px; color: var(--faint); font-size: 14px; }
-.hero .meta a { color: var(--dim); }
+.dl small { display: block; font-size: 13px; opacity: .72; line-height: 1.3; }
+.other { color: var(--faint); font-size: 14px; }
+.other a { color: var(--dim); }
+.meta { margin: 18px 0 0; color: var(--faint); font-size: 14px; }
+.meta a { color: var(--dim); }
+.away { display: none; margin: 0 0 18px; color: var(--dim); font-size: 15px; }
+html[data-away] .away { display: block; }
+@media (max-width: 600px) { .dl { width: 100%; } }
 
-/* demo */
-.demo { margin: 24px auto 0; max-width: 1000px; }
-.shot {
-  border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--canvas);
-  box-shadow: 0 30px 80px rgba(0,0,0,.45);
+/* the footage: a window of the app, arrows to the sides, a caption below */
+.reel { margin: 0; min-width: 0; }
+.window { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); overflow: hidden; box-shadow: 0 24px 70px rgba(0, 0, 0, .42); }
+.window .bar { display: flex; align-items: center; gap: 12px; height: 34px; padding: 0 12px; border-bottom: 1px solid var(--line-soft); }
+.window .bar .title { color: var(--faint); font-size: 13px; margin-right: auto; display: flex; align-items: center; gap: 8px; }
+.window .bar .title img { width: 16px; height: 16px; border-radius: 4px; }
+.dots { display: flex; gap: 6px; }
+.dots button { width: 7px; height: 7px; padding: 0; border: 0; border-radius: 50%; background: var(--line-hi); cursor: pointer; }
+.dots button[aria-pressed="true"] { background: var(--accent); }
+.screen { position: relative; background: var(--canvas); touch-action: pan-y; }
+.screen img { display: block; width: 100%; height: auto; aspect-ratio: 1000 / 640; }
+.arrow {
+  position: absolute; top: 50%; width: 38px; height: 38px; margin-top: -19px; display: grid; place-items: center;
+  border: 1px solid rgba(255, 255, 255, .12); border-radius: 50%; cursor: pointer; color: var(--text);
+  background: rgba(22, 22, 21, .62); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  transition: background .15s, opacity .15s; opacity: .8;
 }
-.shot img { display: block; width: 100%; height: auto; aspect-ratio: 1000 / 640; }
-.caption { text-align: center; color: var(--faint); font-size: 14px; margin-top: 12px; }
+.arrow:hover { background: rgba(43, 43, 40, .85); opacity: 1; }
+.arrow svg { width: 18px; height: 18px; }
+.arrow.prev { left: 10px; }
+.arrow.next { right: 10px; }
+.reel figcaption { display: flex; gap: 12px; align-items: baseline; margin-top: 12px; padding: 0 2px; font-size: 14px; color: var(--dim); min-height: 3em; }
+.reel figcaption b { color: var(--text); font-weight: 500; }
+.reel figcaption kbd { font-size: 12px; }
+.reel .count { flex: none; color: var(--faint); font-family: "Fira Mono", monospace; font-size: 13px; }
 
 /* sections */
-section { padding: 72px 0 8px; }
-h2 { font-weight: 600; font-size: 30px; line-height: 1.2; margin: 0 0 8px; }
-.sub { color: var(--dim); margin: 0 0 32px; max-width: 680px; }
-.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-@media (max-width: 880px) { .grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
-.card { background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 20px 20px 18px; }
-.card h3 { margin: 0 0 6px; font-weight: 600; font-size: 16px; }
-.card p { margin: 0; color: var(--dim); font-size: 15px; }
+section { padding: 72px 0 0; }
+h2 { font-weight: 600; font-size: 28px; line-height: 1.2; margin: 0 0 8px; }
+.sub { color: var(--dim); margin: 0 0 28px; max-width: 640px; }
+.head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 28px; }
+.head .sub { margin: 0; }
 
-/* guide */
-.guide { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; counter-reset: step; max-width: 760px; }
-.step { position: relative; padding: 0 0 28px 52px; min-width: 0; }
+/* features: groups of rows like the settings window */
+.groups { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 28px 20px; }
+@media (max-width: 820px) { .groups { grid-template-columns: minmax(0, 1fr); } }
+.group h3 { margin: 0 0 8px 2px; font-size: 13px; font-weight: 500; color: var(--faint); text-transform: lowercase; letter-spacing: .02em; }
+.rows { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 10px; }
+.row { display: flex; gap: 14px; align-items: flex-start; padding: 13px 16px; border-bottom: 1px solid var(--line-soft); }
+.row:last-child { border-bottom: 0; }
+.row div { flex: 1; min-width: 0; }
+.row b { display: block; font-weight: 500; font-size: 15px; }
+.row div > span { display: block; color: var(--dim); font-size: 14px; line-height: 1.5; margin-top: 2px; }
+.row kbd { flex: none; margin-top: 1px; font-size: 12px; }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); margin: 0 0 1px 6px; vertical-align: middle; }
+
+/* install */
+.guide { counter-reset: step; max-width: 720px; }
+.step { position: relative; padding: 0 0 26px 48px; min-width: 0; }
 .step::before {
   counter-increment: step; content: counter(step);
-  position: absolute; left: 0; top: 0; width: 32px; height: 32px; border-radius: 50%;
-  display: grid; place-items: center; font-weight: 600; font-size: 15px;
-  background: var(--panel); border: 1px solid var(--line); color: var(--accent);
+  position: absolute; left: 0; top: 0; width: 30px; height: 30px; border-radius: 8px;
+  display: grid; place-items: center; font-weight: 500; font-size: 14px;
+  background: var(--panel); border: 1px solid var(--line); color: var(--text2);
 }
-.step::after { content: ""; position: absolute; left: 16px; top: 38px; bottom: 6px; width: 1px; background: var(--line-soft); }
+.step::after { content: ""; position: absolute; left: 15px; top: 36px; bottom: 6px; width: 1px; background: var(--line-soft); }
 .step:last-child::after { display: none; }
-.step h3 { margin: 3px 0 6px; font-weight: 600; font-size: 17px; }
+.step h3 { margin: 2px 0 4px; font-weight: 600; font-size: 16px; }
 .step p { margin: 0 0 8px; color: var(--dim); }
 .step p b { color: var(--text); font-weight: 500; }
-.note {
-  border-left: 2px solid var(--accent); background: var(--panel); border-radius: 0 8px 8px 0;
-  padding: 12px 16px; color: var(--dim); font-size: 15px; margin: 0 0 28px; max-width: 760px;
-}
+.note { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 10px; padding: 13px 16px; color: var(--dim); font-size: 15px; margin: 0 0 28px; max-width: 720px; }
 .note b { color: var(--text); font-weight: 500; }
 .cmd {
   display: flex; align-items: center; gap: 10px; background: var(--canvas); border: 1px solid var(--line);
-  border-radius: 8px; padding: 10px 10px 10px 14px; margin: 6px 0 10px; max-width: 100%;
+  border-radius: 8px; padding: 8px 8px 8px 14px; margin: 6px 0 10px; max-width: 100%;
 }
 .cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; color: var(--text); font-size: 14px; }
 .cmd button {
   flex: none; background: var(--line); color: var(--text); border: 0; border-radius: 6px;
   font: 500 13px "Fira Sans", sans-serif; padding: 5px 10px; cursor: pointer;
 }
-.cmd button:hover { background: var(--faint); }
-details { border-top: 1px solid var(--line-soft); max-width: 760px; }
-details:last-of-type { border-bottom: 1px solid var(--line-soft); }
-summary { cursor: pointer; padding: 14px 0; font-weight: 500; list-style: none; display: flex; justify-content: space-between; gap: 12px; }
+.cmd button:hover { background: var(--line-hi); }
+.trouble { max-width: 720px; margin-top: 8px; }
+.trouble h3 { font-size: 13px; font-weight: 500; color: var(--faint); text-transform: lowercase; margin: 0 0 8px 2px; letter-spacing: .02em; }
+.trouble .rows { padding: 0 16px; }
+details { border-bottom: 1px solid var(--line-soft); }
+details:last-child { border-bottom: 0; }
+summary { cursor: pointer; padding: 13px 0; font-weight: 500; font-size: 15px; list-style: none; display: flex; justify-content: space-between; gap: 12px; }
 summary::-webkit-details-marker { display: none; }
 summary::after { content: "+"; color: var(--faint); font-family: "Fira Mono", monospace; }
-details[open] summary::after { content: "–"; }
-details > div { padding: 0 0 16px; color: var(--dim); }
+details[open] summary::after { content: "-"; }
+details > div { padding: 0 0 14px; color: var(--dim); font-size: 15px; }
 details > div p { margin: 0 0 8px; }
-.trouble h3 { font-size: 18px; font-weight: 600; margin: 40px 0 6px; }
-
-/* platforms side by side */
-.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
-@media (max-width: 760px) { .two { grid-template-columns: minmax(0, 1fr); } }
-.two .card ol { margin: 8px 0 0; padding-left: 20px; color: var(--dim); }
-.two .card li { margin: 0 0 6px; }
 
 /* hotkeys */
 table { width: 100%; border-collapse: collapse; font-size: 15px; }
-th, td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
-th { color: var(--faint); font-weight: 500; font-size: 13px; text-transform: lowercase; }
+td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
 td:first-child { color: var(--dim); }
-.table { overflow-x: auto; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius); }
+td:last-child { text-align: right; }
+.table { overflow-x: auto; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 10px; max-width: 720px; }
 .table tr:last-child td { border-bottom: 0; }
 
 footer { margin-top: 88px; border-top: 1px solid var(--line-soft); color: var(--faint); font-size: 14px; }
-footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; padding-top: 24px; padding-bottom: 40px; align-items: center; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; padding-top: 22px; padding-bottom: 40px; align-items: center; }
 footer a { color: var(--dim); }
 footer .grow { flex: 1; }
 </style>
@@ -178,9 +207,10 @@ footer .grow { flex: 1; }
     <a class="brand" href="#top"><img src="assets/logo.png" alt="">blinker</a>
     <nav>
       <a class="hide-sm" href="#features" data-t="nav_features">возможности</a>
-      <a class="hide-sm" href="#mac" data-t="nav_mac">запуск на маке</a>
+      <a class="hide-sm" href="#install" data-t="nav_install">установка</a>
+      <a class="hide-sm" href="#keys" data-t="nav_keys">клавиши</a>
       <a href="https://github.com/justkiddingxd/blinker">GitHub</a>
-      <div class="lang" role="group" aria-label="language">
+      <div class="seg small" role="group" aria-label="language">
         <button type="button" data-lang="ru" aria-pressed="true">ru</button>
         <button type="button" data-lang="en" aria-pressed="false">en</button>
       </div>
@@ -189,120 +219,188 @@ footer .grow { flex: 1; }
 </header>
 
 <main id="top">
-  <div class="wrap hero">
-    <h1 data-t="h1">Скриншоты и запись экрана за пару нажатий</h1>
-    <p class="lead" data-t="lead">Быстрая и тихая программа для macOS и Windows. Снимай, размечай и отправляй, не открывая лишних окон. Живёт в строке меню или трее и не мешает.</p>
-    <div class="downloads" id="downloads">
-      <a class="dl" id="dl-mac" href="https://github.com/justkiddingxd/blinker/releases/latest/download/Blinker.dmg">
-        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.37 12.46c-.02-2.2 1.8-3.26 1.88-3.31-1.02-1.5-2.62-1.7-3.19-1.72-1.36-.14-2.65.8-3.34.8-.69 0-1.75-.78-2.88-.76-1.48.02-2.85.86-3.61 2.19-1.54 2.67-.39 6.62 1.11 8.79.73 1.06 1.6 2.25 2.75 2.21 1.1-.04 1.52-.71 2.85-.71 1.33 0 1.71.71 2.87.69 1.19-.02 1.94-1.08 2.66-2.15.84-1.23 1.19-2.42 1.21-2.48-.03-.01-2.32-.89-2.34-3.53zM14.18 6c.61-.74 1.02-1.76.91-2.78-.88.04-1.94.59-2.57 1.32-.56.65-1.06 1.69-.92 2.69.98.08 1.98-.5 2.58-1.23z"/></svg>
-        <span><b data-t="dl_mac">Скачать для macOS</b><small id="mac-meta" data-t="dl_mac_meta">macOS 14 и новее</small></span>
-      </a>
-      <a class="dl" id="dl-win" href="https://github.com/justkiddingxd/blinker/releases/latest/download/blinker.exe">
-        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5.1 10.4 4v7.2H3V5.1zm8.3-1.2L21 2.5v8.7h-9.7V3.9zM3 12.6h7.4v7.3L3 18.9v-6.3zm8.3 0H21v8.9l-9.7-1.4v-7.5z"/></svg>
-        <span><b data-t="dl_win">Скачать для Windows</b><small id="win-meta" data-t="dl_win_meta">Windows 10 / 11 · один .exe</small></span>
-      </a>
+  <div class="wrap top">
+    <div class="hero">
+      <h1 data-t="h1">Скриншоты и запись экрана за пару нажатий</h1>
+      <p class="lead" data-t="lead">Быстрая и тихая программа для macOS и Windows. Снимай, размечай и отправляй, не открывая лишних окон. Живёт в строке меню или трее и не мешает.</p>
+      <p class="away" data-t="away">blinker работает на macOS и Windows. Открой эту страницу на компьютере или скачай нужную версию:</p>
+      <div class="get">
+        <a class="dl primary" id="dl-main" href="https://github.com/justkiddingxd/blinker/releases/latest/download/Blinker.dmg">
+          <svg class="only-mac" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.37 12.46c-.02-2.2 1.8-3.26 1.88-3.31-1.02-1.5-2.62-1.7-3.19-1.72-1.36-.14-2.65.8-3.34.8-.69 0-1.75-.78-2.88-.76-1.48.02-2.85.86-3.61 2.19-1.54 2.67-.39 6.62 1.11 8.79.73 1.06 1.6 2.25 2.75 2.21 1.1-.04 1.52-.71 2.85-.71 1.33 0 1.71.71 2.87.69 1.19-.02 1.94-1.08 2.66-2.15.84-1.23 1.19-2.42 1.21-2.48-.03-.01-2.32-.89-2.34-3.53zM14.18 6c.61-.74 1.02-1.76.91-2.78-.88.04-1.94.59-2.57 1.32-.56.65-1.06 1.69-.92 2.69.98.08 1.98-.5 2.58-1.23z"/></svg>
+          <svg class="only-win" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5.1 10.4 4v7.2H3V5.1zm8.3-1.2L21 2.5v8.7h-9.7V3.9zM3 12.6h7.4v7.3L3 18.9v-6.3zm8.3 0H21v8.9l-9.7-1.4v-7.5z"/></svg>
+          <span><b class="only-mac" data-t="dl_mac">Скачать для macOS</b><b class="only-win" data-t="dl_win">Скачать для Windows</b><small id="dl-meta"></small></span>
+        </a>
+        <span class="other">
+          <a class="only-mac" href="#" data-switch="win" data-t="other_win">или для Windows</a>
+          <a class="only-win" href="#" data-switch="mac" data-t="other_mac">или для macOS</a>
+        </span>
+      </div>
+      <p class="meta"><span id="version"></span><a href="https://github.com/justkiddingxd/blinker/releases" data-t="all_releases">все версии на GitHub</a></p>
     </div>
-    <p class="meta"><span id="version"></span><a href="https://github.com/justkiddingxd/blinker/releases" data-t="all_releases">все версии на GitHub</a> · <span data-t="free">бесплатно, открытый код (GPL-3.0)</span></p>
-  </div>
 
-  <div class="wrap demo">
-    <div class="shot"><img id="demo-gif" src="assets/demo-ru.gif" alt="" width="1000" height="640"></div>
-    <p class="caption" data-t="demo_caption">выделил область → стрелка → номера шагов → размыл почту → скопировал</p>
+    <figure class="reel">
+      <div class="window">
+        <div class="bar">
+          <span class="title"><img src="assets/logo.png" alt="">blinker</span>
+          <div class="dots">
+            <button type="button" data-demo="0" aria-label="1"></button>
+            <button type="button" data-demo="1" aria-label="2"></button>
+            <button type="button" data-demo="2" aria-label="3"></button>
+          </div>
+        </div>
+        <div class="screen" id="screen">
+          <img id="demo-img" src="assets/demo-ru.gif" alt="" width="1000" height="640">
+          <button type="button" class="arrow prev" data-step="-1" aria-label="←"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
+          <button type="button" class="arrow next" data-step="1" aria-label="→"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
+        </div>
+      </div>
+      <figcaption>
+        <span class="count" id="count">1 / 3</span>
+        <span data-cap="0"><b data-t="cap_shot_h">Снимок области.</b> <span data-t="cap_shot">Выделил, поставил стрелку и номера шагов, размыл почту, скопировал.</span></span>
+        <span data-cap="1" hidden><b data-t="cap_rec_h">Запись экрана.</b> <span data-t="cap_rec">Выделил область в режиме записи, записал с таймером, остановил: видео сохранено.</span></span>
+        <span data-cap="2" hidden><b data-t="cap_replay_h">Повтор.</b> <span data-t="cap_replay">Что-то случилось на экране, нажал</span> <kbd class="only-mac">⌥⇧⌘7</kbd><kbd class="only-win">Ctrl+Alt+PrtSc</kbd><span data-t="cap_replay2">: последние секунды уже в видео.</span></span>
+      </figcaption>
+    </figure>
   </div>
 
   <section id="features">
     <div class="wrap">
       <h2 data-t="feat_h">Что умеет</h2>
-      <p class="sub" data-t="feat_sub">Всё, что нужно, чтобы показать экран: от быстрого снимка до видео с кликами.</p>
-      <div class="grid">
-        <div class="card"><h3 data-t="f1_h">Снимок области</h3><p data-t="f1">Экран замирает, лупа показывает пиксели и цвет. Клик по окну снимает только его.</p></div>
-        <div class="card"><h3 data-t="f2_h">Разметка до снимка</h3><p data-t="f2">Стрелки, номера шагов, маркер, текст, размытие и заливка прямо на выделении.</p></div>
-        <div class="card"><h3 data-t="f3_h">Действие одной клавишей</h3><p data-t="f3">Скопировать, сохранить, закрепить поверх окон, «красивый снимок» или ссылка на свой сервер.</p></div>
-        <div class="card"><h3 data-t="f4_h">Запись экрана</h3><p data-t="f4">Область, окно или монитор в MP4 на аппаратном кодировщике. Звук системы и микрофон на отдельных дорожках.</p></div>
-        <div class="card"><h3 data-t="f5_h">Повтор и GIF</h3><p data-t="f5">Последние минуты экрана всегда готовы к сохранению. Лёгкие GIF встроенным кодировщиком.</p></div>
-        <div class="card"><h3 data-t="f6_h">Редакторы</h3><p data-t="f6">Правка снимков и обрезка видео: громкость дорожек, MP4 для мессенджеров или GIF.</p></div>
-      </div>
-      <div class="demo" style="margin-top:28px">
-        <div class="shot"><img id="record-gif" src="assets/record-ru.gif" alt="" width="1000" height="640" loading="lazy"></div>
-        <p class="caption" data-t="record_caption">выделил область в режиме записи → запись с таймером → стоп: видео сохранено</p>
+      <p class="sub" data-t="feat_sub">Всё, чтобы показать экран: от быстрого снимка до видео с кликами.</p>
+      <div class="groups">
+        <div class="group">
+          <h3 data-t="g_shots">снимки</h3>
+          <div class="rows">
+            <div class="row"><div><b data-t="f1_h">Снимок области</b><span data-t="f1">Экран замирает, лупа показывает пиксели и цвет. Клик по окну снимает только его.</span></div><kbd class="only-mac">⇧⌘2</kbd><kbd class="only-win">PrtSc</kbd></div>
+            <div class="row"><div><b data-t="f2_h">Разметка до снимка</b><span data-t="f2">Стрелки, номера шагов, маркер, текст, размытие и заливка прямо на выделении.</span></div></div>
+            <div class="row"><div><b data-t="f3_h">Действие одной клавишей</b><span data-t="f3">Скопировать, сохранить, закрепить поверх окон, красивый снимок с фоном или ссылка.</span></div><kbd class="only-mac">⌘C</kbd><kbd class="only-win">Ctrl+C</kbd></div>
+            <div class="row"><div><b data-t="f4_h">Редактор и история</b><span data-t="f4">Правка снимков после съёмки и окно со всеми снимками и загрузками.</span></div></div>
+          </div>
+        </div>
+        <div class="group">
+          <h3 data-t="g_video">видео</h3>
+          <div class="rows">
+            <div class="row"><div><b data-t="f5_h">Запись экрана</b><span data-t="f5">Область, окно или монитор в MP4 на аппаратном кодировщике. Звук системы и микрофон на отдельных дорожках.</span></div><kbd class="only-mac">⇧⌘7</kbd><kbd class="only-win">Ctrl+Shift+PrtSc</kbd></div>
+            <div class="row"><div><b><span data-t="f6_h">Повтор</span><i class="dot" aria-hidden="true"></i></b><span data-t="f6">Последние минуты экрана всегда готовы к сохранению. Пока повтор пишется, значок в трее красный.</span></div><kbd class="only-mac">⌥⇧⌘7</kbd><kbd class="only-win">Ctrl+Alt+PrtSc</kbd></div>
+            <div class="row"><div><b data-t="f7_h">GIF</b><span data-t="f7">Лёгкие гифки встроенным кодировщиком: одна палитра и только изменившиеся участки.</span></div></div>
+            <div class="row"><div><b data-t="f8_h">Редактор видео</b><span data-t="f8">Обрезка, громкость дорожек, метки, MP4 для мессенджеров, GIF или только звук.</span></div></div>
+          </div>
+        </div>
+        <div class="group">
+          <h3 data-t="g_share">отправка</h3>
+          <div class="rows">
+            <div class="row"><div><b data-t="f9_h">Ссылка за секунду</b><span data-t="f9">На post.blinker.cool без регистрации, на свой сервер или через загрузчик ShareX. Загруженное можно удалить.</span></div></div>
+            <div class="row"><div><b data-t="f10_h">Карточка после снимка</b><span data-t="f10">Превью в углу экрана: перетащи его прямо в чат или папку.</span></div></div>
+          </div>
+        </div>
+        <div class="group">
+          <h3 data-t="g_daily">каждый день</h3>
+          <div class="rows">
+            <div class="row"><div><b data-t="f11_h">Лёгкий</b><span data-t="f11">Окна создаются, когда нужны, и полностью закрываются. Обновляется сам.</span></div></div>
+            <div class="row"><div><b data-t="f12_h">Переезд с ShareX</b><span data-t="f12">Клавиши, папка, формат и загрузчик одной кнопкой.</span></div></div>
+          </div>
+        </div>
       </div>
     </div>
   </section>
 
-  <section id="mac">
+  <section id="install">
     <div class="wrap">
-      <h2 data-t="mac_h">Запуск на маке</h2>
-      <p class="sub" data-t="mac_sub">blinker не подписан платным сертификатом Apple, поэтому при первом запуске macOS его придержит. Это нормально и занимает пару минут, один раз.</p>
-      <div class="guide">
-        <div class="step">
-          <h3 data-t="m1_h">Скачай и перенеси в «Программы»</h3>
-          <p data-t="m1">Скачай <b>Blinker.dmg</b> и открой его. Перетащи <b>Blinker</b> на ярлык <b>Программы</b> в том же окне.</p>
+      <div class="head">
+        <div>
+          <h2 data-t="inst_h">Установка</h2>
+          <p class="sub only-mac" data-t="mac_sub">blinker не подписан платным сертификатом Apple, поэтому при первом запуске macOS его придержит. Это нормально и занимает пару минут, один раз.</p>
+          <p class="sub only-win" data-t="win_sub">Один файл, ставить ничего не нужно.</p>
         </div>
-        <div class="step">
-          <h3 data-t="m2_h">Открой и нажми «Готово»</h3>
-          <p data-t="m2">При первом запуске macOS скажет, что не может проверить программу. Нажми <b>Готово</b>, не «Переместить в корзину».</p>
-        </div>
-        <div class="step">
-          <h3 data-t="m3_h">Разреши запуск</h3>
-          <p data-t="m3">Открой <b>Системные настройки → Конфиденциальность и безопасность</b>, пролистай вниз до строки про Blinker и нажми <b>Всё равно открыть</b>. Подтверди паролем или Touch ID.</p>
-          <p data-t="m3_cmd">Или одной командой в Терминале, вместо этого шага:</p>
-          <div class="cmd"><code>xattr -dr com.apple.quarantine /Applications/Blinker.app</code><button type="button" data-copy data-t="copy">скопировать</button></div>
-        </div>
-        <div class="step">
-          <h3 data-t="m4_h">Дай доступ к экрану</h3>
-          <p data-t="m4">В строке меню появится значок ✦, а blinker попросит доступ к записи экрана: рядом с запросом будет подсказка. Нажми <b>Открыть Системные настройки</b> и включи Blinker в списке <b>Запись экрана и системного звука</b>.</p>
-        </div>
-        <div class="step">
-          <h3 data-t="m5_h">Перезапусти blinker</h3>
-          <p data-t="m5">Разрешение начинает действовать после перезапуска: нажми на значок ✦ → <b>выход</b> и открой Blinker снова.</p>
-        </div>
-        <div class="step">
-          <h3 data-t="m6_h">Готово</h3>
-          <p data-t="m6"><kbd>⇧⌘2</kbd> — область, <kbd>⇧⌘1</kbd> — весь экран, <kbd>⇧⌘7</kbd> — запись. Автозапуск включается в настройках, раздел «система».</p>
+        <div class="seg" role="group" aria-label="system">
+          <button type="button" data-os="mac">macOS</button>
+          <button type="button" data-os="win">Windows</button>
         </div>
       </div>
-      <p class="note" data-t="mac_note"><b>Микрофон</b> (нужна macOS 15) и <b>мониторинг ввода</b> (чтобы показывать сочетания клавиш в видео) blinker попросит сам, когда они впервые понадобятся. <b>Обновляется</b> он тоже сам: когда выходит новая версия, в настройках появляется кнопка «обновить blinker», и разрешения сохраняются.</p>
 
-      <div class="trouble">
-        <h3 data-t="t_h">Если что-то не так</h3>
-        <details>
-          <summary data-t="t1_h">macOS пишет, что Blinker повреждён</summary>
-          <div><p data-t="t1">Так macOS называет скачанные программы без подписи Apple. Выполни в Терминале команду и открой Blinker снова:</p>
-          <div class="cmd"><code>xattr -dr com.apple.quarantine /Applications/Blinker.app</code><button type="button" data-copy data-t="copy">скопировать</button></div></div>
-        </details>
-        <details>
-          <summary data-t="t2_h">Разрешение включено, а доступа к экрану нет</summary>
-          <div><p data-t="t2">Значит, macOS запомнила разрешение для другой сборки Blinker. Выйди из blinker, сбрось разрешение командой ниже, открой Blinker и включи доступ ещё раз:</p>
-          <div class="cmd"><code>tccutil reset ScreenCapture app.blinker</code><button type="button" data-copy data-t="copy">скопировать</button></div></div>
-        </details>
-        <details>
-          <summary data-t="t3_h">Сочетание клавиш не срабатывает</summary>
-          <div><p data-t="t3">Его заняла другая программа. Открой настройки blinker → горячие клавиши: занятые сочетания подсвечены красным, задай другое.</p></div>
-        </details>
-        <details>
-          <summary data-t="t4_h">Нет значка в строке меню</summary>
-          <div><p data-t="t4">На маке с чёлкой значки могут прятаться за ней, если их много. Освободи место или включи Blinker в <b>Системные настройки → Строка меню</b>.</p></div>
-        </details>
-      </div>
-    </div>
-  </section>
-
-  <section id="windows">
-    <div class="wrap">
-      <h2 data-t="win_h">Запуск на Windows</h2>
-      <p class="sub" data-t="win_sub">Один файл, ставить ничего не нужно.</p>
-      <div class="two">
-        <div class="card">
-          <h3 data-t="w_card_h">Три шага</h3>
-          <ol>
-            <li data-t="w1">Скачай <b>blinker.exe</b> и запусти.</li>
-            <li data-t="w2">Если SmartScreen предупредит о неподписанной программе: <b>Подробнее → Выполнить в любом случае</b>.</li>
-            <li data-t="w3">Откроются настройки, а blinker останется в трее. <kbd>PrtSc</kbd> — снимок области.</li>
-          </ol>
+      <div class="only-mac">
+        <div class="guide">
+          <div class="step">
+            <h3 data-t="m1_h">Скачай и перенеси в «Программы»</h3>
+            <p data-t="m1">Скачай <b>Blinker.dmg</b> и открой его. Перетащи <b>Blinker</b> на ярлык <b>Программы</b> в том же окне.</p>
+          </div>
+          <div class="step">
+            <h3 data-t="m2_h">Открой и нажми «Готово»</h3>
+            <p data-t="m2">При первом запуске macOS скажет, что не может проверить программу. Нажми <b>Готово</b>, не «Переместить в корзину».</p>
+          </div>
+          <div class="step">
+            <h3 data-t="m3_h">Разреши запуск</h3>
+            <p data-t="m3">Открой <b>Системные настройки → Конфиденциальность и безопасность</b>, пролистай вниз до строки про Blinker и нажми <b>Всё равно открыть</b>. Подтверди паролем или Touch ID.</p>
+            <p data-t="m3_cmd">Или одной командой в Терминале, вместо этого шага:</p>
+            <div class="cmd"><code>xattr -dr com.apple.quarantine /Applications/Blinker.app</code><button type="button" data-copy data-t="copy">скопировать</button></div>
+          </div>
+          <div class="step">
+            <h3 data-t="m4_h">Дай доступ к экрану</h3>
+            <p data-t="m4">В строке меню появится значок blinker, а сам он попросит доступ к записи экрана. Нажми <b>Открыть Системные настройки</b> и включи Blinker в списке <b>Запись экрана и системного звука</b>.</p>
+          </div>
+          <div class="step">
+            <h3 data-t="m5_h">Перезапусти blinker</h3>
+            <p data-t="m5">Разрешение начинает действовать после перезапуска: нажми на значок blinker в строке меню, выбери <b>выход</b> и открой Blinker снова.</p>
+          </div>
+          <div class="step">
+            <h3 data-t="m6_h">Готово</h3>
+            <p data-t="m6"><kbd>⇧⌘2</kbd> область, <kbd>⇧⌘1</kbd> весь экран, <kbd>⇧⌘7</kbd> запись. Автозапуск включается в настройках, раздел «система».</p>
+          </div>
         </div>
-        <div class="card">
-          <h3 data-t="w_prt_h">PrtSc открывает «Ножницы»?</h3>
-          <p data-t="w_prt">Выключи <b>Параметры → Специальные возможности → Клавиатура → Использовать клавишу Print Screen для запуска функции создания фрагмента экрана</b>.</p>
+        <p class="note" data-t="mac_note"><b>Микрофон</b> (нужна macOS 15) и <b>мониторинг ввода</b> (чтобы показывать сочетания клавиш в видео) blinker попросит сам, когда они впервые понадобятся. <b>Обновляется</b> он тоже сам, и разрешения при этом сохраняются.</p>
+
+        <div class="trouble">
+          <h3 data-t="t_h">если что-то не так</h3>
+          <div class="rows">
+            <details>
+              <summary data-t="t1_h">macOS пишет, что Blinker повреждён</summary>
+              <div><p data-t="t1">Так macOS называет скачанные программы без подписи Apple. Выполни в Терминале команду и открой Blinker снова:</p>
+              <div class="cmd"><code>xattr -dr com.apple.quarantine /Applications/Blinker.app</code><button type="button" data-copy data-t="copy">скопировать</button></div></div>
+            </details>
+            <details>
+              <summary data-t="t2_h">Разрешение включено, а доступа к экрану нет</summary>
+              <div><p data-t="t2">Значит, macOS запомнила разрешение для другой сборки Blinker. Выйди из blinker, сбрось разрешение командой ниже, открой Blinker и включи доступ ещё раз:</p>
+              <div class="cmd"><code>tccutil reset ScreenCapture app.blinker</code><button type="button" data-copy data-t="copy">скопировать</button></div></div>
+            </details>
+            <details>
+              <summary data-t="t3_h">Сочетание клавиш не срабатывает</summary>
+              <div><p data-t="t3">Его заняла другая программа. Открой настройки blinker, раздел «горячие клавиши»: занятые сочетания подсвечены красным, задай другое.</p></div>
+            </details>
+            <details>
+              <summary data-t="t4_h">Нет значка в строке меню</summary>
+              <div><p data-t="t4">На маке с чёлкой значки могут прятаться за ней, если их много. Освободи место или включи Blinker в <b>Системные настройки → Строка меню</b>.</p></div>
+            </details>
+          </div>
+        </div>
+      </div>
+
+      <div class="only-win">
+        <div class="guide">
+          <div class="step">
+            <h3 data-t="w1_h">Скачай и запусти</h3>
+            <p data-t="w1">Скачай <b>blinker.exe</b> и открой его. Положи файл куда удобно: blinker сам добавится в меню «Пуск».</p>
+          </div>
+          <div class="step">
+            <h3 data-t="w2_h">Пропусти SmartScreen</h3>
+            <p data-t="w2">Если Windows предупредит о неподписанной программе, нажми <b>Подробнее → Выполнить в любом случае</b>.</p>
+          </div>
+          <div class="step">
+            <h3 data-t="w3_h">Готово</h3>
+            <p data-t="w3">Откроются настройки, а blinker останется в трее. <kbd>PrtSc</kbd> область, <kbd>Ctrl+Shift+PrtSc</kbd> запись.</p>
+          </div>
+        </div>
+        <div class="trouble">
+          <h3 data-t="t_h">если что-то не так</h3>
+          <div class="rows">
+            <details>
+              <summary data-t="w_prt_h">PrtSc открывает «Ножницы»</summary>
+              <div><p data-t="w_prt">Выключи <b>Параметры → Специальные возможности → Клавиатура → Использовать клавишу Print Screen для запуска функции создания фрагмента экрана</b>.</p></div>
+            </details>
+            <details>
+              <summary data-t="t3_h">Сочетание клавиш не срабатывает</summary>
+              <div><p data-t="t3">Его заняла другая программа. Открой настройки blinker, раздел «горячие клавиши»: занятые сочетания подсвечены красным, задай другое.</p></div>
+            </details>
+          </div>
         </div>
       </div>
     </div>
@@ -310,18 +408,26 @@ footer .grow { flex: 1; }
 
   <section id="keys">
     <div class="wrap">
-      <h2 data-t="keys_h">Горячие клавиши</h2>
-      <p class="sub" data-t="keys_sub">Все глобальные сочетания меняются в настройках. В выделении и редакторах на маке вместо Ctrl работает ⌘.</p>
+      <div class="head">
+        <div>
+          <h2 data-t="keys_h">Горячие клавиши</h2>
+          <p class="sub" data-t="keys_sub">Все глобальные сочетания меняются в настройках.</p>
+        </div>
+        <div class="seg" role="group" aria-label="system">
+          <button type="button" data-os="mac">macOS</button>
+          <button type="button" data-os="win">Windows</button>
+        </div>
+      </div>
       <div class="table">
         <table>
-          <thead><tr><th data-t="k_action">действие</th><th>macOS</th><th>Windows</th></tr></thead>
           <tbody>
-            <tr><td data-t="k1">снимок области</td><td><kbd>⇧⌘2</kbd></td><td><kbd>PrtSc</kbd></td></tr>
-            <tr><td data-t="k2">весь экран</td><td><kbd>⇧⌘1</kbd></td><td><kbd>Ctrl+PrtSc</kbd></td></tr>
-            <tr><td data-t="k3">повторить область</td><td><kbd>⌥⇧⌘2</kbd></td><td><kbd>Shift+PrtSc</kbd></td></tr>
-            <tr><td data-t="k4">запись экрана (ещё раз — стоп)</td><td><kbd>⇧⌘7</kbd></td><td><kbd>Ctrl+Shift+PrtSc</kbd></td></tr>
-            <tr><td data-t="k5">пауза записи</td><td><kbd>⌃⌥P</kbd></td><td><kbd>Ctrl+Alt+P</kbd></td></tr>
-            <tr><td data-t="k6">сохранить повтор</td><td><kbd>⌥⇧⌘7</kbd></td><td><kbd>Ctrl+Alt+PrtSc</kbd></td></tr>
+            <tr><td data-t="k1">снимок области</td><td><kbd class="only-mac">⇧⌘2</kbd><kbd class="only-win">PrtSc</kbd></td></tr>
+            <tr><td data-t="k2">весь экран</td><td><kbd class="only-mac">⇧⌘1</kbd><kbd class="only-win">Ctrl+PrtSc</kbd></td></tr>
+            <tr><td data-t="k3">повторить область</td><td><kbd class="only-mac">⌥⇧⌘2</kbd><kbd class="only-win">Shift+PrtSc</kbd></td></tr>
+            <tr><td data-t="k4">запись экрана (ещё раз: стоп)</td><td><kbd class="only-mac">⇧⌘7</kbd><kbd class="only-win">Ctrl+Shift+PrtSc</kbd></td></tr>
+            <tr><td data-t="k5">пауза записи</td><td><kbd class="only-mac">⌃⌥P</kbd><kbd class="only-win">Ctrl+Alt+P</kbd></td></tr>
+            <tr><td data-t="k6">сохранить повтор</td><td><kbd class="only-mac">⌥⇧⌘7</kbd><kbd class="only-win">Ctrl+Alt+PrtSc</kbd></td></tr>
+            <tr><td data-t="k7">в выделении: скопировать, сохранить</td><td><kbd class="only-mac">⌘C</kbd><kbd class="only-win">Ctrl+C</kbd> <kbd class="only-mac">⌘S</kbd><kbd class="only-win">Ctrl+S</kbd></td></tr>
           </tbody>
         </table>
       </div>
@@ -342,39 +448,63 @@ footer .grow { flex: 1; }
 (function () {
   "use strict";
   var REPO = "justkiddingxd/blinker";
-  var MAC_ASSET = "Blinker.dmg";
-  var WIN_ASSET = "blinker.exe";
+  var ASSET = { mac: "Blinker.dmg", win: "blinker.exe" };
 
   var T = {
     en: {
       nav_features: "features",
-      nav_mac: "running on a Mac",
+      nav_install: "install",
+      nav_keys: "hotkeys",
       h1: "Screenshots and screen recording in a couple of keystrokes",
       lead: "A fast, quiet app for macOS and Windows. Capture, annotate and share without extra windows. It lives in the menu bar or the tray and stays out of the way.",
+      away: "blinker runs on macOS and Windows. Open this page on a computer or download the version you need:",
       dl_mac: "Download for macOS",
-      dl_mac_meta: "macOS 14 or newer",
       dl_win: "Download for Windows",
+      dl_mac_meta: "macOS 14 or newer",
       dl_win_meta: "Windows 10 / 11 · one .exe",
+      other_win: "or for Windows",
+      other_mac: "or for macOS",
       all_releases: "all releases on GitHub",
-      free: "free and open source (GPL-3.0)",
-      demo_caption: "select an area → arrow → numbered steps → blur the email → copy",
+      cap_shot_h: "Area capture.",
+      cap_shot: "Select, add an arrow and numbered steps, blur the email, copy.",
+      cap_rec_h: "Screen recording.",
+      cap_rec: "Select an area in record mode, record with a timer, stop: the video is saved.",
+      cap_replay_h: "Instant replay.",
+      cap_replay: "Something happened on screen, press",
+      cap_replay2: ": the last seconds are already a video.",
       feat_h: "What it does",
       feat_sub: "Everything for showing your screen, from a quick shot to a video with clicks.",
+      g_shots: "screenshots",
+      g_video: "video",
+      g_share: "sharing",
+      g_daily: "every day",
       f1_h: "Area capture",
       f1: "The screen freezes, a loupe shows pixels and colors. Click a window to capture just that window.",
       f2_h: "Draw before you capture",
       f2: "Arrows, numbered steps, marker, text, blur and black-out right on the selection.",
       f3_h: "One-key actions",
-      f3: "Copy, save, pin on top of other windows, make a beauty shot or upload to your own server.",
-      f4_h: "Screen recording",
-      f4: "An area, a window or a monitor to MP4 on the hardware encoder. System sound and microphone on separate tracks.",
-      f5_h: "Instant replay and GIF",
-      f5: "The last minutes of your screen are always ready to save. Small GIFs with the built-in encoder.",
-      f6_h: "Editors",
-      f6: "Edit screenshots and trim videos: track volume, MP4 for messengers or GIF.",
-      record_caption: "select an area in record mode → record with a timer → stop: the video is saved",
-      mac_h: "Running on a Mac",
+      f3: "Copy, save, pin on top of other windows, a beauty shot with a background, or a link.",
+      f4_h: "Editor and history",
+      f4: "Edit shots after the fact, and a window with every shot and upload.",
+      f5_h: "Screen recording",
+      f5: "An area, a window or a monitor to MP4 on the hardware encoder. System sound and microphone on separate tracks.",
+      f6_h: "Instant replay",
+      f6: "The last minutes of your screen are always ready to save. The tray icon is red while the replay records.",
+      f7_h: "GIF",
+      f7: "Small GIFs with the built-in encoder: one palette and only the changed parts.",
+      f8_h: "Video editor",
+      f8: "Trim, track volume, markers, MP4 for messengers, GIF or the sound alone.",
+      f9_h: "A link in a second",
+      f9: "To post.blinker.cool with no sign-up, to your own server or through a ShareX uploader. Uploads can be deleted.",
+      f10_h: "A card after each shot",
+      f10: "A preview in the corner of the screen: drag it straight into a chat or a folder.",
+      f11_h: "Lightweight",
+      f11: "Windows are made when needed and closed for good. It updates itself.",
+      f12_h: "Moving from ShareX",
+      f12: "Hotkeys, folder, format and uploader in one click.",
+      inst_h: "Install",
       mac_sub: "blinker isn't signed with a paid Apple certificate, so macOS holds it back the first time. That's expected and takes a couple of minutes, once.",
+      win_sub: "One file, nothing to install.",
       m1_h: "Download it and move it to Applications",
       m1: "Download <b>Blinker.dmg</b> and open it. Drag <b>Blinker</b> onto the <b>Applications</b> shortcut in the same window.",
       m2_h: "Open it and press Done",
@@ -383,45 +513,44 @@ footer .grow { flex: 1; }
       m3: "Open <b>System Settings → Privacy &amp; Security</b>, scroll down to the line about Blinker and press <b>Open Anyway</b>. Confirm with your password or Touch ID.",
       m3_cmd: "Or, instead of this step, one command in Terminal:",
       m4_h: "Give it the screen",
-      m4: "The ✦ icon shows up in the menu bar and blinker asks to record the screen, with a note next to the request. Press <b>Open System Settings</b> and turn Blinker on under <b>Screen &amp; System Audio Recording</b>.",
+      m4: "The blinker icon shows up in the menu bar and the app asks to record the screen. Press <b>Open System Settings</b> and turn Blinker on under <b>Screen &amp; System Audio Recording</b>.",
       m5_h: "Restart blinker",
-      m5: "The permission works after a restart: click the ✦ icon → <b>quit</b> and open Blinker again.",
+      m5: "The permission works after a restart: click the blinker icon in the menu bar, choose <b>quit</b> and open Blinker again.",
       m6_h: "Done",
-      m6: "<kbd>⇧⌘2</kbd> area, <kbd>⇧⌘1</kbd> whole screen, <kbd>⇧⌘7</kbd> recording. Open at login is in settings → system.",
-      mac_note: "blinker asks for the <b>microphone</b> (needs macOS 15) and <b>Input Monitoring</b> (to show key combos in videos) itself, the first time they are needed. It <b>updates</b> itself too: when a new version is out, an “update blinker” button shows up in the settings, and the permissions stay.",
+      m6: "<kbd>⇧⌘2</kbd> area, <kbd>⇧⌘1</kbd> whole screen, <kbd>⇧⌘7</kbd> recording. Open at login is in settings, under system.",
+      mac_note: "blinker asks for the <b>microphone</b> (needs macOS 15) and <b>Input Monitoring</b> (to show key combos in videos) itself, the first time they are needed. It <b>updates</b> itself too, and the permissions stay.",
       copy: "copy",
       copied: "copied",
-      t_h: "If something is off",
+      t_h: "if something is off",
       t1_h: "macOS says Blinker is damaged",
       t1: "That's what macOS calls downloaded apps without an Apple signature. Run this in Terminal and open Blinker again:",
       t2_h: "The permission is on, yet there's no access to the screen",
       t2: "macOS remembers the permission for another build of Blinker. Quit blinker, reset the permission with the command below, open Blinker and allow it again:",
       t3_h: "A hotkey does nothing",
-      t3: "Another app has it. Open blinker settings → hotkeys: taken combos are outlined in red, pick another one.",
+      t3: "Another app has it. Open blinker settings, hotkeys: taken combos are outlined in red, pick another one.",
       t4_h: "No icon in the menu bar",
       t4: "On a Mac with a notch, icons can hide behind it when there are many. Make room or allow Blinker in <b>System Settings → Menu Bar</b>.",
-      win_h: "Running on Windows",
-      win_sub: "One file, nothing to install.",
-      w_card_h: "Three steps",
-      w1: "Download <b>blinker.exe</b> and run it.",
-      w2: "If SmartScreen warns about an unsigned app: <b>More info → Run anyway</b>.",
-      w3: "The settings open and blinker stays in the tray. <kbd>PrtSc</kbd> captures an area.",
-      w_prt_h: "PrtSc opens the Snipping Tool?",
+      w1_h: "Download and run it",
+      w1: "Download <b>blinker.exe</b> and open it. Keep the file wherever you like: blinker adds itself to the Start menu.",
+      w2_h: "Get past SmartScreen",
+      w2: "If Windows warns about an unsigned app, press <b>More info → Run anyway</b>.",
+      w3_h: "Done",
+      w3: "The settings open and blinker stays in the tray. <kbd>PrtSc</kbd> area, <kbd>Ctrl+Shift+PrtSc</kbd> recording.",
+      w_prt_h: "PrtSc opens the Snipping Tool",
       w_prt: "Turn off <b>Settings → Accessibility → Keyboard → Use the Print Screen key to open screen capture</b>.",
       keys_h: "Hotkeys",
-      keys_sub: "All global hotkeys can be changed in settings. While selecting and in the editors, ⌘ replaces Ctrl on a Mac.",
-      k_action: "action",
+      keys_sub: "All global hotkeys can be changed in settings.",
       k1: "area",
       k2: "whole screen",
       k3: "repeat last area",
       k4: "record the screen (again to stop)",
       k5: "pause recording",
       k6: "save the replay",
+      k7: "while selecting: copy, save",
       license: "open source, GPL-3.0",
       releases: "releases",
       issues: "report a problem",
       version: "version {v} · ",
-      mac_soon: "coming soon · build it from source",
       size: "{s} MB"
     }
   };
@@ -432,13 +561,19 @@ footer .grow { flex: 1; }
     var k = el.getAttribute("data-t");
     if (!(k in RU)) RU[k] = el.innerHTML;
   });
+  RU.dl_mac_meta = "macOS 14 и новее";
+  RU.dl_win_meta = "Windows 10 / 11 · один .exe";
   RU.copied = "скопировано";
   RU.version = "версия {v} · ";
-  RU.mac_soon = "скоро · можно собрать из исходников";
   RU.size = "{s} МБ";
   T.ru = RU;
 
-  var lang;
+  var DEMOS = ["demo", "record", "replay"];
+  var lang, os, demo = 0, release = null;
+  function t(k) {
+    return (T[lang] && T[lang][k]) || RU[k] || "";
+  }
+
   function pickLang() {
     try {
       var saved = localStorage.getItem("blinker-lang");
@@ -450,95 +585,135 @@ footer .grow { flex: 1; }
     }
     return "en";
   }
-  function t(k) {
-    return (T[lang] && T[lang][k]) || RU[k] || "";
-  }
 
-  var release = null;
-  function applyLang(l) {
-    lang = l;
-    document.documentElement.lang = l;
-    document.querySelectorAll("[data-t]").forEach(function (el) {
-      var k = el.getAttribute("data-t");
-      if (k in T[l]) el.innerHTML = T[l][k];
-    });
-    document.querySelectorAll(".lang button").forEach(function (b) {
-      b.setAttribute("aria-pressed", String(b.getAttribute("data-lang") === l));
-    });
-    document.getElementById("demo-gif").src = "assets/demo-" + l + ".gif";
-    document.getElementById("record-gif").src = "assets/record-" + l + ".gif";
-    document.title = l === "ru" ? "blinker — скриншоты и запись экрана" : "blinker — screenshots and screen recording";
-    showRelease();
-  }
-
-  document.querySelectorAll(".lang button").forEach(function (b) {
-    b.addEventListener("click", function () {
-      var l = b.getAttribute("data-lang");
-      try { localStorage.setItem("blinker-lang", l); } catch (e) {}
-      applyLang(l);
-    });
-  });
-
-  // copy buttons next to Terminal commands
-  document.addEventListener("click", function (e) {
-    var btn = e.target.closest("[data-copy]");
-    if (!btn) return;
-    var code = btn.parentNode.querySelector("code").textContent;
-    var done = function () {
-      btn.textContent = t("copied");
-      setTimeout(function () { btn.textContent = t("copy"); }, 1600);
-    };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(code).then(done, function () {});
-    }
-  });
-
-  // the visitor's system goes first
-  var ua = navigator.userAgent || "";
-  var isMac = /Mac/.test(navigator.platform || "") || /Mac OS X/.test(ua);
-  var isWin = /Win/.test(navigator.platform || "") || /Windows/.test(ua);
-  var mac = document.getElementById("dl-mac");
-  var win = document.getElementById("dl-win");
-  var box = document.getElementById("downloads");
-  if (isWin) {
-    win.classList.add("primary");
-    box.insertBefore(win, mac);
-  } else {
-    mac.classList.add("primary");
+  // the visitor's system: "mac", "win", or null (a phone, Linux)
+  function detectOS() {
+    var p = ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "").toLowerCase();
+    var ua = navigator.userAgent || "";
+    if (/iphone|ipad|ipod|android/i.test(ua)) return null;
+    // an iPad asks for the desktop site and says it's a Mac
+    if (/mac/.test(p) && navigator.maxTouchPoints > 1) return null;
+    if (/mac/.test(p) || /Mac OS X/.test(ua)) return "mac";
+    if (/win/.test(p) || /Windows/.test(ua)) return "win";
+    return null;
   }
 
   function mb(bytes) {
     return t("size").replace("{s}", (bytes / 1048576).toFixed(1).replace(/\.0$/, ""));
   }
-  function showRelease() {
-    if (!release) return;
-    document.getElementById("version").textContent = t("version").replace("{v}", release.tag_name.replace(/^v/, ""));
-    var assets = release.assets || [];
-    var find = function (name) {
-      for (var i = 0; i < assets.length; i++) if (assets[i].name === name) return assets[i];
-      return null;
-    };
-    var m = find(MAC_ASSET), w = find(WIN_ASSET);
-    if (w) document.getElementById("win-meta").textContent = t("dl_win_meta") + " · " + mb(w.size);
-    if (m) {
-      mac.classList.remove("off");
-      mac.href = "https://github.com/" + REPO + "/releases/latest/download/" + MAC_ASSET;
-      document.getElementById("mac-meta").textContent = t("dl_mac_meta") + " · " + mb(m.size);
-    } else {
-      // no Mac build in this release yet: point to building it
-      mac.classList.add("off");
-      mac.href = "https://github.com/" + REPO + "#build";
-      document.getElementById("mac-meta").textContent = t("mac_soon");
-    }
+
+  function render() {
+    document.documentElement.lang = lang;
+    document.documentElement.setAttribute("data-os", os);
+    document.querySelectorAll("[data-t]").forEach(function (el) {
+      var k = el.getAttribute("data-t");
+      if (k in T[lang]) el.innerHTML = T[lang][k];
+    });
+    document.querySelectorAll("[data-lang]").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.getAttribute("data-lang") === lang));
+    });
+    document.querySelectorAll("button[data-os]").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.getAttribute("data-os") === os));
+    });
+    document.querySelectorAll("[data-demo]").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(+b.getAttribute("data-demo") === demo));
+    });
+    document.querySelectorAll("[data-cap]").forEach(function (el) {
+      el.hidden = +el.getAttribute("data-cap") !== demo;
+    });
+    document.getElementById("count").textContent = demo + 1 + " / " + DEMOS.length;
+    var img = document.getElementById("demo-img");
+    var src = "assets/" + DEMOS[demo] + "-" + lang + ".gif";
+    if (img.getAttribute("src") !== src) img.setAttribute("src", src);
+    document.title = lang === "ru" ? "blinker · скриншоты и запись экрана" : "blinker · screenshots and screen recording";
+
+    var dl = document.getElementById("dl-main");
+    var a = release && release.assets[ASSET[os]];
+    dl.href = a ? a.url : "https://github.com/" + REPO + "/releases/latest/download/" + ASSET[os];
+    var meta = t(os === "mac" ? "dl_mac_meta" : "dl_win_meta");
+    document.getElementById("dl-meta").textContent = a && a.size ? meta + " · " + mb(a.size) : meta;
+    document.getElementById("version").textContent = release ? t("version").replace("{v}", release.version) : "";
   }
 
-  applyLang(pickLang());
-  fetch("https://api.github.com/repos/" + REPO + "/releases/latest", { headers: { Accept: "application/vnd.github+json" } })
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-lang], button[data-os], [data-switch], [data-demo], [data-step], [data-copy]");
+    if (!b) return;
+    if (b.hasAttribute("data-lang")) {
+      lang = b.getAttribute("data-lang");
+      try { localStorage.setItem("blinker-lang", lang); } catch (err) {}
+    } else if (b.hasAttribute("data-switch")) {
+      e.preventDefault();
+      os = b.getAttribute("data-switch");
+    } else if (b.hasAttribute("data-os")) {
+      os = b.getAttribute("data-os");
+    } else if (b.hasAttribute("data-demo")) {
+      demo = +b.getAttribute("data-demo");
+    } else if (b.hasAttribute("data-step")) {
+      step(+b.getAttribute("data-step"));
+      return;
+    } else {
+      // copy buttons next to Terminal commands
+      var code = b.parentNode.querySelector("code").textContent;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(code).then(function () {
+          b.textContent = t("copied");
+          setTimeout(function () { b.textContent = t("copy"); }, 1600);
+        }, function () {});
+      }
+      return;
+    }
+    render();
+  });
+
+  // the footage: the arrows, the keyboard's ← → and a swipe
+  function step(d) {
+    demo = (demo + d + DEMOS.length) % DEMOS.length;
+    render();
+  }
+  document.addEventListener("keydown", function (e) {
+    if (e.altKey || e.ctrlKey || e.metaKey || /input|textarea|select/i.test(e.target.tagName)) return;
+    if (e.key === "ArrowLeft") step(-1);
+    else if (e.key === "ArrowRight") step(1);
+  });
+  var screen = document.getElementById("screen"), x0 = null;
+  screen.addEventListener("touchstart", function (e) { x0 = e.touches[0].clientX; }, { passive: true });
+  screen.addEventListener("touchend", function (e) {
+    if (x0 === null) return;
+    var dx = e.changedTouches[0].clientX - x0;
+    x0 = null;
+    if (Math.abs(dx) > 40) step(dx < 0 ? 1 : -1);
+  });
+
+  lang = pickLang();
+  var found = detectOS();
+  os = found || "mac";
+  if (!found) document.documentElement.setAttribute("data-away", "");
+  render();
+
+  // the other demos load once the page is up, so a tab switches at once
+  window.addEventListener("load", function () {
+    DEMOS.slice(1).forEach(function (d) { new Image().src = "assets/" + d + "-" + lang + ".gif"; });
+  });
+
+  // what's released: the site's own version.json (written by every release),
+  // else GitHub's API
+  function fromGitHub() {
+    return fetch("https://api.github.com/repos/" + REPO + "/releases/latest", { headers: { Accept: "application/vnd.github+json" } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d || !d.tag_name) return null;
+        var assets = {};
+        (d.assets || []).forEach(function (a) { assets[a.name] = { url: a.browser_download_url, size: a.size }; });
+        return { version: d.tag_name.replace(/^v/, ""), assets: assets };
+      });
+  }
+  fetch("version.json", { cache: "no-cache" })
     .then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (data) {
-      if (data && data.tag_name) {
-        release = data;
-        showRelease();
+    .then(function (d) { return d && d.version && d.assets ? d : fromGitHub(); }, fromGitHub)
+    .then(function (d) {
+      if (d) {
+        release = d;
+        render();
       }
     })
     .catch(function () {});
