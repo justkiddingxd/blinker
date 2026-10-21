@@ -54,7 +54,8 @@ jobs:
           if-no-files-found: error
 
   macos:
-    runs-on: macos-15
+    # macOS 26 with Xcode 26: its actool builds the Liquid Glass icon
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
