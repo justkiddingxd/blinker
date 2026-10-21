@@ -138,8 +138,10 @@ unsafe extern "C" {
     pub fn bk_notify_post(name: *const c_char);
     pub fn bk_notify_token(name: *const c_char) -> c_int;
     pub fn bk_notify_check(token: c_int) -> c_int;
+    pub fn bk_window_buttons_at(w: *mut c_void, x: f64, cy: f64);
     pub fn bk_tray_create(rgba: *const u8, w: c_int, h: c_int, cb: TrayCb);
     pub fn bk_tray_remove();
+    pub fn bk_tray_set_image(rgba: *const u8, w: c_int, h: c_int, template: c_int, tip: *const c_char);
     pub fn bk_tray_protect();
     pub fn bk_tray_revive();
     pub fn bk_tray_menu(items: *const MenuItem, n: c_int, cb: MenuCb);

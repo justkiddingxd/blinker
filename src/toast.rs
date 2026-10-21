@@ -34,8 +34,9 @@ pub enum ToastResult {
 
 /// Gap between the card and the screen edge.
 const GAP: f32 = 16.0;
-const PAD: f32 = 6.0;
-const CAPTION_H: f32 = 32.0;
+const PAD: f32 = 8.0;
+const CAPTION_H: f32 = 50.0;
+const RADIUS: u8 = 14;
 
 struct Layout {
     card: Vec2,
@@ -118,6 +119,7 @@ pub fn run(
             upload,
             reencode,
             tg_copied: false,
+            note_shown: false,
             hwnd,
             monitor,
             t0: -1.0,
@@ -154,6 +156,8 @@ struct ToastApp {
     /// "For Telegram" re-encode of a recording.
     reencode: Option<Arc<crate::reencode::Job>>,
     tg_copied: bool,
+    /// The note of a first upload to post.blinker.cool is on the card.
+    note_shown: bool,
     hwnd: Option<win::HWND>,
     monitor: Monitor,
     t0: f64,
@@ -263,8 +267,8 @@ fn overlay_button(ui: &mut egui::Ui, rect: Rect, icon: Icon, tip: &str, alpha: f
     let resp = ui.interact(rect, ui.scope_id().with(tip), Sense::click());
     let h = resp.hovered();
     let p = ui.painter();
-    let fill = if h { ACCENT } else { Color32::from_rgba_unmultiplied(18, 18, 17, 225) };
-    p.rect_filled(rect, 6, fill.gamma_multiply(alpha));
+    let fill = if h { ACCENT } else { Color32::TRANSPARENT };
+    p.rect_filled(rect, 8, fill.gamma_multiply(alpha));
     let fg = if h { ON_ACCENT } else { TEXT };
     icons::paint(p, rect, icon, 15.0, fg.gamma_multiply(alpha));
     resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(tip)
@@ -340,24 +344,27 @@ impl eframe::App for ToastApp {
         let hover_t = ctx.animate_bool_with_time(egui::Id::unique("toast-hover"), hovered, 0.14);
 
         let painter = ui.painter().clone();
-        painter.rect_filled(card, 7, PANEL.gamma_multiply(alpha));
-        painter.rect_stroke(card, 7, Stroke::new(1.0, LINE.gamma_multiply(alpha)), StrokeKind::Inside);
+        painter.rect_filled(card, RADIUS, PANEL.gamma_multiply(alpha));
+        painter.rect_stroke(card, RADIUS, Stroke::new(1.0, LINE.gamma_multiply(alpha)), StrokeKind::Inside);
 
         // preview (drag = file, click = edit)
         let img_resp = ui.interact(img_rect, ui.scope_id().with("img"), Sense::click_and_drag());
         let uv = ui::cover_uv(img_rect.size(), self.thumb_size);
+        let img_radius = CornerRadius::same(RADIUS - PAD as u8 + 2);
         painter.add(
-            egui::epaint::RectShape::filled(img_rect, CornerRadius::same(4), Color32::WHITE.gamma_multiply(alpha))
+            egui::epaint::RectShape::filled(img_rect, img_radius, Color32::WHITE.gamma_multiply(alpha))
                 .with_texture(self.tex.id(), uv),
         );
+        painter.rect_stroke(img_rect, img_radius, Stroke::new(1.0, Color32::from_white_alpha((14.0 * alpha) as u8)), StrokeKind::Inside);
         if hover_t > 0.0 {
-            painter.rect_filled(img_rect, 4, Color32::from_black_alpha((105.0 * hover_t * alpha) as u8));
+            painter.rect_filled(img_rect, img_radius, Color32::from_black_alpha((120.0 * hover_t * alpha) as u8));
         }
         if self.video && hover_t < 1.0 {
             let a = (1.0 - hover_t) * alpha;
             let c = img_rect.center();
-            painter.circle_filled(c, 17.0, Color32::from_rgba_unmultiplied(18, 18, 17, (210.0 * a) as u8));
-            icons::paint(&painter, Rect::from_center_size(c + vec2(1.5, 0.0), Vec2::splat(18.0)), Icon::Play, 13.0, TEXT.gamma_multiply(a));
+            painter.circle_filled(c, 19.0, Color32::from_rgba_unmultiplied(18, 18, 17, (200.0 * a) as u8));
+            painter.circle_stroke(c, 19.0, Stroke::new(1.0, Color32::from_white_alpha((30.0 * a) as u8)));
+            icons::paint(&painter, Rect::from_center_size(c + vec2(1.5, 0.0), Vec2::splat(18.0)), Icon::Play, 14.0, TEXT.gamma_multiply(a));
         }
         if img_resp.drag_started() {
             if let Some(path) = self.file_for_drag() {
@@ -375,11 +382,11 @@ impl eframe::App for ToastApp {
         }
         let mut clicked_button = false;
 
-        // actions over the preview
+        // actions: a row at the bottom of the preview, shown on hover
         if hover_t > 0.01 {
             let a = hover_t * alpha;
             let size = 32.0;
-            let gap = 6.0;
+            let gap = 4.0;
             let mut actions: Vec<(Icon, &str)> = if self.gif {
                 vec![(Icon::Copy, crate::i18n::t("копировать файл"))]
             } else if self.video {
@@ -400,10 +407,16 @@ impl eframe::App for ToastApp {
                 actions.push((Icon::Upload, crate::i18n::t("загрузить и скопировать ссылку")));
             }
             let total = actions.len() as f32 * size + (actions.len() as f32 - 1.0) * gap;
-            let mut x = img_rect.center().x - total / 2.0;
-            let y = img_rect.center().y - size / 2.0 + (1.0 - hover_t) * 6.0;
+            // a dark plate holding the buttons
+            let bar = Rect::from_center_size(
+                pos2(img_rect.center().x, img_rect.bottom() - 10.0 - size / 2.0 + (1.0 - hover_t) * 6.0),
+                vec2(total + 8.0, size + 8.0),
+            );
+            painter.rect_filled(bar, 11, Color32::from_rgba_unmultiplied(18, 18, 17, (235.0 * a) as u8));
+            painter.rect_stroke(bar, 11, Stroke::new(1.0, Color32::from_white_alpha((20.0 * a) as u8)), StrokeKind::Inside);
+            let mut x = bar.left() + 4.0;
             for (icon, tip) in actions {
-                let r = Rect::from_min_size(pos2(x, y), Vec2::splat(size));
+                let r = Rect::from_min_size(pos2(x, bar.top() + 4.0), Vec2::splat(size));
                 if overlay_button(ui, r, icon, tip, a).clicked() {
                     clicked_button = true;
                     match icon {
@@ -446,10 +459,12 @@ impl eframe::App for ToastApp {
                 }
                 x += size + gap;
             }
-            let close_r = Rect::from_min_size(img_rect.right_top() + vec2(-28.0, 6.0), Vec2::splat(22.0));
-            if overlay_button(ui, close_r, Icon::Close, crate::i18n::t("закрыть"), a).clicked() {
-                clicked_button = true;
-                self.close(&ctx, ToastResult::Closed);
+            if !self.cfg.toast_caption {
+                let close_r = Rect::from_min_size(img_rect.right_top() + vec2(-30.0, 8.0), Vec2::splat(22.0));
+                if overlay_button(ui, close_r, Icon::Close, crate::i18n::t("закрыть"), a).clicked() {
+                    clicked_button = true;
+                    self.close(&ctx, ToastResult::Closed);
+                }
             }
         }
         if !clicked_button
@@ -461,11 +476,14 @@ impl eframe::App for ToastApp {
             self.close(&ctx, ToastResult::Edit);
         }
 
-        // caption
-        let bar_y = if self.cfg.toast_caption {
-            let cy = img_rect.bottom() + CAPTION_H / 2.0;
+        // caption: what it is and where it stands, a close button
+        if self.cfg.toast_caption {
+            let top = img_rect.bottom();
+            let title_y = top + CAPTION_H / 2.0 - 8.0;
+            let sub_y = top + CAPTION_H / 2.0 + 9.0;
+            let left = card.left() + PAD + 4.0;
             let title = if self.copied_at.is_some_and(|t| now - t < 1.5) { crate::i18n::t("скопировано снова") } else { &self.title };
-            painter.text(pos2(card.left() + 10.0, cy), Align2::LEFT_CENTER, title, font_medium(12.5), TEXT.gamma_multiply(alpha));
+            painter.text(pos2(left, title_y), Align2::LEFT_CENTER, title, font_medium(13.0), TEXT.gamma_multiply(alpha));
             let upload = self.upload.as_ref().map(|j| (j.fraction(), j.result()));
             let tg = self.reencode.as_ref().map(|j| (j.fraction(), j.result()));
             if let Some((_, Some(Ok(p)))) = &tg
@@ -476,7 +494,7 @@ impl eframe::App for ToastApp {
                 crate::output::copy_file(p);
                 self.remaining = self.remaining.max(4.0);
             }
-            let right = match (&tg, upload.clone()) {
+            let sub = match (&tg, upload.clone()) {
                 (Some((f, None)), _) => lf!("сжатие {:.0}%", "compressing {:.0}%", f * 100.0),
                 (Some((_, Some(Ok(p)))), None) => {
                     let mb = std::fs::metadata(p).map(|m| m.len() as f64 / 1048576.0).unwrap_or(0.0);
@@ -484,33 +502,65 @@ impl eframe::App for ToastApp {
                 }
                 (Some((_, Some(Err(_)))), None) => crate::i18n::t("не сжалось").to_string(),
                 (_, upload) => match upload {
-                Some((f, None)) => lf!("загрузка {:.0}%", "uploading {:.0}%", f * 100.0),
-                Some((_, Some(Ok(_)))) => crate::i18n::t("ссылка в буфере").to_string(),
-                Some((_, Some(Err(_)))) => crate::i18n::t("не загрузилось").to_string(),
-                None if saving => {
-                    let dots = ".".repeat(((now * 3.0) as usize % 3) + 1);
-                    lf!("сохраняется{dots}", "saving{dots}")
-                }
-                None => self.size_text.clone(),
+                    Some((f, None)) => lf!("загрузка {:.0}%", "uploading {:.0}%", f * 100.0),
+                    Some((_, Some(Ok(_)))) => crate::i18n::t("ссылка в буфере").to_string(),
+                    Some((_, Some(Err(_)))) => crate::i18n::t("не загрузилось").to_string(),
+                    None if saving => {
+                        let dots = ".".repeat(((now * 3.0) as usize % 3) + 1);
+                        lf!("сохраняется{dots}", "saving{dots}")
+                    }
+                    None => self.size_text.clone(),
                 },
             };
-            let failed = matches!(upload, Some((_, Some(Err(_))))) || matches!(tg, Some((_, Some(Err(_)))));
-            let rc = if failed { DANGER } else { FAINT };
-            let rr = painter.text(pos2(card.right() - 10.0, cy), Align2::RIGHT_CENTER, right, mono(11.0), rc.gamma_multiply(alpha));
-            if let Some((_, Some(Err(e)))) = upload.as_ref().or(tg.as_ref().map(|(f, r)| (f, r)).map(|(f, r)| (*f, r.clone().map(|x| x.map(|p| p.display().to_string())))).as_ref()) {
-                ui.interact(rr, ui.scope_id().with("upload-err"), Sense::hover()).on_hover_text(e);
+            // the first upload to post.blinker.cool: what it keeps, in place of the size
+            let note = self.upload.as_ref().filter(|_| matches!(upload, Some((_, Some(Ok(_)))))).and_then(|j| j.note.clone());
+            if note.is_some() && !self.note_shown {
+                self.note_shown = true;
+                self.remaining = self.remaining.max(7.0);
             }
-            card.bottom() - 3.0
-        } else {
-            img_rect.bottom() - 3.0
-        };
+            let failed = matches!(upload, Some((_, Some(Err(_))))) || matches!(tg, Some((_, Some(Err(_)))));
+            let sc = if failed { DANGER } else { FAINT_TEXT };
+            let sr = match note {
+                Some(n) => {
+                    let w = card.right() - PAD - 34.0 - left;
+                    let g = painter.layout(n, font(11.0), ACCENT.gamma_multiply(alpha), w);
+                    let r = Rect::from_min_size(pos2(left, sub_y - 7.0), g.size());
+                    painter.galley(r.min, g, ACCENT);
+                    r
+                }
+                None => painter.text(pos2(left, sub_y), Align2::LEFT_CENTER, sub, mono(11.0), sc.gamma_multiply(alpha)),
+            };
+            if let Some((_, Some(Err(e)))) = upload.as_ref().or(tg.as_ref().map(|(f, r)| (f, r)).map(|(f, r)| (*f, r.clone().map(|x| x.map(|p| p.display().to_string())))).as_ref()) {
+                ui.interact(sr, ui.scope_id().with("upload-err"), Sense::hover()).on_hover_text(e);
+            }
+            // progress of an upload / compression as a thin bar under the text
+            let busy = match (&tg, &upload) {
+                (Some((f, None)), _) | (None, Some((f, None))) => Some(*f),
+                _ => None,
+            };
+            if let Some(f) = busy {
+                let track = Rect::from_min_max(pos2(left, sub_y + 10.0), pos2(card.right() - PAD - 40.0, sub_y + 12.0));
+                painter.rect_filled(track, 1, LINE.gamma_multiply(alpha));
+                painter.rect_filled(Rect::from_min_size(track.min, vec2(track.width() * f.clamp(0.0, 1.0), 2.0)), 1, ACCENT.gamma_multiply(alpha));
+            }
+            let close_r = Rect::from_center_size(pos2(card.right() - PAD - 14.0, top + CAPTION_H / 2.0), Vec2::splat(28.0));
+            let cresp = ui.interact(close_r, ui.scope_id().with("caption-close"), Sense::click());
+            if cresp.hovered() {
+                painter.rect_filled(close_r, 8, HOVER.gamma_multiply(alpha));
+            }
+            icons::paint(&painter, close_r, Icon::Close, 12.0, if cresp.hovered() { TEXT } else { FAINT }.gamma_multiply(alpha));
+            if cresp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(crate::i18n::t("закрыть")).clicked() {
+                self.close(&ctx, ToastResult::Closed);
+            }
+        }
 
-        // time left
+        // time left: a hairline along the bottom edge
         let life = (self.remaining / self.cfg.toast_seconds.max(1.0)).clamp(0.0, 1.0);
-        let inset = if self.cfg.toast_caption { 10.0 } else { PAD + 6.0 };
-        let track = Rect::from_min_max(pos2(card.left() + inset, bar_y - 1.0), pos2(card.right() - inset, bar_y + 1.0));
+        let inset = RADIUS as f32;
+        let y = card.bottom() - 1.5;
+        let track = Rect::from_min_max(pos2(card.left() + inset, y - 0.75), pos2(card.right() - inset, y + 0.75));
         let fill = Rect::from_min_max(track.min, pos2(track.left() + track.width() * life, track.bottom()));
-        painter.rect_filled(fill, 1, ACCENT.gamma_multiply(0.55 * alpha * (1.0 - hover_t * 0.6)));
+        painter.rect_filled(fill, 1, ACCENT.gamma_multiply(0.5 * alpha * (1.0 - hover_t * 0.7)));
 
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
     }

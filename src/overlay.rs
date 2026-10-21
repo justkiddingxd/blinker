@@ -175,6 +175,7 @@ impl OverlayApp {
             active: primary,
             title,
             yield_focus: false,
+            palette_open: false,
         }
     }
 
@@ -361,7 +362,13 @@ enum Phase {
     Closing { at: f64 },
 }
 
+/// The tools panel: big buttons, the colors folded into one swatch.
+const BAR_BTN: f32 = 42.0;
+const BAR_ICON: f32 = 19.0;
+
 struct OverlayApp {
+    /// The colors are shown in the panel (after a click on the swatch).
+    palette_open: bool,
     shared: Arc<Shared>,
     cfg: Config,
     snap: Snapshot,
@@ -673,7 +680,7 @@ impl OverlayApp {
             if input.key_pressed(Key::B) {
                 return self.finish(Action::Beauty, now);
             }
-            if input.key_pressed(Key::U) && !self.shared.config().upload_url.trim().is_empty() {
+            if input.key_pressed(Key::U) && crate::upload::configured(&self.shared.config()) {
                 return self.finish(Action::Upload, now);
             }
             let step = if input.modifiers.shift { 10.0 } else { 1.0 };
@@ -1163,7 +1170,7 @@ impl OverlayApp {
             pos2(m.x as f32 / ppp, m.y as f32 / ppp + self.notch(m, ppp)),
             pos2(m.right() as f32 / ppp, m.bottom() as f32 / ppp),
         );
-        let size = self.toolbar_rect.map(|t| t.size()).unwrap_or(vec2(44.0, 214.0));
+        let size = self.toolbar_rect.map(|t| t.size()).unwrap_or(vec2(52.0, 250.0));
         let tools_right = !self.record && self.cfg.tools_pos == crate::config::ToolsPos::Right;
         let mut x = if tools_right { r.left() - size.x - 8.0 } else { r.right() + 8.0 };
         if tools_right && x < mon.left() + 8.0 {
@@ -1189,48 +1196,48 @@ impl OverlayApp {
                 egui::Frame::new()
                     .fill(PANEL)
                     .stroke(Stroke::new(1.0, LINE))
-                    .corner_radius(3)
-                    .inner_margin(egui::Margin::same(3))
+                    .corner_radius(9)
+                    .inner_margin(egui::Margin::same(5))
                     .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
+                        ui.spacing_mut().item_spacing.y = 1.0;
                         ui.vertical(|ui| {
                             let mut act = None;
                             if self.record {
                                 let tip = if self.gif { crate::i18n::t("начать запись gif  enter") } else { crate::i18n::t("начать запись  enter") };
-                                if ui::icon_button(ui, Icon::Record, tip, 36.0, false, ui::Kind::Accent).clicked() {
+                                if ui::icon_button_sized(ui, Icon::Record, tip, BAR_BTN, BAR_ICON, false, ui::Kind::Accent).clicked() {
                                     act = Some(Action::Record);
                                 }
-                                if ui::icon_button(ui, Icon::Close, crate::i18n::t("отмена  esc"), 36.0, false, ui::Kind::Ghost).clicked() {
+                                if ui::icon_button_sized(ui, Icon::Close, crate::i18n::t("отмена  esc"), BAR_BTN, BAR_ICON, false, ui::Kind::Ghost).clicked() {
                                     self.cancel(ctx);
                                 }
                                 return act;
                             }
-                            if ui::icon_button(ui, Icon::Copy, crate::i18n::t("копировать  enter"), 36.0, false, ui::Kind::Accent).clicked() {
+                            if ui::icon_button_sized(ui, Icon::Copy, crate::i18n::t("копировать  enter"), BAR_BTN, BAR_ICON, false, ui::Kind::Accent).clicked() {
                                 act = Some(Action::Copy);
                             }
-                            if ui::icon_button(ui, Icon::Save, &crate::i18n::kb(crate::i18n::t("сохранить  ctrl s")), 36.0, false, ui::Kind::Ghost).clicked() {
+                            if ui::icon_button_sized(ui, Icon::Save, &crate::i18n::kb(crate::i18n::t("сохранить  ctrl s")), BAR_BTN, BAR_ICON, false, ui::Kind::Ghost).clicked() {
                                 act = Some(Action::Save);
                             }
-                            if ui::icon_button(ui, Icon::Edit, crate::i18n::t("править  e"), 36.0, false, ui::Kind::Ghost).clicked() {
+                            if ui::icon_button_sized(ui, Icon::Edit, crate::i18n::t("править  e"), BAR_BTN, BAR_ICON, false, ui::Kind::Ghost).clicked() {
                                 act = Some(Action::Edit);
                             }
-                            if ui::icon_button(ui, Icon::Pin, crate::i18n::t("закрепить поверх окон  p"), 36.0, false, ui::Kind::Ghost).clicked() {
+                            if ui::icon_button_sized(ui, Icon::Pin, crate::i18n::t("закрепить поверх окон  p"), BAR_BTN, BAR_ICON, false, ui::Kind::Ghost).clicked() {
                                 act = Some(Action::Pin);
                             }
-                            if ui::icon_button(ui, Icon::Frame, crate::i18n::t("красивый снимок  b"), 36.0, false, ui::Kind::Ghost)
+                            if ui::icon_button_sized(ui, Icon::Frame, crate::i18n::t("красивый снимок  b"), BAR_BTN, BAR_ICON, false, ui::Kind::Ghost)
                                 .clicked()
                             {
                                 act = Some(Action::Beauty);
                             }
-                            if !self.cfg.upload_url.trim().is_empty()
-                                && ui::icon_button(ui, Icon::Upload, crate::i18n::t("загрузить и скопировать ссылку  u"), 36.0, false, ui::Kind::Ghost)
+                            if crate::upload::configured(&self.cfg)
+                                && ui::icon_button_sized(ui, Icon::Upload, crate::i18n::t("загрузить и скопировать ссылку  u"), BAR_BTN, BAR_ICON, false, ui::Kind::Ghost)
                                     .clicked()
                             {
                                 act = Some(Action::Upload);
                             }
-                            let (sep, _) = ui.allocate_exact_size(vec2(36.0, 5.0), egui::Sense::hover());
+                            let (sep, _) = ui.allocate_exact_size(vec2(BAR_BTN, 5.0), egui::Sense::hover());
                             ui.painter().hline(sep.shrink2(vec2(4.0, 0.0)).x_range(), sep.center().y, Stroke::new(1.0, LINE));
-                            if ui::icon_button(ui, Icon::Close, crate::i18n::t("отмена  esc"), 36.0, false, ui::Kind::Ghost).clicked() {
+                            if ui::icon_button_sized(ui, Icon::Close, crate::i18n::t("отмена  esc"), BAR_BTN, BAR_ICON, false, ui::Kind::Ghost).clicked() {
                                 self.cancel(ctx);
                             }
                             act
@@ -1521,7 +1528,7 @@ impl OverlayApp {
             return;
         }
         let ppp = ctx.pixels_per_point();
-        let size = self.top_rect.map(|r| r.size()).unwrap_or(vec2(520.0, 46.0));
+        let size = self.top_rect.map(|r| r.size()).unwrap_or(vec2(540.0, 52.0));
         // Next to the selection once there is one (the screen top until then).
         let mode = if self.record { crate::config::ToolsPos::Screen } else { self.cfg.tools_pos };
         let area = self
@@ -1583,21 +1590,21 @@ impl OverlayApp {
                 egui::Frame::new()
                     .fill(PANEL)
                     .stroke(Stroke::new(1.0, LINE))
-                    .corner_radius(6)
-                    .inner_margin(egui::Margin::same(4))
+                    .corner_radius(9)
+                    .inner_margin(egui::Margin::same(5))
                     .show(ui, |ui| {
                         if vertical {
                             self.tools_column(ui);
                             return;
                         }
                         ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 2.0;
+                            ui.spacing_mut().item_spacing.x = 1.0;
                             if self.record {
                                 self.record_bar(ui);
                                 return;
                             }
                             for (tool, icon, tip, _) in TOOLS {
-                                if ui::icon_button(ui, icon, crate::i18n::t(tip), 36.0, self.tool == tool, ui::Kind::Ghost).clicked() {
+                                if ui::icon_button_sized(ui, icon, crate::i18n::t(tip), BAR_BTN, BAR_ICON, self.tool == tool, ui::Kind::Ghost).clicked() {
                                     self.commit_text();
                                     self.tool = tool;
                                 }
@@ -1606,16 +1613,10 @@ impl OverlayApp {
                                 }
                             }
                             bar_sep(ui);
-                            for (c, name) in crate::editor::PALETTE {
-                                if color_chip(ui, c, self.color == c).on_hover_text(crate::i18n::t(name)).clicked() {
-                                    self.color = c;
-                                    let rgba = c.to_srgba_unmultiplied();
-                                    self.shared.update_config(|cfg| cfg.editor_color = rgba);
-                                }
-                            }
+                            self.palette(ui);
                             bar_sep(ui);
                             ui.add_enabled_ui(!self.shapes.is_empty(), |ui| {
-                                if ui::icon_button(ui, Icon::Undo, &crate::i18n::kb(crate::i18n::t("отменить  ctrl z")), 36.0, false, ui::Kind::Ghost).clicked() {
+                                if ui::icon_button_sized(ui, Icon::Undo, &crate::i18n::kb(crate::i18n::t("отменить  ctrl z")), BAR_BTN, BAR_ICON, false, ui::Kind::Ghost).clicked() {
                                     self.shapes.pop();
                                 }
                             });
@@ -1625,12 +1626,32 @@ impl OverlayApp {
         self.top_rect = Some(resp.response.rect);
     }
 
+    /// The current color as one swatch; a click unfolds the others next to it.
+    fn palette(&mut self, ui: &mut egui::Ui) {
+        if !self.palette_open {
+            let name = crate::editor::PALETTE.iter().find(|(c, _)| *c == self.color).map(|(_, n)| crate::i18n::t(n)).unwrap_or("");
+            let tip = lf!("цвет: {name}", "color: {name}");
+            if swatch(ui, self.color, BAR_BTN).on_hover_text(tip).clicked() {
+                self.palette_open = true;
+            }
+            return;
+        }
+        for (c, name) in crate::editor::PALETTE {
+            if color_chip(ui, c, self.color == c).on_hover_text(crate::i18n::t(name)).clicked() {
+                self.color = c;
+                self.palette_open = false;
+                let rgba = c.to_srgba_unmultiplied();
+                self.shared.update_config(|cfg| cfg.editor_color = rgba);
+            }
+        }
+    }
+
     /// The tools panel laid out vertically (right of the selection).
     fn tools_column(&mut self, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
             for (tool, icon, tip, _) in TOOLS {
-                if ui::icon_button(ui, icon, crate::i18n::t(tip), 36.0, self.tool == tool, ui::Kind::Ghost).clicked() {
+                if ui::icon_button_sized(ui, icon, crate::i18n::t(tip), BAR_BTN, BAR_ICON, self.tool == tool, ui::Kind::Ghost).clicked() {
                     self.commit_text();
                     self.tool = tool;
                 }
@@ -1653,7 +1674,7 @@ impl OverlayApp {
             }
             bar_sep_h(ui);
             ui.add_enabled_ui(!self.shapes.is_empty(), |ui| {
-                if ui::icon_button(ui, Icon::Undo, &crate::i18n::kb(crate::i18n::t("отменить  ctrl z")), 36.0, false, ui::Kind::Ghost).clicked() {
+                if ui::icon_button_sized(ui, Icon::Undo, &crate::i18n::kb(crate::i18n::t("отменить  ctrl z")), BAR_BTN, BAR_ICON, false, ui::Kind::Ghost).clicked() {
                     self.shapes.pop();
                 }
             });
@@ -1662,7 +1683,7 @@ impl OverlayApp {
 
     /// Top bar in record mode: what goes into the video.
     fn record_bar(&mut self, ui: &mut egui::Ui) {
-        let (r, resp) = ui.allocate_exact_size(vec2(26.0, 36.0), egui::Sense::hover());
+        let (r, resp) = ui.allocate_exact_size(vec2(28.0, BAR_BTN), egui::Sense::hover());
         resp.on_hover_text(crate::i18n::t("тяни область, кликни окно или нажми пробел для всего экрана"));
         ui.painter().circle_filled(pos2(r.left() + 14.0, r.center().y), 4.5, DANGER);
         if ui::filter(ui, crate::i18n::t("видео"), !self.gif).clicked() {
@@ -1675,7 +1696,7 @@ impl OverlayApp {
         if self.gif {
             // a GIF has no sound; only its size and the effects matter
             let clicks = self.cfg.rec_show_clicks;
-            if ui::icon_button(ui, Icon::Select, crate::i18n::t("показывать клики в записи"), 36.0, clicks, ui::Kind::Ghost).clicked() {
+            if ui::icon_button_sized(ui, Icon::Select, crate::i18n::t("показывать клики в записи"), BAR_BTN, BAR_ICON, clicks, ui::Kind::Ghost).clicked() {
                 self.cfg.rec_show_clicks = !clicks;
                 self.shared.update_config(|c| c.rec_show_clicks = !clicks);
             }
@@ -1684,25 +1705,25 @@ impl OverlayApp {
         }
         let desk = self.cfg.rec_desktop_audio;
         let tip = if desk { crate::i18n::t("звук системы пишется") } else { crate::i18n::t("звук системы выключен") };
-        if ui::icon_button(ui, if desk { Icon::Sound } else { Icon::Mute }, tip, 36.0, desk, ui::Kind::Ghost).clicked() {
+        if ui::icon_button_sized(ui, if desk { Icon::Sound } else { Icon::Mute }, tip, BAR_BTN, BAR_ICON, desk, ui::Kind::Ghost).clicked() {
             self.cfg.rec_desktop_audio = !desk;
             self.shared.update_config(|c| c.rec_desktop_audio = !desk);
         }
         let mic = self.cfg.rec_mic;
         let tip = if mic { crate::i18n::t("микрофон пишется") } else { crate::i18n::t("микрофон выключен") };
-        if ui::icon_button(ui, if mic { Icon::Mic } else { Icon::MicOff }, tip, 36.0, mic, ui::Kind::Ghost).clicked() {
+        if ui::icon_button_sized(ui, if mic { Icon::Mic } else { Icon::MicOff }, tip, BAR_BTN, BAR_ICON, mic, ui::Kind::Ghost).clicked() {
             self.cfg.rec_mic = !mic;
             self.shared.update_config(|c| c.rec_mic = !mic);
         }
         let clicks = self.cfg.rec_show_clicks;
         let tip = if clicks { crate::i18n::t("клики видны в записи") } else { crate::i18n::t("показывать клики в записи") };
-        if ui::icon_button(ui, Icon::Select, tip, 36.0, clicks, ui::Kind::Ghost).clicked() {
+        if ui::icon_button_sized(ui, Icon::Select, tip, BAR_BTN, BAR_ICON, clicks, ui::Kind::Ghost).clicked() {
             self.cfg.rec_show_clicks = !clicks;
             self.shared.update_config(|c| c.rec_show_clicks = !clicks);
         }
         let keys = self.cfg.rec_show_keys;
         let tip = if keys { crate::i18n::t("сочетания клавиш видны в записи") } else { &crate::i18n::kb(crate::i18n::t("показывать сочетания клавиш (ctrl + c…)")) };
-        if ui::icon_button(ui, Icon::Keys, tip, 36.0, keys, ui::Kind::Ghost).clicked() {
+        if ui::icon_button_sized(ui, Icon::Keys, tip, BAR_BTN, BAR_ICON, keys, ui::Kind::Ghost).clicked() {
             self.cfg.rec_show_keys = !keys;
             self.shared.update_config(|c| c.rec_show_keys = !keys);
         }
@@ -1823,18 +1844,18 @@ fn curve_control(a: Pos2, b: Pos2, path: &[Pos2]) -> Pos2 {
 }
 
 fn bar_sep_h(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(36.0, 7.0), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(BAR_BTN, 7.0), egui::Sense::hover());
     ui.painter().hline(rect.shrink2(vec2(8.0, 0.0)).x_range(), rect.center().y, Stroke::new(1.0, LINE));
 }
 
 /// Color chip for the vertical panel (two per row).
 fn color_chip_small(ui: &mut egui::Ui, c: eframe::egui::Color32, selected: bool) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(18.0, 22.0), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(BAR_BTN / 2.0, 24.0), egui::Sense::click());
     let p = ui.painter();
     if resp.hovered() {
         p.rect_filled(rect, 3, HOVER);
     }
-    let chip = Rect::from_center_size(rect.center(), Vec2::splat(11.0));
+    let chip = Rect::from_center_size(rect.center(), Vec2::splat(12.0));
     if selected {
         p.rect_stroke(chip.expand(2.5), 2, Stroke::new(1.0, TEXT), StrokeKind::Inside);
     }
@@ -1846,17 +1867,30 @@ fn color_chip_small(ui: &mut egui::Ui, c: eframe::egui::Color32, selected: bool)
 }
 
 fn bar_sep(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(9.0, 36.0), egui::Sense::hover());
-    ui.painter().vline(rect.center().x, rect.shrink2(vec2(0.0, 9.0)).y_range(), Stroke::new(1.0, LINE));
+    let (rect, _) = ui.allocate_exact_size(vec2(9.0, BAR_BTN), egui::Sense::hover());
+    ui.painter().vline(rect.center().x, rect.shrink2(vec2(0.0, 11.0)).y_range(), Stroke::new(1.0, LINE));
+}
+
+/// The current color: a round chip in a button.
+fn swatch(ui: &mut egui::Ui, c: eframe::egui::Color32, size: f32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::click());
+    let p = ui.painter();
+    if resp.hovered() {
+        p.rect_filled(rect, (size * 0.12).round() as u8, HOVER);
+    }
+    let r = size * 0.21;
+    p.circle_filled(rect.center(), r, c);
+    p.circle_stroke(rect.center(), r + 2.5, Stroke::new(1.2, if resp.hovered() { TEXT } else { DIM }));
+    resp.on_hover_cursor(CursorIcon::PointingHand)
 }
 
 fn color_chip(ui: &mut egui::Ui, c: eframe::egui::Color32, selected: bool) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(24.0, 36.0), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(30.0, BAR_BTN), egui::Sense::click());
     let p = ui.painter();
     if resp.hovered() {
-        p.rect_filled(rect.shrink2(vec2(0.0, 6.0)), 3, HOVER);
+        p.rect_filled(rect.shrink2(vec2(0.0, 7.0)), 4, HOVER);
     }
-    let chip = Rect::from_center_size(rect.center(), Vec2::splat(13.0));
+    let chip = Rect::from_center_size(rect.center(), Vec2::splat(16.0));
     if selected {
         p.rect_stroke(chip.expand(3.0), 2, Stroke::new(1.0, TEXT), StrokeKind::Inside);
     }

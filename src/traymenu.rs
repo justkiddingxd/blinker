@@ -1,6 +1,7 @@
 //! Custom tray context menu: small layered popups drawn with tiny-skia
-//! (Fira text, our line icons), with submenus. No GPU context, so it opens
-//! instantly. Runs a nested modal loop on the shell thread.
+//! (Fira text, our line icons), with a row of big tiles for the main actions
+//! and submenus. No GPU context, so it opens instantly. Runs a nested modal
+//! loop on the shell thread.
 
 use crate::icons::Icon;
 use crate::theme;
@@ -28,17 +29,23 @@ pub struct Item {
     pub hint: String,
     /// Non-empty: this row opens a submenu.
     pub children: Vec<Item>,
+    /// Non-empty: this row is a strip of big tiles (icon over a short name).
+    pub tiles: Vec<Item>,
 }
 
 impl Item {
     pub fn new(id: u32, icon: Icon, label: &str, hint: &str) -> Self {
-        Self { id, icon: Some(icon), label: label.into(), hint: hint.into(), children: Vec::new() }
+        Self { id, icon: Some(icon), label: label.into(), hint: hint.into(), children: Vec::new(), tiles: Vec::new() }
     }
+    #[allow(dead_code)]
     pub fn sub(icon: Icon, label: &str, children: Vec<Item>) -> Self {
-        Self { id: u32::MAX, icon: Some(icon), label: label.into(), hint: String::new(), children }
+        Self { id: u32::MAX, icon: Some(icon), label: label.into(), hint: String::new(), children, tiles: Vec::new() }
+    }
+    pub fn tiles(tiles: Vec<Item>) -> Self {
+        Self { id: u32::MAX - 1, icon: None, label: String::new(), hint: String::new(), children: Vec::new(), tiles }
     }
     pub fn separator() -> Self {
-        Self { id: 0, icon: None, label: String::new(), hint: String::new(), children: Vec::new() }
+        Self { id: 0, icon: None, label: String::new(), hint: String::new(), children: Vec::new(), tiles: Vec::new() }
     }
     fn is_sep(&self) -> bool {
         self.id == 0
@@ -46,7 +53,14 @@ impl Item {
     fn is_sub(&self) -> bool {
         !self.children.is_empty()
     }
+    fn is_tiles(&self) -> bool {
+        !self.tiles.is_empty()
+    }
 }
+
+/// Size of one tile, points.
+const TILE_W: f32 = 62.0;
+const TILE_H: f32 = 62.0;
 
 /// One popup window (the root menu or an open submenu).
 struct Level {
@@ -54,6 +68,8 @@ struct Level {
     /// (top, bottom) of each item, in window pixels.
     rows: Vec<(i32, i32)>,
     hover: Option<usize>,
+    /// The tile under the pointer, when `hover` is a row of tiles.
+    hover_tile: Option<usize>,
     scale: f32,
     pos: (i32, i32),
     size: (i32, i32),
@@ -101,15 +117,22 @@ fn make_level(items: Vec<Item>, anchor: (i32, i32), sub_of: Option<(i32, i32)>, 
     let work = mon.map(|m| m.work).unwrap_or(win::IRect::new(0, 0, 1920, 1040));
     let px = |v: f32| (v * scale).round() as i32;
 
-    let pad = px(4.0);
+    let pad = px(5.0);
     let mut y = pad;
     let mut rows = Vec::new();
     for it in &items {
-        let h = if it.is_sep() { px(9.0) } else { px(30.0) };
+        let h = if it.is_sep() {
+            px(9.0)
+        } else if it.is_tiles() {
+            px(TILE_H + 4.0)
+        } else {
+            px(32.0)
+        };
         rows.push((y, y + h));
         y += h;
     }
-    let size = (px(if root { 256.0 } else { 236.0 }), y + pad);
+    let tiles_w = items.iter().map(|it| it.tiles.len()).max().unwrap_or(0) as f32 * TILE_W + 10.0;
+    let size = (px(if root { 268f32.max(tiles_w) } else { 236.0 }), y + pad);
     let (mut x, mut top) = match sub_of {
         // to the right of the parent row, first row aligned with it
         Some((_parent_left, _)) => (anchor.0 - px(2.0), anchor.1 - pad),
@@ -151,7 +174,7 @@ fn make_level(items: Vec<Item>, anchor: (i32, i32), sub_of: Option<(i32, i32)>, 
     if hwnd.is_null() {
         return None;
     }
-    Some(Level { items, rows, hover: None, scale, pos: (x, top), size, hwnd, tracking: false })
+    Some(Level { items, rows, hover: None, hover_tile: None, scale, pos: (x, top), size, hwnd, tracking: false })
 }
 
 /// Shows the menu at `anchor` (screen px) and blocks until it closes.
@@ -204,6 +227,20 @@ fn item_at(l: &Level, y: i32) -> Option<usize> {
     l.rows.iter().position(|(t, b)| y >= *t && y < *b).filter(|&i| !l.items[i].is_sep())
 }
 
+/// Left edge of the first tile of a row, window pixels.
+fn tiles_left(l: &Level, n: usize) -> f32 {
+    (l.size.0 as f32 - n as f32 * TILE_W * l.scale) / 2.0
+}
+
+fn tile_at(l: &Level, row: usize, x: i32) -> Option<usize> {
+    let n = l.items[row].tiles.len();
+    if n == 0 {
+        return None;
+    }
+    let i = ((x as f32 - tiles_left(l, n)) / (TILE_W * l.scale)).floor();
+    (i >= 0.0 && (i as usize) < n).then_some(i as usize)
+}
+
 /// Drops every submenu deeper than `level` and returns their windows. They
 /// must be destroyed only after the menu state is released: DestroyWindow
 /// sends messages to the window procedure right away, which re-enters it.
@@ -240,7 +277,7 @@ fn open_pending_submenu() {
             let children: Vec<Item> = l.items[h]
                 .children
                 .iter()
-                .map(|c| Item { id: c.id, icon: c.icon, label: c.label.clone(), hint: c.hint.clone(), children: Vec::new() })
+                .map(|c| Item { id: c.id, icon: c.icon, label: c.label.clone(), hint: c.hint.clone(), children: Vec::new(), tiles: Vec::new() })
                 .collect();
             return Some((children, anchor, parent_left));
         }
@@ -262,6 +299,7 @@ fn open_pending_submenu() {
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    let x = (lp & 0xFFFF) as i16 as i32;
     let y = ((lp >> 16) & 0xFFFF) as i16 as i32;
     let mut redraw: Vec<usize> = Vec::new();
     let mut destroy: Vec<HWND> = Vec::new();
@@ -285,11 +323,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     l.tracking = true;
                 }
                 let h = item_at(l, y);
+                let tile = h.and_then(|r| tile_at(l, r, x));
                 if h != l.hover {
                     l.hover = h;
+                    l.hover_tile = tile;
                     redraw.push(li);
                     // moving to another row of a parent closes deeper submenus
                     destroy.extend(close_below(m, li));
+                } else if tile != l.hover_tile {
+                    l.hover_tile = tile;
+                    redraw.push(li);
                 }
                 true
             }
@@ -306,11 +349,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             WM_LBUTTONUP => {
                 let l = &m.levels[li];
-                if let Some(i) = item_at(l, y)
-                    && !l.items[i].is_sub()
-                {
-                    m.result = Some(l.items[i].id);
-                    m.done = true;
+                if let Some(i) = item_at(l, y) {
+                    if l.items[i].is_tiles() {
+                        if let Some(t) = tile_at(l, i, x) {
+                            m.result = Some(l.items[i].tiles[t].id);
+                            m.done = true;
+                        }
+                    } else if !l.items[i].is_sub() {
+                        m.result = Some(l.items[i].id);
+                        m.done = true;
+                    }
                 }
                 true
             }
@@ -323,7 +371,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     let mut i = from.map(|v| v as i32).unwrap_or(if dir > 0 { -1 } else { n as i32 });
                     for _ in 0..n {
                         i = (i + dir).rem_euclid(n as i32);
-                        if !l.items[i as usize].is_sep() {
+                        if !l.items[i as usize].is_sep() && !l.items[i as usize].is_tiles() {
                             return Some(i as usize);
                         }
                     }
@@ -391,16 +439,37 @@ fn render(li: usize) {
         let regular = FontRef::try_from_slice(theme::FONT_REGULAR).ok();
         let mono = FontRef::try_from_slice(theme::FONT_MONO).ok();
 
-        if let Some(bg) = theme::rounded_rect_path(0.5, 0.5, w as f32 - 1.0, h as f32 - 1.0, 4.0 * s) {
+        if let Some(bg) = theme::rounded_rect_path(0.5, 0.5, w as f32 - 1.0, h as f32 - 1.0, 9.0 * s) {
             pm.fill_path(&bg, &paint_of(theme::PANEL), sk::FillRule::Winding, sk::Transform::identity(), None);
             let st = sk::Stroke { width: 1.0, ..Default::default() };
             pm.stroke_path(&bg, &paint_of(theme::LINE), &st, sk::Transform::identity(), None);
         }
-        let pad = 4.0 * s;
+        let pad = 5.0 * s;
         for (i, it) in m.items.iter().enumerate() {
             let (t, b) = m.rows[i];
             let (t, b) = (t as f32, b as f32);
             let cy = (t + b) / 2.0;
+            if it.is_tiles() {
+                let n = it.tiles.len();
+                let left = tiles_left(m, n);
+                for (k, tile) in it.tiles.iter().enumerate() {
+                    let x0 = left + k as f32 * TILE_W * s;
+                    let hot = m.hover == Some(i) && m.hover_tile == Some(k);
+                    if hot && let Some(p) = theme::rounded_rect_path(x0 + 2.0 * s, t + 2.0 * s, TILE_W * s - 4.0 * s, b - t - 4.0 * s, 8.0 * s) {
+                        pm.fill_path(&p, &paint_of(theme::HOVER), sk::FillRule::Winding, sk::Transform::identity(), None);
+                    }
+                    let cx = x0 + TILE_W * s / 2.0;
+                    if let Some(icon) = tile.icon {
+                        draw_icon(&mut pm, icon, cx, t + 24.0 * s, 19.0 * s, if hot { theme::ACCENT } else { theme::TEXT2 });
+                    }
+                    if let Some(f) = &regular {
+                        let px = 11.5 * s;
+                        let tw = text_width(f, px, &tile.label);
+                        draw_text(&mut pm, f, px, cx - tw / 2.0, t + 49.0 * s, &tile.label, if hot { theme::TEXT } else { theme::DIM });
+                    }
+                }
+                continue;
+            }
             if it.is_sep() {
                 if let Some(r) = sk::Rect::from_xywh(pad + 8.0 * s, cy.floor(), w as f32 - 2.0 * pad - 16.0 * s, 1.0) {
                     pm.fill_rect(r, &paint_of(theme::LINE), sk::Transform::identity(), None);
@@ -409,7 +478,7 @@ fn render(li: usize) {
             }
             let hovered = m.hover == Some(i);
             if hovered
-                && let Some(p) = theme::rounded_rect_path(pad, t, w as f32 - 2.0 * pad, b - t, 3.0 * s)
+                && let Some(p) = theme::rounded_rect_path(pad, t, w as f32 - 2.0 * pad, b - t, 6.0 * s)
             {
                 pm.fill_path(&p, &paint_of(theme::HOVER), sk::FillRule::Winding, sk::Transform::identity(), None);
             }
@@ -508,7 +577,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(400));
             let root = find();
             assert!(!root.is_null());
-            let row = |i: i32| (4.0 + 30.0 * i as f32 + 15.0) as i32; // at 100% scale
+            let row = |i: i32| (5.0 + 32.0 * i as f32 + 16.0) as i32; // at 100% scale
             for _ in 0..3 {
                 post(root, WM_MOUSEMOVE, 0, row(0)); // "screenshot ›": opens the submenu
                 std::thread::sleep(std::time::Duration::from_millis(150));

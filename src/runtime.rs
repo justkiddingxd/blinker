@@ -20,10 +20,14 @@ pub const WM_RELOAD_HOTKEYS: u32 = WM_APP + 1;
 pub const WM_SUSPEND_HOTKEYS: u32 = WM_APP + 2;
 /// From the settings after an update was installed: quit and start again.
 pub const WM_RESTART: u32 = WM_APP + 3;
+/// To the tray thread: the instant replay started or stopped (icon color).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub const WM_TRAY_STATE: u32 = WM_APP + 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum HomeTab {
     Record,
+    Replay,
     Upload,
     #[default]
     Capture,
@@ -80,6 +84,8 @@ pub struct Shared {
     pub last_region: Mutex<Option<crate::win::IRect>>,
     /// A recording is running (the tray menu offers stop / pause then).
     pub recording: std::sync::atomic::AtomicBool,
+    /// The instant replay is buffering (the tray icon turns red).
+    pub replay_live: std::sync::atomic::AtomicBool,
 }
 
 impl Shared {
@@ -93,6 +99,7 @@ impl Shared {
             shell_thread: AtomicU32::new(0),
             last_region: Mutex::new(None),
             recording: std::sync::atomic::AtomicBool::new(false),
+            replay_live: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -172,6 +179,13 @@ impl Shared {
 
     pub fn suspend_hotkeys(&self) {
         self.post_to_shell(WM_SUSPEND_HOTKEYS);
+    }
+
+    /// The replay started or stopped: the tray icon shows it.
+    pub fn set_replay_live(&self, on: bool) {
+        if self.replay_live.swap(on, Ordering::SeqCst) != on {
+            crate::shell::tray_state_changed(self);
+        }
     }
 
     /// In the tray process: its own shell thread. In settings/editor

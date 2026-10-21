@@ -1,0 +1,38 @@
+# Your own post server for blinker: `docker compose up -d` in this folder,
+# then in blinker: settings → upload → own server →
+#   https://your.domain/api/upload  and the TOKEN below.
+#
+# Caddy in front gets an HTTPS certificate by itself; put your domain in
+# the Caddyfile (or drop the caddy service and use your own proxy, see README).
+services:
+  post:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    environment:
+      PUBLIC_URL: https://post.example.com
+      # anyone with this token can upload; empty = anyone at all
+      TOKEN: change-me
+      TTL_HOURS: "72"
+      MAX_MB: "100"
+      DISK_LIMIT_GB: "20"
+      UPLOADS_PER_HOUR: "120"
+      TRUST_PROXY: "1"
+    volumes:
+      - ./data:/data
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy:/data
+    depends_on:
+      - post
+
+volumes:
+  caddy:

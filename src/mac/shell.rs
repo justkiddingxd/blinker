@@ -153,6 +153,19 @@ extern "C" fn on_note(which: i32) {
 // ---------------------------------------------------------------------------
 // Menu bar icon
 
+/// The replay started or stopped: a red sparkle while it records, the usual
+/// menu bar colored one otherwise. Called on the main thread.
+pub fn tray_state_changed(shared: &Shared) {
+    let live = shared.replay_live.load(std::sync::atomic::Ordering::SeqCst);
+    let (icon, template) = if live {
+        (crate::theme::mark_image_in(36, crate::theme::DANGER), 0)
+    } else {
+        (crate::theme::mark_image(36), 1)
+    };
+    let tip = ffi::cstr(if live { crate::i18n::l("blinker · идёт повтор", "blinker · replay is on") } else { "blinker" });
+    unsafe { ffi::bk_tray_set_image(icon.as_raw().as_ptr(), icon.width() as i32, icon.height() as i32, template, tip.as_ptr()) };
+}
+
 extern "C" fn on_tray(right: i32) {
     let Some(s) = shared() else { return };
     let cfg = s.config();
@@ -198,32 +211,28 @@ fn show_menu(shared: &Shared) {
         symbol: (!symbol.is_empty()).then(|| ffi::cstr(symbol)),
         key: k,
     };
-    let sub = |label: &str, symbol: &str| Row {
-        id: -1,
-        depth: 0,
-        submenu: true,
-        label: ffi::cstr(label),
-        symbol: Some(ffi::cstr(symbol)),
-        key: None,
-    };
     let sep = || Row { id: 0, depth: 0, submenu: false, label: ffi::cstr(""), symbol: None, key: None };
-    let mut rows = vec![
-        sub(t("скриншот"), "camera.viewfinder"),
-        item(1, 1, t("область"), "rectangle.dashed", key(HotkeyAction::Region)),
-        item(2, 1, t("весь экран"), "display", key(HotkeyAction::Screen)),
-        item(3, 1, t("активное окно"), "macwindow", key(HotkeyAction::Window)),
-        item(4, 1, t("повторить область"), "arrow.counterclockwise", key(HotkeyAction::Last)),
-        sub(t("запись"), "record.circle"),
-    ];
-    if shared.recording.load(std::sync::atomic::Ordering::SeqCst) {
-        rows.push(item(11, 1, t("остановить запись"), "stop.circle", key(HotkeyAction::Record)));
-        rows.push(item(12, 1, t("пауза / продолжить"), "pause.circle", key(HotkeyAction::Pause)));
+    // the main actions as big tiles in one row (depth -1), the rest as a list
+    let l = crate::i18n::l;
+    let mut rows = if shared.recording.load(std::sync::atomic::Ordering::SeqCst) {
+        vec![
+            item(11, -1, l("стоп", "stop"), "stop.circle", key(HotkeyAction::Record)),
+            item(12, -1, l("пауза", "pause"), "pause.circle", key(HotkeyAction::Pause)),
+        ]
     } else {
-        rows.push(item(9, 1, t("видео"), "video", key(HotkeyAction::Record)));
-        rows.push(item(13, 1, "gif", "photo.stack", key(HotkeyAction::RecordGif)));
-    }
+        vec![
+            item(1, -1, t("область"), "rectangle.dashed", key(HotkeyAction::Region)),
+            item(2, -1, l("экран", "screen"), "display", key(HotkeyAction::Screen)),
+            item(3, -1, l("окно", "window"), "macwindow", key(HotkeyAction::Window)),
+            item(9, -1, t("видео"), "record.circle", key(HotkeyAction::Record)),
+            item(13, -1, "gif", "photo.stack", key(HotkeyAction::RecordGif)),
+        ]
+    };
+    rows.push(item(4, 0, t("повторить область"), "arrow.counterclockwise", key(HotkeyAction::Last)));
     if cfg.replay_enabled {
-        rows.push(item(10, 0, t("сохранить повтор"), "clock.arrow.circlepath", key(HotkeyAction::Replay)));
+        let live = shared.replay_live.load(std::sync::atomic::Ordering::SeqCst);
+        let label = if live { l("сохранить повтор · идёт запись", "save the replay · recording") } else { t("сохранить повтор") };
+        rows.push(item(10, 0, label, "clock.arrow.circlepath", key(HotkeyAction::Replay)));
     }
     rows.extend([
         sep(),

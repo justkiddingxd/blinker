@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>post · blinker</title>
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#121211">
+<style>
+@font-face { font-family: "Fira Sans"; font-weight: 400; src: url("/assets/FiraSans-Regular.ttf") format("truetype"); }
+@font-face { font-family: "Fira Sans"; font-weight: 600; src: url("/assets/FiraSans-SemiBold.ttf") format("truetype"); }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #121211; color: #e6e4de;
+  font: 400 16px/1.6 "Fira Sans", -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+main { max-width: 460px; padding: 24px; text-align: center; }
+svg { width: 52px; height: 52px; }
+h1 { font-size: 24px; font-weight: 600; margin: 16px 0 8px; }
+p { color: #9a978e; margin: 0 0 24px; }
+a { display: inline-flex; align-items: center; height: 38px; padding: 0 16px; border-radius: 10px; background: #d8d5cd; color: #161615; text-decoration: none; font-weight: 600; }
+a:hover { background: #e9e6df; }
+</style>
+</head>
+<body>
+<main>
+  <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 6 Q36.5 27.5 58 32 Q36.5 36.5 32 58 Q27.5 36.5 6 32 Q27.5 27.5 32 6Z" fill="#d8d5cd"/></svg>
+  <h1 id="h">post.blinker.cool</h1>
+  <p id="p">Screenshots and recordings shared from blinker. Each file lives here for 3 days, videos up to 100 MB.</p>
+  <a href="https://blinker.cool" id="a">Get blinker</a>
+</main>
+<script>
+if ((navigator.language || "").toLowerCase().startsWith("ru")) {
+  document.getElementById("p").textContent = "Скриншоты и записи экрана, которыми поделились из blinker. Каждый файл живёт здесь 3 дня, видео до 100 мб.";
+  document.getElementById("a").textContent = "Скачать blinker";
+}
+</script>
+</body>
+</html>

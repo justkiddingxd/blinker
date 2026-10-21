@@ -7,6 +7,7 @@
 #import <malloc/malloc.h>
 #import <notify.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #include "bk.h"
 
 void bk_set_err(char *buf, int len, NSString *msg) {
@@ -286,10 +287,106 @@ void bk_window_show(void *w, int show) {
 }
 
 /// Undecorated window with the system look: rounded corners, shadow, dark.
+// ---------------------------------------------------------------------------
+// System window buttons over our own title bar
+
+/// The system title bar lets every click but the ones on its buttons through
+/// to our bar under it (it would take them for dragging). Done the way
+/// `keep_open` is: a subclass of its own class that still reports the original.
+static void pass_clicks_through(NSView *v) {
+    if (!v) return;
+    Class cls = object_getClass(v);
+    NSString *name = NSStringFromClass(cls);
+    if ([name hasPrefix:@"BKPass_"]) return;
+    NSString *subName = [@"BKPass_" stringByAppendingString:name];
+    Class sub = NSClassFromString(subName);
+    if (!sub) {
+        sub = objc_allocateClassPair(cls, subName.UTF8String, 0);
+        if (!sub) return;
+        class_addMethod(sub, @selector(hitTest:), imp_implementationWithBlock(^NSView *(NSView *self_, NSPoint p) {
+                            struct objc_super sup = {self_, cls};
+                            NSView *(*send)(struct objc_super *, SEL, NSPoint) = (void *)objc_msgSendSuper;
+                            NSView *hit = send(&sup, @selector(hitTest:), p);
+                            return [hit isKindOfClass:NSButton.class] ? hit : nil;
+                        }),
+                        "@@:{CGPoint=dd}");
+        Class shown = [v class];
+        class_addMethod(sub, @selector(class), imp_implementationWithBlock(^Class(id self_) {
+                            (void)self_;
+                            return shown;
+                        }),
+                        "#@:");
+        objc_registerClassPair(sub);
+    }
+    object_setClass(v, sub);
+}
+
+/// Keeps the close / minimize / zoom buttons in the middle of our title bar:
+/// AppKit lays them out for its own 28 pt bar again on several occasions.
+@interface BKWindowButtons : NSObject
+@property(nonatomic, weak) NSWindow *window;
+@property(nonatomic) CGFloat x;
+@property(nonatomic) CGFloat cy;
+@end
+
+@implementation BKWindowButtons
+- (void)apply {
+    NSWindow *w = self.window;
+    NSButton *close = [w standardWindowButton:NSWindowCloseButton];
+    NSView *container = close.superview.superview;
+    if (!w || !close || !container) return;
+    CGFloat h = self.cy * 2.0;
+    CGFloat x = self.x;
+    for (NSNumber *kind in @[@(NSWindowCloseButton), @(NSWindowMiniaturizeButton), @(NSWindowZoomButton)]) {
+        NSButton *b = [w standardWindowButton:(NSWindowButton)kind.integerValue];
+        if (!b) continue;
+        [b setFrameOrigin:NSMakePoint(x, round((h - NSHeight(b.frame)) / 2.0))];
+        x += NSWidth(b.frame) + 6.0;
+    }
+    container.frame = NSMakeRect(0, NSHeight(w.frame) - h, NSWidth(w.frame), h);
+    w.titlebarSeparatorStyle = NSTitlebarSeparatorStyleNone;
+    pass_clicks_through(container);
+}
+- (void)changed:(NSNotification *)n {
+    (void)n;
+    [self apply];
+    // some relayouts happen after the notification
+    dispatch_async(dispatch_get_main_queue(), ^{ [self apply]; });
+}
+@end
+
+static char kBKWindowButtons;
+
+void bk_window_buttons_at(void *w, double x, double cy) {
+    NSWindow *win = (__bridge NSWindow *)w;
+    bk_on_main(^{
+        BKWindowButtons *b = objc_getAssociatedObject(win, &kBKWindowButtons);
+        if (!b) {
+            b = [BKWindowButtons new];
+            b.window = win;
+            objc_setAssociatedObject(win, &kBKWindowButtons, b, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
+            for (NSNotificationName name in @[NSWindowDidResizeNotification, NSWindowDidBecomeKeyNotification,
+                                              NSWindowDidResignKeyNotification, NSWindowDidChangeBackingPropertiesNotification,
+                                              NSWindowDidDeminiaturizeNotification, NSWindowDidExposeNotification])
+                [nc addObserver:b selector:@selector(changed:) name:name object:win];
+        }
+        b.x = x;
+        b.cy = cy;
+        [b changed:nil];
+    });
+}
+
 void bk_window_style_borderless(void *w) {
     NSWindow *win = (__bridge NSWindow *)w;
     bk_on_main(^{
         win.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+        // a titled window (system buttons over our bar) has the system's own
+        // rounded corners, shadow and hairline
+        if (win.styleMask & NSWindowStyleMaskTitled) {
+            win.collectionBehavior |= NSWindowCollectionBehaviorFullScreenNone;
+            return;
+        }
         win.hasShadow = YES;
         win.opaque = NO;
         win.backgroundColor = NSColor.clearColor;
@@ -441,7 +538,7 @@ typedef void (*bk_menu_cb)(int id);
 
 typedef struct {
     int id;          // 0 = separator
-    int depth;       // 0 = top level, 1 = inside the submenu above
+    int depth;       // 0 = top level, 1 = inside the submenu above, -1 = a tile of the top row
     int submenu;     // opens the following depth+1 items
     const char *label;
     const char *symbol;  // SF Symbol name or NULL
@@ -490,6 +587,7 @@ void bk_on_reopen(bk_notify_cb cb) {
 }
 
 static NSImage *g_tray_image;
+static NSString *g_tray_tip;
 
 /// winit closes every window of the app when its event loop ends (after each
 /// of our egui windows), the status item's own window included, and its
@@ -523,14 +621,14 @@ static void make_status_item(void) {
     // the same place in the menu bar when it is made again
     g_item.autosaveName = @"blinker";
     g_item.button.image = g_tray_image;
-    g_item.button.toolTip = @"blinker";
+    g_item.button.toolTip = g_tray_tip ?: @"blinker";
     g_item.button.target = g_target;
     g_item.button.action = @selector(clicked:);
     [g_item.button sendActionOn:NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp];
     keep_open(g_item.button.window);
 }
 
-void bk_tray_create(const uint8_t *rgba, int w, int h, bk_tray_cb cb) {
+static NSImage *tray_image(const uint8_t *rgba, int w, int h, int template_) {
     NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
                                                                     pixelsWide:w
                                                                     pixelsHigh:h
@@ -545,12 +643,31 @@ void bk_tray_create(const uint8_t *rgba, int w, int h, bk_tray_cb cb) {
     memcpy(rep.bitmapData, rgba, (size_t)w * h * 4);
     NSImage *img = [[NSImage alloc] initWithSize:NSMakeSize(18, 18)];
     [img addRepresentation:rep];
-    img.template = YES;
+    img.template = template_ ? YES : NO;
+    return img;
+}
+
+void bk_tray_create(const uint8_t *rgba, int w, int h, bk_tray_cb cb) {
+    NSImage *img = tray_image(rgba, w, h, 1);
     bk_on_main(^{
         if (!g_target) g_target = [BKTarget new];
         g_target.tray = cb;
         g_tray_image = img;
         if (!g_item) make_status_item();
+    });
+}
+
+/// Another icon (a red one while the instant replay records); `template_`
+/// = drawn by the system in the menu bar's own color.
+void bk_tray_set_image(const uint8_t *rgba, int w, int h, int template_, const char *tip) {
+    NSImage *img = tray_image(rgba, w, h, template_);
+    NSString *t = bk_str(tip);
+    bk_on_main(^{
+        g_tray_image = img;
+        if (!g_item) return;
+        g_tray_tip = t;
+        g_item.button.image = img;
+        g_item.button.toolTip = t;
     });
 }
 
@@ -580,6 +697,87 @@ void bk_tray_remove(void) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// The top row of the tray menu: big tiles for the main actions
+
+@interface BKTile : NSView
+@property(nonatomic) int tag_;
+@property(nonatomic) BOOL hot;
+@property(nonatomic, weak) NSMenuItem *item;
+@end
+
+@implementation BKTile
+- (instancetype)initWithSymbol:(NSString *)symbol title:(NSString *)title tag:(int)tag {
+    self = [super initWithFrame:NSMakeRect(0, 0, 66, 60)];
+    self.tag_ = tag;
+    NSImageSymbolConfiguration *conf = [NSImageSymbolConfiguration configurationWithPointSize:19 weight:NSFontWeightRegular];
+    NSImage *img = [[NSImage imageWithSystemSymbolName:symbol accessibilityDescription:title] imageWithSymbolConfiguration:conf];
+    NSImageView *iv = [NSImageView imageViewWithImage:img ?: [NSImage new]];
+    iv.contentTintColor = NSColor.labelColor;
+    iv.frame = NSMakeRect(0, 26, 66, 26);
+    iv.imageScaling = NSImageScaleNone;
+    [self addSubview:iv];
+    NSTextField *l = [NSTextField labelWithString:title];
+    l.font = [NSFont systemFontOfSize:11];
+    l.textColor = NSColor.secondaryLabelColor;
+    l.alignment = NSTextAlignmentCenter;
+    l.lineBreakMode = NSLineBreakByTruncatingTail;
+    l.frame = NSMakeRect(2, 7, 62, 15);
+    [self addSubview:l];
+    [self addTrackingArea:[[NSTrackingArea alloc] initWithRect:NSZeroRect
+                                                       options:NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect
+                                                         owner:self
+                                                      userInfo:nil]];
+    return self;
+}
+- (void)drawRect:(NSRect)r {
+    (void)r;
+    if (!self.hot) return;
+    [[NSColor.labelColor colorWithAlphaComponent:0.1] setFill];
+    [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 2, 2) xRadius:8 yRadius:8] fill];
+}
+- (void)mouseEntered:(NSEvent *)e {
+    (void)e;
+    self.hot = YES;
+    self.needsDisplay = YES;
+}
+- (void)mouseExited:(NSEvent *)e {
+    (void)e;
+    self.hot = NO;
+    self.needsDisplay = YES;
+}
+- (void)mouseUp:(NSEvent *)e {
+    (void)e;
+    int tag = self.tag_;
+    [self.item.menu cancelTracking];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (g_target.menu) g_target.menu(tag);
+    });
+}
+@end
+
+static NSMenuItem *make_tiles(const bk_menu_item *items, int n) {
+    NSMenuItem *row = [NSMenuItem new];
+    CGFloat pad = 10, w = 66;
+    NSView *v = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, pad * 2 + w * n, 60 + 8)];
+    for (int i = 0; i < n; i++) {
+        BKTile *t = [[BKTile alloc] initWithSymbol:bk_str(items[i].symbol) title:bk_str(items[i].label) tag:items[i].id];
+        t.item = row;
+        t.frame = NSMakeRect(pad + w * i, 4, w, 60);
+        if (items[i].key) {
+            NSString *k = bk_str(items[i].key).uppercaseString;
+            NSEventModifierFlags m = (NSEventModifierFlags)items[i].mods;
+            NSString *glyphs = [NSString stringWithFormat:@"%@%@%@%@%@", (m & NSEventModifierFlagControl) ? @"⌃" : @"",
+                                (m & NSEventModifierFlagOption) ? @"⌥" : @"", (m & NSEventModifierFlagShift) ? @"⇧" : @"",
+                                (m & NSEventModifierFlagCommand) ? @"⌘" : @"", k];
+            t.toolTip = [NSString stringWithFormat:@"%@  %@", bk_str(items[i].label), glyphs];
+        }
+        [v addSubview:t];
+    }
+    row.view = v;
+    return row;
+}
+
 static NSMenuItem *make_item(const bk_menu_item *it) {
     NSMenuItem *m = [[NSMenuItem alloc] initWithTitle:bk_str(it->label) action:nil keyEquivalent:@""];
     if (it->symbol) {
@@ -605,7 +803,14 @@ void bk_tray_menu(const bk_menu_item *items, int n, bk_menu_cb cb) {
     NSMenu *root = [NSMenu new];
     root.autoenablesItems = NO;
     NSMenu *sub = nil;
-    for (int i = 0; i < n; i++) {
+    // the tiles come first, as one row
+    int tiles = 0;
+    while (tiles < n && items[tiles].depth < 0) tiles++;
+    if (tiles > 0) {
+        [root addItem:make_tiles(items, tiles)];
+        [root addItem:NSMenuItem.separatorItem];
+    }
+    for (int i = tiles; i < n; i++) {
         const bk_menu_item *it = &items[i];
         NSMenu *into = it->depth > 0 && sub ? sub : root;
         if (it->id == 0 && !it->submenu) {

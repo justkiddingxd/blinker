@@ -23,6 +23,7 @@ mod pin;
 mod runtime;
 #[cfg_attr(target_os = "macos", path = "mac/shell.rs")]
 mod shell;
+mod sharex;
 mod sk;
 mod sound;
 mod theme;
@@ -73,6 +74,16 @@ fn main() {
         run_settings(arg_after("--settings").as_deref());
         return;
     }
+    // for working on the card: `--toast picture.png` shows it for that file
+    if let Some(path) = arg_after("--toast") {
+        let Ok(img) = image::open(&path) else { return };
+        let shared = runtime::Shared::new(config::load());
+        let (x, y) = win::cursor_pos();
+        let Some(mon) = win::monitor_at(&win::monitors(), x, y) else { return };
+        let title = crate::i18n::t("скопировано").to_string();
+        toast::run(&shared, Arc::new(img.to_rgba8()), title, Some(PathBuf::from(path)), None, mon, toast::Kind::Image, None, None);
+        return;
+    }
     if let Some(path) = arg_after("--video") {
         vedit::run(PathBuf::from(path));
         return;
@@ -111,8 +122,15 @@ fn main() {
     let shared = Shared::new(cfg);
     let shell = shell::spawn(shared.clone());
 
+    // the first start next to ShareX: settings open where it is brought over
+    let sharex = !shared.config().sharex_offered && sharex::detect().is_some();
+    if sharex {
+        shared.update_config(|c| c.sharex_offered = true);
+    }
     if has("--capture") {
         shared.push(Command::CaptureRegion);
+    } else if sharex {
+        shared.push(Command::OpenHome(HomeTab::System));
     } else if !has("--background") {
         shared.push(Command::OpenHome(HomeTab::Capture));
     }
@@ -202,6 +220,7 @@ fn sync_replay(shared: &Shared, replay: &mut Option<record::replay::Replay>) {
             Err(e) => config::log::error(format!("replay: {e}")),
         }
     }
+    shared.set_replay_live(replay.is_some());
 }
 
 /// Runs until "quit"; true when the app should start again (after an update).
@@ -219,6 +238,7 @@ fn controller(shared: &Arc<Shared>) -> bool {
                 if let Some(r) = replay.take() {
                     r.stop();
                 }
+                shared.set_replay_live(false);
                 return cmd_now == Command::Restart;
             }
             Command::Reconfigure => sync_replay(shared, &mut replay),

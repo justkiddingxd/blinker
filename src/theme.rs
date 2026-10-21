@@ -10,12 +10,16 @@ pub const PANEL: Color32 = Color32::from_rgb(0x1C, 0x1C, 0x1A);
 pub const CANVAS: Color32 = Color32::from_rgb(0x12, 0x12, 0x11);
 pub const LINE: Color32 = Color32::from_rgb(0x2B, 0x2B, 0x28);
 pub const LINE_SOFT: Color32 = Color32::from_rgb(0x23, 0x23, 0x21);
+/// A brighter hairline: the edge of a raised plate.
+pub const LINE_HI: Color32 = Color32::from_rgb(0x3A, 0x3A, 0x36);
 pub const HOVER: Color32 = Color32::from_rgb(0x23, 0x23, 0x21);
 pub const ACTIVE: Color32 = Color32::from_rgb(0x2B, 0x2B, 0x28);
 pub const TEXT: Color32 = Color32::from_rgb(0xE6, 0xE4, 0xDE);
 pub const TEXT2: Color32 = Color32::from_rgb(0xB9, 0xB6, 0xAD);
 pub const DIM: Color32 = Color32::from_rgb(0x9A, 0x97, 0x8E);
 pub const FAINT: Color32 = Color32::from_rgb(0x6E, 0x6C, 0x66);
+/// Descriptions under setting titles: between DIM and FAINT.
+pub const FAINT_TEXT: Color32 = Color32::from_rgb(0x85, 0x83, 0x7C);
 /// "Dirty snow": an off-white with a little warm grey in it.
 pub const ACCENT: Color32 = Color32::from_rgb(0xD8, 0xD5, 0xCD);
 pub const ACCENT_HI: Color32 = Color32::from_rgb(0xE9, 0xE6, 0xDF);
@@ -85,6 +89,8 @@ pub fn apply(ctx: &egui::Context) {
         s.spacing.button_padding = vec2(10.0, 5.0);
         s.spacing.interact_size.y = 26.0;
         s.spacing.menu_margin = egui::Margin::same(4);
+        // labels are part of the interface, not text to copy
+        s.interaction.selectable_labels = false;
 
         let v = &mut s.visuals;
         v.dark_mode = true;
@@ -181,14 +187,38 @@ pub fn app_icon(size: u32) -> image::RgbaImage {
 
 /// Just the sparkle, filling a transparent `size`² square.
 pub fn mark_image(size: u32) -> image::RgbaImage {
+    mark_image_in(size, ACCENT)
+}
+
+/// The sparkle in another color (the red tray icon while the replay runs).
+pub fn mark_image_in(size: u32, color: Color32) -> image::RgbaImage {
     let mut pm = sk::Pixmap::new(size, size).expect("mark size");
-    fill_sparkle(&mut pm, size as f32 * 0.5);
+    fill_sparkle_in(&mut pm, size as f32 * 0.5, color);
     pixmap_to_image(&pm)
+}
+
+/// The logo tile with a sparkle of `color`.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn logo_in(size: u32, color: Color32) -> image::RgbaImage {
+    let s = size as f32;
+    let mut pm = sk::Pixmap::new(size, size).expect("logo size");
+    let mut bg = sk::Paint::default();
+    bg.anti_alias = true;
+    bg.set_color_rgba8(0x1C, 0x1C, 0x1A, 255);
+    if let Some(p) = rounded_rect_path(0.0, 0.0, s, s, s * 0.12) {
+        pm.fill_path(&p, &bg, sk::FillRule::Winding, sk::Transform::identity(), None);
+    }
+    fill_sparkle_in(&mut pm, s * 0.33, color);
+    pixmap_to_image(&pm)
+}
+
+fn fill_sparkle(pm: &mut sk::Pixmap, r: f32) {
+    fill_sparkle_in(pm, r, ACCENT)
 }
 
 /// Sparkle of radius `r` in the middle of `pm`: four points joined by
 /// curves pulled in towards the center.
-fn fill_sparkle(pm: &mut sk::Pixmap, r: f32) {
+fn fill_sparkle_in(pm: &mut sk::Pixmap, r: f32, color: Color32) {
     let (cx, cy) = (pm.width() as f32 / 2.0, pm.height() as f32 / 2.0);
     let w = r * 0.18;
     let mut pb = sk::PathBuilder::new();
@@ -200,7 +230,7 @@ fn fill_sparkle(pm: &mut sk::Pixmap, r: f32) {
     pb.close();
     let mut accent = sk::Paint::default();
     accent.anti_alias = true;
-    accent.set_color_rgba8(0xD8, 0xD5, 0xCD, 255);
+    accent.set_color_rgba8(color.r(), color.g(), color.b(), 255);
     if let Some(p) = pb.finish() {
         pm.fill_path(&p, &accent, sk::FillRule::Winding, sk::Transform::identity(), None);
     }

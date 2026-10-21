@@ -17,6 +17,11 @@ use std::sync::{Arc, Mutex};
 pub const TITLE: &str = "blinker · настройки";
 /// Named event the tray sets to show an already running settings process.
 pub const SHOW_EVENT: &str = "Local\\BlinkerSettingsShow";
+/// The settings window has one size.
+const SIZE: (f32, f32) = (820.0, 580.0);
+/// The strip at the top that drags the window (the window buttons sit in it).
+const TITLE_BAR_H: f32 = 48.0;
+const NAV_W: f32 = 204.0;
 
 /// Tab requested by the tray for the next show (read when the event fires).
 pub fn request_file() -> std::path::PathBuf {
@@ -31,14 +36,14 @@ pub fn run(shared: &Arc<Shared>, tab: HomeTab) {
     let viewport = egui::ViewportBuilder::default()
         .with_title(TITLE)
         .with_icon(theme::icon_data(64))
-        .with_decorations(false)
-        .with_inner_size([700.0, 500.0])
-        .with_min_inner_size([560.0, 380.0]);
+        .with_inner_size([SIZE.0, SIZE.1]);
+    let viewport = chrome::style(viewport);
     let shared2 = shared.clone();
     runtime::run_window(shared, viewport, true, move |cc| {
         let hwnd = win::hwnd_of(cc);
         if let Some(h) = hwnd {
             win::style_borderless(h);
+            chrome::place_window_buttons(h, TITLE_BAR_H);
             win::cloak(h, true);
             win::force_foreground(h);
         }
@@ -47,6 +52,7 @@ pub fn run(shared: &Arc<Shared>, tab: HomeTab) {
         if let (Some(h), Some(ev)) = (hwnd, event) {
             watch_show_requests(ev, h as isize, hidden.clone(), request.clone(), cc.egui_ctx.clone());
         }
+        let replay_min = replay_minutes(shared2.config().replay_secs);
         HomeApp {
             hwnd,
             frame_no: 0,
@@ -63,6 +69,9 @@ pub fn run(shared: &Arc<Shared>, tab: HomeTab) {
             failed: config::load_failed_hotkeys(),
             failed_at: 0.0,
             content_rect: Rect::NOTHING,
+            replay_min,
+            upload_mode: None,
+            sharex: None,
             shown: None,
             page_at: 0.0,
         }
@@ -101,6 +110,7 @@ pub fn tab_arg(tab: HomeTab) -> &'static str {
     match tab {
         HomeTab::Capture => "capture",
         HomeTab::Record => "record",
+        HomeTab::Replay => "replay",
         HomeTab::Upload => "upload",
         HomeTab::Notify => "notify",
         HomeTab::Sound => "sound",
@@ -114,6 +124,7 @@ pub fn tab_from_arg(arg: &str) -> HomeTab {
     match arg {
         "notify" => HomeTab::Notify,
         "record" => HomeTab::Record,
+        "replay" => HomeTab::Replay,
         "upload" => HomeTab::Upload,
         "sound" => HomeTab::Sound,
         "storage" => HomeTab::Storage,
@@ -153,67 +164,86 @@ struct HomeApp {
     /// An update being installed (after "update blinker").
     install: Option<Arc<crate::update::Install>>,
     content_rect: Rect,
+    /// The replay length field, in minutes, as typed.
+    replay_min: String,
+    /// Where uploads go, as picked on the page (empty fields still mean "own").
+    upload_mode: Option<UploadMode>,
+    /// ShareX settings on this computer (looked up once).
+    sharex: Option<Option<crate::sharex::Source>>,
     /// Page currently on screen and when it started appearing.
     shown: Option<HomeTab>,
     page_at: f64,
 }
 
 impl HomeApp {
-    fn title_bar(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("title")
-            .exact_size(32.0)
-            .frame(egui::Frame::new().fill(PANEL))
-            .show(ui, |ui| {
-                let r = ui.max_rect();
-                chrome::drag_region(ui, r);
-                ui.painter().hline(r.x_range(), r.bottom() + 0.5, Stroke::new(1.0, LINE));
-                ui.horizontal_centered(|ui| {
-                    ui.add_space(10.0);
-                    chrome::mark(ui);
-                    ui.add_space(2.0);
-                    ui.label(egui::RichText::new("blinker").font(font_semibold(12.5)).color(TEXT));
-                    ui.label(egui::RichText::new(crate::i18n::t("настройки")).font(font(12.5)).color(FAINT));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        chrome::window_buttons(ui, true);
-                    });
-                });
-            });
-    }
-
+    /// The sidebar, the whole height of the window: the window buttons and
+    /// the name at the top, sections in groups, the version at the bottom.
     fn nav(&mut self, ui: &mut egui::Ui) {
         egui::Panel::left("nav")
-            .exact_size(150.0)
+            .exact_size(NAV_W)
             .resizable(false)
-            .frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(6, 8)))
+            .frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin { left: 10, right: 10, top: 0, bottom: 12 }))
             .show(ui, |ui| {
                 let r = ui.max_rect();
-                ui.painter().vline(r.right() + 6.5, r.y_range().expand(8.0), Stroke::new(1.0, LINE));
+                ui.painter().vline(r.right() + 10.5, r.y_range().expand(12.0), Stroke::new(1.0, LINE_SOFT));
+                let top = Rect::from_min_size(pos2(r.left() - 10.0, r.top()), vec2(NAV_W, TITLE_BAR_H));
+                chrome::drag_region(ui, top);
+                ui.allocate_ui_with_layout(vec2(r.width(), TITLE_BAR_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if cfg!(target_os = "macos") {
+                        ui.add_space(chrome::MAC_BUTTONS_W - 10.0);
+                    } else {
+                        ui.add_space(6.0);
+                        chrome::mark(ui);
+                        ui.label(egui::RichText::new("blinker").font(font_semibold(13.5)).color(TEXT));
+                    }
+                });
                 ui.spacing_mut().item_spacing.y = 2.0;
                 let plate = ui.painter().add(egui::Shape::Noop);
                 let mut selected_rect = None;
-                for (tab, icon, label) in [
-                    (HomeTab::Capture, Icon::Region, crate::i18n::t("захват")),
-                    (HomeTab::Record, Icon::Record, crate::i18n::t("запись")),
-                    (HomeTab::Upload, Icon::Upload, crate::i18n::t("загрузка")),
-                    (HomeTab::Notify, Icon::Bell, crate::i18n::t("уведомление")),
-                    (HomeTab::Sound, Icon::Sound, crate::i18n::t("звук")),
-                    (HomeTab::Storage, Icon::Save, crate::i18n::t("сохранение")),
-                    (HomeTab::Hotkeys, Icon::Keys, crate::i18n::t("горячие клавиши")),
-                    (HomeTab::System, Icon::Settings, crate::i18n::t("система")),
-                ] {
-                    let resp = ui::nav_item(ui, icon, label, self.tab == tab);
-                    if resp.clicked() {
-                        self.tab = tab;
+                let groups: [(&str, &[(HomeTab, Icon, &str)]); 3] = [
+                    (
+                        l("снимки", "screenshots"),
+                        &[
+                            (HomeTab::Capture, Icon::Region, t("захват")),
+                            (HomeTab::Storage, Icon::Save, t("сохранение")),
+                            (HomeTab::Notify, Icon::Bell, t("уведомление")),
+                            (HomeTab::Sound, Icon::Sound, t("звук")),
+                        ],
+                    ),
+                    (
+                        l("видео", "video"),
+                        &[(HomeTab::Record, Icon::Record, t("запись")), (HomeTab::Replay, Icon::Repeat, t("повтор"))],
+                    ),
+                    (
+                        l("общее", "general"),
+                        &[
+                            (HomeTab::Upload, Icon::Upload, t("загрузка")),
+                            (HomeTab::Hotkeys, Icon::Keys, t("горячие клавиши")),
+                            (HomeTab::System, Icon::Settings, t("система")),
+                        ],
+                    ),
+                ];
+                for (i, (caption, items)) in groups.into_iter().enumerate() {
+                    if i > 0 {
+                        ui.add_space(6.0);
                     }
-                    if self.tab == tab {
-                        selected_rect = Some(resp.rect);
+                    ui::nav_caption(ui, caption);
+                    for &(tab, icon, label) in items {
+                        let resp = ui::nav_item(ui, icon, label, self.tab == tab);
+                        if resp.clicked() {
+                            self.tab = tab;
+                        }
+                        if self.tab == tab {
+                            selected_rect = Some(resp.rect);
+                        }
                     }
                 }
                 // The selection plate glides between sections.
                 if let Some(r) = selected_rect {
                     let y = ui.ctx().animate_value_with_time(egui::Id::unique("nav-plate"), r.top(), 0.16);
                     let rect = Rect::from_min_size(pos2(r.left(), y), r.size());
-                    ui.painter().set(plate, egui::Shape::rect_filled(rect, 3, ACTIVE));
+                    ui.painter().set(plate, egui::Shape::rect_filled(rect, 7, ACTIVE));
                 }
                 self.nav_footer(ui);
             });
@@ -289,15 +319,25 @@ impl HomeApp {
         }
         egui::CentralPanel::no_frame().frame(egui::Frame::new().fill(BG)).show(ui, |ui| {
             self.content_rect = ui.max_rect();
+            let r = ui.max_rect();
+            // the top strip drags the window; Windows has its buttons there
+            chrome::drag_region(ui, Rect::from_min_size(r.min, vec2(r.width(), TITLE_BAR_H)));
+            let mut buttons = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(Rect::from_min_size(r.min, vec2(r.width(), 40.0)))
+                    .layout(egui::Layout::right_to_left(egui::Align::Center)),
+            );
+            chrome::window_buttons(&mut buttons);
             ui.set_opacity(t);
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                egui::Frame::new().inner_margin(egui::Margin { left: 18, right: 18, top: 14, bottom: 18 }).show(ui, |ui| {
-                    ui.set_max_width(560.0f32.min(ui.available_width()));
+                egui::Frame::new().inner_margin(egui::Margin { left: 32, right: 32, top: 26, bottom: 28 }).show(ui, |ui| {
+                    ui.set_max_width(600.0f32.min(ui.available_width()));
                     ui.spacing_mut().item_spacing.y = 0.0;
                     ui.add_space((1.0 - t) * 14.0);
                     match self.tab {
                         HomeTab::Capture => self.capture_page(ui),
                         HomeTab::Record => self.record_page(ui),
+                        HomeTab::Replay => self.replay_page(ui),
                         HomeTab::Upload => self.upload_page(ui),
                         HomeTab::Notify => self.notify_page(ui),
                         HomeTab::Sound => self.sound_page(ui),
@@ -312,9 +352,10 @@ impl HomeApp {
     }
 
     fn page_title(ui: &mut egui::Ui, title: &str, sub: &str) {
-        ui.label(egui::RichText::new(title).font(font_medium(15.0)).color(TEXT));
-        ui.add_space(3.0);
-        ui.label(egui::RichText::new(sub).font(font(11.5)).color(DIM));
+        ui.label(egui::RichText::new(title).font(font_semibold(21.0)).color(TEXT));
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(sub).font(font(12.5)).color(DIM));
+        ui.add_space(4.0);
     }
 
     fn capture_page(&mut self, ui: &mut egui::Ui) {
@@ -482,42 +523,72 @@ impl HomeApp {
             );
         });
 
-        ui::group(ui, t("повтор"), |ui| {
-            let rhk = crate::hotkey::display_parts(self.cfg.primary_binding(HotkeyAction::Replay)).join(" ");
-            let desc = lf!("держит последние секунды главного монитора, ~{} мб на диске. сохранить: {}", "keeps the last seconds of the main monitor, ~{} mb on disk. save: {}",
-                (self.cfg.replay_secs as f32 / 60.0 * self.cfg.rec_quality.typical_mb_min() * 2.0).ceil().max(5.0),
-                if rhk.is_empty() { t("меню трея") } else { &rhk }
+    }
+
+    fn replay_page(&mut self, ui: &mut egui::Ui) {
+        let rhk = crate::hotkey::display_parts(self.cfg.primary_binding(HotkeyAction::Replay)).join(" ");
+        let how = if rhk.is_empty() {
+            l("последние минуты экрана всегда под рукой. сохранить: меню трея", "the last minutes of the screen, always at hand. save: the tray menu").to_string()
+        } else {
+            lf!("последние минуты экрана всегда под рукой. сохранить: {rhk}", "the last minutes of the screen, always at hand. save: {rhk}")
+        };
+        Self::page_title(ui, t("повтор"), &how);
+        ui::group(ui, "", |ui| {
+            let desc = lf!("пишет главный монитор, ~{} мб на диске, иконка в трее красная", "records the main monitor, ~{} mb on disk, the tray icon turns red",
+                (self.cfg.replay_secs as f32 / 60.0 * self.cfg.rec_quality.typical_mb_min() * 2.0).ceil().max(5.0)
             );
-            ui::setting_row(ui, t("повтор"), &desc, |ui| {
+            ui::setting_row(ui, l("включить повтор", "replay on"), &desc, |ui| {
                 ui::toggle(ui, &mut self.cfg.replay_enabled);
             });
             if self.cfg.replay_enabled {
+                let max_min = crate::record::replay::MAX_SECS / 60;
+                ui::setting_row(ui, t("сколько хранить"), &lf!("от 1 до {max_min} минут", "1 to {max_min} minutes"), |ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.label(egui::RichText::new(l("мин", "min")).font(font(12.5)).color(DIM));
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(&mut self.replay_min)
+                            .desired_width(44.0)
+                            .align(egui::Align2::CENTER_CENTER)
+                            .char_limit(2)
+                            .font(mono(12.5)),
+                    );
+                    if resp.changed()
+                        && let Ok(m) = self.replay_min.trim().parse::<u32>()
+                    {
+                        self.cfg.replay_secs = m.clamp(1, max_min) * 60;
+                    }
+                    if !resp.has_focus() {
+                        self.replay_min = replay_minutes(self.cfg.replay_secs);
+                    }
+                });
                 ui::setting_row(
                     ui,
-                    t("сколько хранить"),
-                    "",
+                    l("сохранение начинает повтор заново", "saving starts the replay over"),
+                    l("следующий повтор будет с момента сохранения", "the next replay starts where the last one was saved"),
                     |ui| {
-                        ui.spacing_mut().item_spacing.x = 2.0;
-                        for secs in [300u32, 120, 60, 30] {
-                            let label = if secs >= 60 { lf!("{} мин", "{} min", secs / 60) } else { lf!("{secs} с", "{secs} s") };
-                            if ui::filter(ui, &label, self.cfg.replay_secs == secs).clicked() {
-                                self.cfg.replay_secs = secs;
-                            }
-                        }
+                        ui::toggle(ui, &mut self.cfg.replay_reset_on_save);
                     },
                 );
-                ui::setting_row(ui, t("звук системы в повторе"), "", |ui| {
-                    ui::toggle(ui, &mut self.cfg.replay_desktop_audio);
-                });
-                ui::setting_row(ui, t("микрофон в повторе"), t("микрофон будет записываться всё время"), |ui| {
-                    ui::toggle(ui, &mut self.cfg.replay_mic);
-                });
             }
         });
+        if self.cfg.replay_enabled {
+            ui::group(ui, t("звук"), |ui| {
+                ui::setting_row(ui, t("звук системы"), "", |ui| {
+                    ui::toggle(ui, &mut self.cfg.replay_desktop_audio);
+                });
+                ui::setting_row(ui, t("микрофон"), t("микрофон будет записываться всё время"), |ui| {
+                    ui::toggle(ui, &mut self.cfg.replay_mic);
+                });
+            });
+        }
     }
 
     fn upload_page(&mut self, ui: &mut egui::Ui) {
-        Self::page_title(ui, t("загрузка"), t("отправка на свой сервер, в буфер попадает ссылка"));
+        Self::page_title(ui, t("загрузка"), l("файл уходит на сервер, в буфер попадает ссылка", "the file goes to a server, the link goes to the clipboard"));
+        if self.upload_mode.is_none() {
+            self.upload_mode = Some(UploadMode::of(&self.cfg));
+        }
+        let mut mode = self.upload_mode.unwrap_or(UploadMode::Default);
         let field = |ui: &mut egui::Ui, value: &mut String, hint: &str, password: bool| {
             ui.add(
                 egui::TextEdit::singleline(value)
@@ -528,48 +599,120 @@ impl HomeApp {
             )
         };
         ui::group(ui, l("сервер", "server"), |ui| {
-            ui::setting_row(ui, t("адрес сервера"), "", |ui| {
-                field(ui, &mut self.cfg.upload_url, "https://share.example.com/api/upload", false);
-            });
-            ui::setting_row(ui, t("токен"), "", |ui| {
-                field(ui, &mut self.cfg.upload_token, t("секретный ключ"), true);
-            });
-            if crate::upload::configured(&self.cfg) {
-                let status = match self.upload_test.as_ref().map(|r| r.lock().unwrap().clone()) {
-                    None => t("отправить тестовую картинку").to_string(),
-                    Some(None) => t("проверяю…").to_string(),
-                    Some(Some(Ok(url))) => lf!("работает: {url}", "works: {url}"),
-                    Some(Some(Err(e))) => lf!("ошибка: {e}", "error: {e}"),
-                };
-                let busy = self.upload_test.as_ref().is_some_and(|r| r.lock().unwrap().is_none());
-                ui::setting_row(ui, t("проверка"), &status, |ui| {
-                    ui.add_enabled_ui(!busy, |ui| {
-                        if ui::button(ui, t("проверить"), ui::Kind::Ghost).clicked() {
-                            let slot = Arc::new(Mutex::new(None));
-                            let (s2, cfg, ctx) = (slot.clone(), self.cfg.clone(), ui.ctx().clone());
-                            std::thread::spawn(move || {
-                                *s2.lock().unwrap() = Some(crate::upload::test(&cfg));
-                                ctx.request_repaint();
-                            });
-                            self.upload_test = Some(slot);
+            ui::setting_row(ui, l("куда загружать", "upload to"), mode.desc(), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for m in [UploadMode::ShareX, UploadMode::Own, UploadMode::Default] {
+                    if ui::filter(ui, m.label(), mode == m).clicked() && mode != m {
+                        mode = m;
+                        match m {
+                            UploadMode::Default => {
+                                self.cfg.upload_url.clear();
+                                self.cfg.upload_custom = None;
+                            }
+                            UploadMode::Own => self.cfg.upload_custom = None,
+                            UploadMode::ShareX => {
+                                if self.cfg.upload_custom.is_none() {
+                                    self.pick_sxcu(ui.ctx());
+                                }
+                                if self.cfg.upload_custom.is_none() {
+                                    mode = UploadMode::of(&self.cfg);
+                                }
+                            }
                         }
+                    }
+                }
+            });
+            match mode {
+                UploadMode::Default => {}
+                UploadMode::Own => {
+                    ui::setting_row(ui, t("адрес сервера"), "", |ui| {
+                        field(ui, &mut self.cfg.upload_url, "https://share.example.com/api/upload", false);
                     });
-                });
+                    ui::setting_row(ui, t("токен"), "", |ui| {
+                        field(ui, &mut self.cfg.upload_token, t("секретный ключ"), true);
+                    });
+                }
+                UploadMode::ShareX => {
+                    let (name, url) = self.cfg.upload_custom.as_ref().map(|c| (c.name.clone(), c.url.clone())).unwrap_or_default();
+                    let title = if name.is_empty() { l("загрузчик sharex", "sharex uploader").to_string() } else { name };
+                    let mut pick = false;
+                    ui::setting_row(ui, &title, &url, |ui| {
+                        pick = ui::button(ui, l("другой .sxcu…", "another .sxcu…"), ui::Kind::Ghost).clicked();
+                    });
+                    if pick {
+                        self.pick_sxcu(ui.ctx());
+                    }
+                }
             }
-        });
-        if crate::upload::configured(&self.cfg) {
-            ui::group(ui, l("когда загружать", "when to upload"), |ui| {
-                ui::setting_row(ui, t("загружать каждый снимок"), t("в буфер попадёт ссылка вместо файла"), |ui| {
-                    ui::toggle(ui, &mut self.cfg.upload_auto);
+            let status = match self.upload_test.as_ref().map(|r| r.lock().unwrap().clone()) {
+                None => t("отправить тестовую картинку").to_string(),
+                Some(None) => t("проверяю…").to_string(),
+                Some(Some(Ok(url))) => lf!("работает: {url}", "works: {url}"),
+                Some(Some(Err(e))) => lf!("ошибка: {e}", "error: {e}"),
+            };
+            let busy = self.upload_test.as_ref().is_some_and(|r| r.lock().unwrap().is_none());
+            ui::setting_row(ui, t("проверка"), &status, |ui| {
+                ui.add_enabled_ui(!busy, |ui| {
+                    if ui::button(ui, t("проверить"), ui::Kind::Ghost).clicked() {
+                        let slot = Arc::new(Mutex::new(None));
+                        let (s2, cfg, ctx) = (slot.clone(), self.cfg.clone(), ui.ctx().clone());
+                        std::thread::spawn(move || {
+                            *s2.lock().unwrap() = Some(crate::upload::test(&cfg));
+                            ctx.request_repaint();
+                        });
+                        self.upload_test = Some(slot);
+                    }
                 });
             });
+        });
+        self.upload_mode = Some(mode);
+        ui::group(ui, l("когда загружать", "when to upload"), |ui| {
+            ui::setting_row(ui, t("загружать каждый снимок"), t("в буфер попадёт ссылка вместо файла"), |ui| {
+                ui::toggle(ui, &mut self.cfg.upload_auto);
+            });
+        });
+        ui.add_space(16.0);
+        let note = match mode {
+            UploadMode::Default => l(
+                "post.blinker.cool — наш сервер: без регистрации, файлы живут 3 дня, видео до 100 мб. свой такой же можно поднять из папки server в репозитории.",
+                "post.blinker.cool is our server: no sign-up, files live 3 days, videos up to 100 mb. you can run your own from the server folder of the repository.",
+            ),
+            UploadMode::Own => l(
+                "сервер получает post с файлом в теле и отвечает {\"url\": \"…\"}. готовый сервер — в папке server репозитория.",
+                "the server gets a post with the file as the body and answers {\"url\": \"…\"}. a ready one is in the server folder of the repository.",
+            ),
+            UploadMode::ShareX => l(
+                "подойдёт любой сервер с загрузчиком для sharex (.sxcu): zipline, xbackbone, chibisafe…",
+                "any server with a sharex uploader (.sxcu) works: zipline, xbackbone, chibisafe…",
+            ),
+        };
+        ui.add(egui::Label::new(egui::RichText::new(note).font(font(12.0)).color(FAINT)).wrap());
+    }
+
+    /// A .sxcu file as the uploader.
+    fn pick_sxcu(&mut self, ctx: &egui::Context) {
+        let Some(p) = rfd::FileDialog::new().add_filter("sharex", &["sxcu", "json"]).pick_file() else { return };
+        match crate::sharex::read_sxcu(&p) {
+            Ok(c) => {
+                self.notice = Some(Notice::new(ctx, lf!("загрузчик «{}» подключён", "the “{}” uploader is on", if c.name.is_empty() { &c.url } else { &c.name })));
+                self.cfg.upload_custom = Some(c);
+            }
+            Err(e) => self.notice = Some(Notice::new(ctx, e)),
         }
-        ui.add_space(14.0);
-        ui.label(
-            egui::RichText::new(l("сервер получает post с файлом в теле и отвечает {\"url\": \"…\"}", "the server gets a post with the file as the body and answers {\"url\": \"…\"}"))
-            .font(font(12.0))
-            .color(FAINT),
-        );
+    }
+
+    /// ShareX settings into ours (the system page's button, or a file).
+    fn import_sharex(&mut self, ctx: &egui::Context, src: crate::sharex::Source) {
+        let mut cfg = self.cfg.clone();
+        match crate::sharex::import(&src, &mut cfg) {
+            Ok(report) => {
+                self.cfg = cfg;
+                self.upload_mode = None;
+                self.replay_min = replay_minutes(self.cfg.replay_secs);
+                self.notice = Some(Notice::new(ctx, report.summary()));
+            }
+            Err(e) => self.notice = Some(Notice::new(ctx, e)),
+        }
     }
 
     fn notify_page(&mut self, ui: &mut egui::Ui) {
@@ -797,8 +940,39 @@ impl HomeApp {
         self.poll_recorder(&ctx);
     }
 
+    fn sharex_group(&mut self, ui: &mut egui::Ui, found: Option<crate::sharex::Source>) {
+        ui::group(ui, l("переезд с sharex", "moving from sharex"), |ui| {
+            let desc = match &found {
+                Some(s) => lf!("нашлись в {}: клавиши, папка, формат, уведомление, загрузчик", "found in {}: keys, folder, format, notification, uploader", s.path().display()),
+                None => l("на этом компьютере не найдены, можно выбрать бэкап .sxb или папку", "not found on this computer, you can pick an .sxb backup or the folder").to_string(),
+            };
+            let mut action = None;
+            ui::setting_row(ui, l("настройки sharex", "sharex settings"), &desc, |ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                if found.is_some() {
+                    if ui::button(ui, l("перенести", "bring over"), ui::Kind::Accent).clicked() {
+                        action = found.clone();
+                    }
+                    if ui::button(ui, l("файл…", "file…"), ui::Kind::Ghost).clicked() {
+                        action = pick_sharex();
+                    }
+                } else if ui::button(ui, l("выбрать…", "choose…"), ui::Kind::Ghost).clicked() {
+                    action = pick_sharex();
+                }
+            });
+            if let Some(src) = action {
+                self.import_sharex(ui.ctx(), src);
+            }
+        });
+    }
+
     fn system_page(&mut self, ui: &mut egui::Ui) {
         Self::page_title(ui, t("система"), t("запуск, трей, язык"));
+        let found = self.sharex.get_or_insert_with(crate::sharex::detect).clone();
+        // found ShareX goes first: a new user brings it over in one click
+        if found.is_some() {
+            self.sharex_group(ui, found.clone());
+        }
         ui::group(ui, "язык · language", |ui| {
             // the language names stay in their own language
             ui::setting_row(ui, l("язык интерфейса", "interface language"), "", |ui| {
@@ -844,6 +1018,9 @@ impl HomeApp {
                 );
             }
         });
+        if found.is_none() {
+            self.sharex_group(ui, None);
+        }
         ui.add_space(18.0);
         ui.label(
             egui::RichText::new(format!(
@@ -914,6 +1091,51 @@ impl HomeApp {
         self.shared.update_config(|c| *c = new);
         self.shared.reload_hotkeys();
     }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum UploadMode {
+    Default,
+    Own,
+    ShareX,
+}
+
+impl UploadMode {
+    fn of(cfg: &Config) -> UploadMode {
+        if cfg.upload_custom.is_some() {
+            UploadMode::ShareX
+        } else if cfg.upload_url.trim().is_empty() {
+            UploadMode::Default
+        } else {
+            UploadMode::Own
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            UploadMode::Default => "blinker.cool",
+            UploadMode::Own => l("свой сервер", "own server"),
+            UploadMode::ShareX => "sharex",
+        }
+    }
+
+    fn desc(self) -> &'static str {
+        match self {
+            UploadMode::Default => l("бесплатно, 3 дня, до 100 мб", "free, 3 days, up to 100 mb"),
+            UploadMode::Own => l("адрес и токен своего сервера", "your own server's address and token"),
+            UploadMode::ShareX => l("загрузчик из sharex (.sxcu)", "an uploader from sharex (.sxcu)"),
+        }
+    }
+}
+
+fn replay_minutes(secs: u32) -> String {
+    (secs.div_ceil(60)).max(1).to_string()
+}
+
+/// An .sxb backup or the ShareX folder, picked by the user.
+fn pick_sharex() -> Option<crate::sharex::Source> {
+    let p = rfd::FileDialog::new().add_filter("sharex", &["sxb", "zip", "json"]).pick_file()?;
+    crate::sharex::source_of(&p)
 }
 
 fn corner_name(c: Corner) -> &'static str {
@@ -1080,8 +1302,6 @@ impl eframe::App for HomeApp {
                 return;
             }
         }
-        chrome::resize_edges(&ctx);
-        self.title_bar(ui);
         self.nav(ui);
         self.content(ui);
         chrome::frame_border(&ctx);

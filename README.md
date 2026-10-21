@@ -47,8 +47,10 @@ Capture, annotate and share in a couple of keystrokes. It lives in the tray (the
 - **Window recording** keeps following the window even when it's covered or moved, and the control pill follows it too.
 - **System sound and microphone on separate tracks**, pause and resume, and visible clicks and key combos (plain typing is never shown).
 - **GIF recording** with a built-in encoder: one global palette and only the changed rectangles, so GIFs stay small.
-- **Instant replay.** The last 30 s to 5 min are always ready to save with one hotkey, without re-encoding.
-- **Video editor:** trim, track volume and mute, export to MP4 (one mixed track for messengers or separate tracks for editing) or GIF.
+- **Instant replay.** The last minutes (1 to 30, you choose) are always ready to save with one hotkey, without re-encoding; saving can start the replay over. The tray icon is red while it records.
+- **Video editor:** trim, track volume and mute, markers with notes (`M`), export to MP4 (one mixed track for messengers or separate tracks for editing), GIF, or with the video off the sound alone as MP3 / M4A / WAV.
+- **Upload and share:** by default to [post.blinker.cool](https://post.blinker.cool) (no sign-up, 3 days, videos up to 100 MB): every link has a page with an image viewer or a player that shows the video's markers. Or your own server, or any ShareX uploader (`.sxcu`).
+- **Moving from ShareX** in one click: hotkeys, folder, format, after-capture steps, notification, sound and the uploader.
 
 ### Everyday
 
@@ -66,7 +68,7 @@ Capture, annotate and share in a couple of keystrokes. It lives in the tray (the
 | Anywhere | `PrtSc` area · `Ctrl+PrtSc` screen · `Shift+PrtSc` repeat last area · `Ctrl+Shift+PrtSc` record (again to stop) · `Ctrl+Alt+P` pause · `Ctrl+Alt+PrtSc` save replay |
 | Selecting | drag: area · click: window · `Space` monitor · `Ctrl+A` all monitors · `Enter` / `Ctrl+C` / double click: copy · `Ctrl+S` save · `E` editor · `P` pin · `B` beauty shot · `U` upload · `0`–`9` tools · `Ctrl+Z` undo · arrows nudge (`Shift` ×10) · wheel: loupe zoom · `C` copy color · `Esc` / right click: cancel |
 | Editor | `V A L R O P M T B N C` tools · `1 2 3` width · `Ctrl+Z/Y` · `Ctrl+C` · `Ctrl+S` · `Ctrl+Shift+S` · `Space`+drag pan · `Ctrl+0` fit · `Ctrl+1` 100% |
-| Video editor | `Space` play/pause · `←`/`→` ±1 s (`Shift` ±5 s) · `I`/`O` in/out · `Home`/`End` · `Ctrl+S` MP4 |
+| Video editor | `Space` play/pause · `←`/`→` ±1 s (`Shift` ±5 s) · `I`/`O` in/out · `M` marker · `Home`/`End` · `Ctrl+S` save |
 
 All global hotkeys can be changed in settings → hotkeys.
 
@@ -120,13 +122,14 @@ On a Mac, `scripts/macos-app.sh` builds `target/release/Blinker.app`, `Blinker.d
 
 ## Upload server protocol
 
-Uploads go to any server that speaks this:
+Uploads go to [post.blinker.cool](https://post.blinker.cool) unless you set your own server. The server behind it is in [`server/`](server/README.md): `docker compose up` runs your own. Any server that speaks this works:
 
 ```text
 POST <url from settings>
 Authorization: Bearer <token>          (if set)
-Content-Type: image/png | image/jpeg | image/webp | image/gif | video/mp4
+Content-Type: image/png | image/jpeg | image/webp | image/gif | video/mp4 | audio/mpeg | audio/mp4 | audio/wav
 X-Filename: <file name, percent-encoded UTF-8>
+X-Blinker-Markers: <percent-encoded [{"t": 12.5, "text": "…"}]>   (videos with markers)
 <body: the file>
 
 200/201  {"url": "https://…", "delete_url": "…"}   (delete_url is optional)
@@ -144,6 +147,8 @@ X-Filename: <file name, percent-encoded UTF-8>
 | `record/` | recording: Windows Graphics Capture, WASAPI, Media Foundation, the HUD |
 | `vedit/` · `media.rs` | video editor, MP4/GIF export, reading files |
 | `demo.rs` | `--demo <dir> [en\|ru] [record]`: plays the animations above off-screen and saves their frames |
+| `server/` | the server of [post.blinker.cool](https://post.blinker.cool) (`scripts/deploy-post.sh root@SERVER` puts it there) |
+| `sharex.rs` | bringing over ShareX settings |
 | `site/` | [blinker.cool](https://blinker.cool): downloads and the Mac guide (static; a push to `main` deploys it, `.github/workflows/site.yml`) |
 | `mac/` | the macOS build: the same platform API over AppKit, ScreenCaptureKit, AVFoundation and Carbon hotkeys (`mac/native/*.m`, built by `build.rs`) |
 

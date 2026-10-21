@@ -277,6 +277,39 @@ impl Encoder {
     }
 }
 
+/// Sound only, as MP3 (the Media Foundation MP3 encoder, 192 kbit/s):
+/// interleaved stereo 16-bit PCM at 48 kHz. `progress` gets 0..1.
+pub fn write_mp3(dst: &std::path::Path, pcm: &[i16], progress: &dyn Fn(f32)) -> std::result::Result<(), String> {
+    crate::media::startup();
+    let r = (|| -> Result<()> {
+        unsafe {
+            let a = attrs(2)?;
+            a.SetGUID(&MF_TRANSCODE_CONTAINERTYPE, &MFTranscodeContainerType_MP3)?;
+            let wide: Vec<u16> = dst.as_os_str().encode_wide_null();
+            let writer = MFCreateSinkWriterFromURL(windows::core::PCWSTR(wide.as_ptr()), None, &a)?;
+            let out = MFCreateMediaType()?;
+            out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
+            out.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_MP3)?;
+            out.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, AUDIO_RATE)?;
+            out.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, AUDIO_CHANNELS)?;
+            out.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 24_000)?;
+            out.SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, 1)?;
+            let idx = writer.AddStream(&out)?;
+            writer.SetInputMediaType(idx, &audio_pcm_type(AUDIO_RATE, AUDIO_CHANNELS)?, None)?;
+            writer.BeginWriting()?;
+            let enc = Encoder { writer, video: None, audio: vec![idx], width: 0, height: 0 };
+            let chunk = (AUDIO_RATE / 10 * AUDIO_CHANNELS) as usize; // 100 ms
+            let n = pcm.len().div_ceil(chunk).max(1);
+            for (i, c) in pcm.chunks(chunk).enumerate() {
+                enc.write_audio(0, c, i as i64 * HNS / 10)?;
+                progress((i + 1) as f32 / n as f32);
+            }
+            enc.finish()
+        }
+    })();
+    r.map_err(|e| e.message().to_string())
+}
+
 trait WideNull {
     fn encode_wide_null(&self) -> Vec<u16>;
 }

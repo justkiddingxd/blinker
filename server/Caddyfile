@@ -1,0 +1,9 @@
+# your domain here; Caddy gets the certificate for it
+post.example.com {
+	request_body {
+		max_size 101MB
+	}
+	reverse_proxy post:8080 {
+		header_up X-Real-IP {remote_host}
+	}
+}

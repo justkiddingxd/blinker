@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}} · blinker</title>
+<meta property="og:title" content="{{TITLE}}">
+<meta property="og:site_name" content="blinker">
+<meta property="og:url" content="{{URL}}">
+{{OG}}
+<meta name="theme-color" content="#121211">
+<meta name="robots" content="noindex">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<style>
+@font-face { font-family: "Fira Sans"; font-weight: 400; font-display: swap; src: url("/assets/FiraSans-Regular.ttf") format("truetype"); }
+@font-face { font-family: "Fira Sans"; font-weight: 500; font-display: swap; src: url("/assets/FiraSans-Medium.ttf") format("truetype"); }
+@font-face { font-family: "Fira Sans"; font-weight: 600; font-display: swap; src: url("/assets/FiraSans-SemiBold.ttf") format("truetype"); }
+@font-face { font-family: "Fira Mono"; font-weight: 400; font-display: swap; src: url("/assets/FiraMono-Regular.ttf") format("truetype"); }
+:root {
+  --bg: #121211; --panel: #1c1c1a; --panel2: #222220; --line: #2b2b28; --line-hi: #3a3a36;
+  --text: #e6e4de; --text2: #b9b6ad; --dim: #9a978e; --faint: #6e6c66;
+  --accent: #d8d5cd; --accent-hi: #e9e6df; --on-accent: #161615; --danger: #e5484d;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 400 15px/1.5 "Fira Sans", -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased; display: flex; flex-direction: column;
+}
+.mono { font-family: "Fira Mono", ui-monospace, Menlo, monospace; }
+button { font: inherit; color: inherit; }
+a { color: inherit; }
+
+/* top bar */
+header {
+  display: flex; align-items: center; gap: 14px; padding: 12px 18px;
+  border-bottom: 1px solid #1f1f1d; min-height: 60px; position: relative; z-index: 2;
+}
+.brand { display: flex; align-items: center; gap: 8px; text-decoration: none; color: var(--text); font-weight: 600; flex: none; }
+.brand svg { width: 22px; height: 22px; }
+.file { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.file .name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file .meta { color: var(--faint); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.actions { display: flex; gap: 6px; flex: none; }
+.btn {
+  display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 13px; border-radius: 9px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--text2); cursor: pointer;
+  text-decoration: none; font-size: 13.5px; transition: background .12s, color .12s, border-color .12s;
+}
+.btn:hover { background: var(--panel2); color: var(--text); border-color: var(--line-hi); }
+.btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 500; }
+.btn.primary:hover { background: var(--accent-hi); }
+.btn svg { width: 16px; height: 16px; flex: none; }
+.btn .label { white-space: nowrap; }
+
+/* the stage */
+main { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 22px; position: relative; }
+.stage-img {
+  max-width: 100%; max-height: 100%; border-radius: 10px; display: block; cursor: zoom-in;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.06), 0 18px 60px rgba(0,0,0,.5);
+  background: repeating-conic-gradient(#1d1d1b 0 25%, #252523 0 50%) 0 0 / 18px 18px;
+}
+main.zoomed { overflow: auto; align-items: flex-start; justify-content: flex-start; }
+main.zoomed .stage-img { max-width: none; max-height: none; cursor: zoom-out; margin: auto; }
+
+/* player */
+.player {
+  position: relative; width: 100%; max-width: min(1280px, 100%); border-radius: 12px; overflow: hidden;
+  background: #000; box-shadow: 0 0 0 1px rgba(255,255,255,.06), 0 18px 60px rgba(0,0,0,.5);
+  user-select: none;
+}
+.player video { display: block; width: 100%; max-height: calc(100vh - 230px); background: #000; }
+.player.audio { background: var(--panel); max-width: 720px; }
+.player .big {
+  position: absolute; inset: 0; margin: auto; width: 72px; height: 72px; border-radius: 50%; border: 0;
+  background: rgba(18,18,17,.78); box-shadow: 0 0 0 1px rgba(255,255,255,.1); cursor: pointer;
+  display: grid; place-items: center; transition: transform .15s, opacity .2s;
+}
+.player .big:hover { transform: scale(1.06); }
+.player .big svg { width: 28px; height: 28px; margin-left: 4px; }
+.player.playing .big { opacity: 0; pointer-events: none; }
+.audio-head { display: flex; align-items: center; gap: 16px; padding: 22px 22px 8px; }
+.audio-head .play { width: 54px; height: 54px; border-radius: 50%; border: 0; background: var(--accent); color: var(--on-accent); cursor: pointer; display: grid; place-items: center; flex: none; }
+.audio-head .play svg { width: 22px; height: 22px; }
+.audio-head .t { min-width: 0; }
+.audio-head .t b { display: block; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.audio-head .t span { color: var(--faint); font-size: 12.5px; }
+
+.controls {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 26px 14px 10px;
+  background: linear-gradient(transparent, rgba(0,0,0,.72)); transition: opacity .25s;
+}
+.player.audio .controls { position: static; background: none; padding: 6px 22px 18px; }
+.player.playing.idle .controls { opacity: 0; }
+.row { display: flex; align-items: center; gap: 10px; }
+.ctl { width: 34px; height: 34px; border-radius: 8px; border: 0; background: transparent; cursor: pointer; display: grid; place-items: center; color: var(--text); flex: none; }
+.ctl:hover { background: rgba(255,255,255,.1); }
+.ctl svg { width: 18px; height: 18px; }
+.time { font-size: 12.5px; color: var(--text2); white-space: nowrap; }
+.spacer { flex: 1; }
+.speed { font-size: 12.5px; width: auto; padding: 0 8px; }
+
+.track { position: relative; height: 22px; cursor: pointer; margin-bottom: 4px; touch-action: none; }
+.track .rail { position: absolute; left: 0; right: 0; top: 9px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.18); }
+.player.audio .track .rail { background: var(--line); }
+.track .buf, .track .done { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; }
+.track .buf { background: rgba(255,255,255,.22); }
+.track .done { background: var(--accent); }
+.track .knob { position: absolute; top: 4px; width: 14px; height: 14px; margin-left: -7px; border-radius: 50%; background: var(--accent-hi); box-shadow: 0 1px 4px rgba(0,0,0,.5); transform: scale(0); transition: transform .12s; }
+.track:hover .knob, .track.drag .knob { transform: scale(1); }
+.track:hover .rail { top: 8px; height: 6px; }
+.mark { position: absolute; top: 5px; width: 4px; height: 12px; margin-left: -2px; border-radius: 2px; background: #e3b341; box-shadow: 0 0 0 1.5px rgba(0,0,0,.45); }
+.tip {
+  position: absolute; bottom: 26px; transform: translateX(-50%); padding: 6px 9px; border-radius: 8px;
+  background: rgba(18,18,17,.95); border: 1px solid var(--line-hi); font-size: 12.5px; white-space: nowrap;
+  max-width: 280px; overflow: hidden; text-overflow: ellipsis; pointer-events: none; opacity: 0; transition: opacity .1s;
+}
+.tip.on { opacity: 1; }
+.tip .mono { color: var(--dim); margin-right: 6px; }
+.vol { width: 70px; accent-color: var(--accent); }
+
+/* markers under the player */
+.chapters { width: 100%; max-width: min(1280px, 100%); margin: 14px auto 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.player.audio + .chapters { max-width: 720px; }
+.chap {
+  display: flex; align-items: baseline; gap: 9px; padding: 8px 12px; border-radius: 10px; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--line); color: var(--text2); font-size: 13.5px; text-align: left;
+  max-width: 100%;
+}
+.chap:hover { color: var(--text); border-color: var(--line-hi); }
+.chap.now { border-color: #e3b341; color: var(--text); }
+.chap .mono { color: #e3b341; font-size: 12px; }
+.chap span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.col { display: flex; flex-direction: column; align-items: center; width: 100%; }
+
+/* bottom line */
+footer { display: flex; justify-content: center; gap: 8px; padding: 12px 18px 16px; color: var(--faint); font-size: 12.5px; }
+footer a { color: var(--dim); text-decoration-color: var(--line-hi); text-underline-offset: 3px; }
+
+/* nothing here */
+.gone { text-align: center; max-width: 420px; }
+.gone svg { width: 56px; height: 56px; opacity: .9; }
+.gone h1 { font-size: 22px; font-weight: 600; margin: 18px 0 6px; }
+.gone p { color: var(--dim); margin: 0 0 22px; }
+
+.toast {
+  position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 12px); opacity: 0; padding: 10px 16px;
+  border-radius: 10px; background: var(--panel); border: 1px solid var(--line-hi); font-size: 13.5px;
+  transition: opacity .18s, transform .18s; pointer-events: none; z-index: 9;
+}
+.toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+@media (max-width: 640px) {
+  header { flex-wrap: wrap; padding: 10px 14px; gap: 10px; }
+  .file { order: 3; flex-basis: 100%; }
+  .actions { margin-left: auto; }
+  .btn .label { display: none; }
+  .btn { padding: 0 10px; }
+  main { padding: 12px; }
+  .vol, .speed { display: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <a class="brand" href="https://blinker.cool" title="blinker">
+    <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 6 Q36.5 27.5 58 32 Q36.5 36.5 32 58 Q27.5 36.5 6 32 Q27.5 27.5 32 6Z" fill="#d8d5cd"/></svg>
+    <span>blinker</span>
+  </a>
+  <div class="file" id="file"></div>
+  <div class="actions" id="actions"></div>
+</header>
+<main id="main"></main>
+<footer id="foot"></footer>
+<div class="toast" id="toast"></div>
+<script>
+const D = {{DATA}};
+const ru = (navigator.language || "").toLowerCase().startsWith("ru");
+const T = (r, e) => ru ? r : e;
+const $ = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html !== undefined) e.innerHTML = html; return e; };
+const icon = {
+  link: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M7 9l2-2"/><path d="M8.5 4.5L10 3a2.5 2.5 0 013.5 3.5L12 8"/><path d="M7.5 11.5L6 13a2.5 2.5 0 01-3.5-3.5L4 8"/></svg>',
+  down: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8"/><path d="M4.5 6.5L8 10l3.5-3.5"/><path d="M2.5 11.5v2h11v-2"/></svg>',
+  open: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2.5h4.5V7"/><path d="M13.5 2.5L7.5 8.5"/><path d="M11.5 9.5v4h-9v-9h4"/></svg>',
+  play: '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M4.5 2.5l9 5.5-9 5.5z"/></svg>',
+  pause: '<svg viewBox="0 0 16 16" fill="currentColor"><rect x="3.5" y="2.5" width="3" height="11" rx="1"/><rect x="9.5" y="2.5" width="3" height="11" rx="1"/></svg>',
+  sound: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"><path d="M2.5 6h2.5l3.5-3v10l-3.5-3h-2.5z"/><path d="M11 5.5a3.5 3.5 0 010 5"/></svg>',
+  mute: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"><path d="M1.5 6h2.5l3.5-3v10l-3.5-3h-2.5z"/><path d="M10 6l4 4M14 6l-4 4"/></svg>',
+  full: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/></svg>',
+  gone: '<svg viewBox="0 0 64 64"><path d="M32 6 Q36.5 27.5 58 32 Q36.5 36.5 32 58 Q27.5 36.5 6 32 Q27.5 27.5 32 6Z" fill="#3a3a36"/></svg>',
+};
+const size = b => b < 1024 * 1000 ? Math.round(b / 1024) + T(" кб", " kb") : (b / 1048576).toFixed(1).replace(".", ru ? "," : ".") + T(" мб", " mb");
+const clock = s => { s = Math.max(0, s || 0); const m = Math.floor(s / 60), x = Math.floor(s % 60); return m + ":" + String(x).padStart(2, "0"); };
+function left(until) {
+  const s = until - Date.now() / 1000;
+  if (s <= 0) return T("удаляется", "being deleted");
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.max(1, Math.floor(s % 3600 / 60));
+  if (d > 0) return T(`удалится через ${d} д ${h} ч`, `deleted in ${d} d ${h} h`);
+  if (h > 0) return T(`удалится через ${h} ч`, `deleted in ${h} h`);
+  return T(`удалится через ${m} мин`, `deleted in ${m} min`);
+}
+let toastTimer;
+function toast(text) {
+  const t = document.getElementById("toast");
+  t.textContent = text; t.classList.add("on");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("on"), 1800);
+}
+async function copy(text) {
+  try { await navigator.clipboard.writeText(text); }
+  catch (_) { const a = $("textarea"); a.value = text; document.body.append(a); a.select(); document.execCommand("copy"); a.remove(); }
+  toast(T("ссылка скопирована", "link copied"));
+}
+
+const main = document.getElementById("main");
+const foot = document.getElementById("foot");
+foot.innerHTML = T('сделано в <a href="https://blinker.cool">blinker</a> — скриншоты и запись экрана', 'made with <a href="https://blinker.cool">blinker</a> — screenshots and screen recording');
+
+if (!D) {
+  document.title = "blinker";
+  const g = $("div", "gone");
+  g.innerHTML = icon.gone + `<h1>${T("здесь ничего нет", "nothing here")}</h1><p>${T("файлы на post.blinker.cool живут 3 дня. этот уже удалён или ссылка неверная.", "files on post.blinker.cool live for 3 days. this one is gone, or the link is wrong.")}</p>`;
+  const a = $("a", "btn primary", T("что такое blinker", "what is blinker")); a.href = "https://blinker.cool";
+  g.append(a); main.append(g);
+} else {
+  render();
+}
+
+function render() {
+  const kind = { image: T("картинка", "image"), video: T("видео", "video"), audio: T("звук", "sound") }[D.kind] || "";
+  const file = document.getElementById("file");
+  const name = $("div", "name"); name.textContent = D.name;
+  const meta = $("div", "meta mono"); meta.dataset.base = `${kind} · ${size(D.size)}`;
+  const tick = () => { meta.textContent = `${meta.dataset.base} · ${left(D.expires)}`; };
+  tick(); setInterval(tick, 30000);
+  file.append(name, meta);
+
+  const actions = document.getElementById("actions");
+  const share = $("button", "btn", icon.link + `<span class="label">${T("копировать ссылку", "copy link")}</span>`);
+  share.onclick = () => copy(D.url);
+  const dl = $("a", "btn primary", icon.down + `<span class="label">${T("скачать", "download")}</span>`);
+  dl.href = D.raw; dl.download = D.name;
+  actions.append(share);
+  if (D.kind === "image") {
+    const raw = $("a", "btn", icon.open + `<span class="label">${T("оригинал", "original")}</span>`);
+    raw.href = D.raw; raw.target = "_blank"; raw.rel = "noopener";
+    actions.append(raw);
+  }
+  actions.append(dl);
+
+  if (D.kind === "image") image(meta); else player();
+}
+
+function image(meta) {
+  const img = $("img", "stage-img");
+  img.src = D.raw; img.alt = D.name;
+  img.onload = () => { meta.dataset.base += ` · ${img.naturalWidth} × ${img.naturalHeight}`; meta.textContent = `${meta.dataset.base} · ${left(D.expires)}`; fit(); };
+  // a click shows it pixel for pixel when it doesn't fit, and back
+  const fit = () => { img.style.cursor = (img.naturalWidth > img.clientWidth + 1 || main.classList.contains("zoomed")) ? "" : "default"; };
+  img.onclick = e => {
+    if (!main.classList.contains("zoomed") && img.naturalWidth <= img.clientWidth + 1) return;
+    const r = img.getBoundingClientRect(), fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
+    main.classList.toggle("zoomed");
+    if (main.classList.contains("zoomed")) {
+      img.style.width = img.naturalWidth / devicePixelRatio + "px";
+      main.scrollLeft = img.offsetWidth * fx - main.clientWidth / 2;
+      main.scrollTop = img.offsetHeight * fy - main.clientHeight / 2;
+    } else img.style.width = "";
+    fit();
+  };
+  addEventListener("resize", fit);
+  main.append(img);
+}
+
+function player() {
+  const audio = D.kind === "audio";
+  const col = $("div", "col");
+  const box = $("div", "player" + (audio ? " audio" : ""));
+  const m = document.createElement(audio ? "audio" : "video");
+  // "#t=0.001": the first frame shows before it plays
+  m.src = audio ? D.raw : D.raw + "#t=0.001"; m.preload = "metadata"; m.playsInline = true;
+  const markers = (D.markers || []).slice().sort((a, b) => a.t - b.t);
+
+  if (audio) {
+    const head = $("div", "audio-head");
+    const pb = $("button", "play", icon.play); pb.onclick = () => toggle();
+    const t = $("div", "t"); const b = $("b"); b.textContent = D.name; const s = $("span", "mono", size(D.size));
+    t.append(b, s); head.append(pb, t); box.append(head, m);
+    box.playBtn = pb;
+  } else {
+    box.append(m);
+    const big = $("button", "big", icon.play); big.onclick = () => toggle();
+    box.append(big);
+    m.onclick = () => toggle();
+  }
+
+  const controls = $("div", "controls");
+  const track = $("div", "track");
+  const rail = $("div", "rail"), buf = $("div", "buf"), done = $("div", "done"), knob = $("div", "knob"), tip = $("div", "tip");
+  rail.append(buf, done); track.append(rail);
+  const marks = markers.map(mk => { const e = $("div", "mark"); track.append(e); return e; });
+  track.append(knob, tip);
+  const row = $("div", "row");
+  const play = $("button", "ctl", icon.play); play.title = T("играть · пробел", "play · space"); play.onclick = () => toggle();
+  const time = $("span", "time mono", "0:00 / 0:00");
+  const spacer = $("div", "spacer");
+  const mute = $("button", "ctl", icon.sound); mute.onclick = () => { m.muted = !m.muted; };
+  const vol = $("input", "vol"); vol.type = "range"; vol.min = 0; vol.max = 1; vol.step = .05; vol.value = 1;
+  vol.oninput = () => { m.volume = +vol.value; m.muted = false; };
+  const speeds = [1, 1.5, 2, .5];
+  const speed = $("button", "ctl speed mono", "1×"); speed.title = T("скорость", "speed");
+  speed.onclick = () => { const i = (speeds.indexOf(m.playbackRate) + 1) % speeds.length; m.playbackRate = speeds[i]; speed.textContent = speeds[i] + "×"; };
+  row.append(play, time, spacer, mute, vol, speed);
+  if (!audio) {
+    const full = $("button", "ctl", icon.full); full.title = T("во весь экран · f", "full screen · f");
+    full.onclick = () => document.fullscreenElement ? document.exitFullscreen() : box.requestFullscreen?.();
+    row.append(full);
+  }
+  controls.append(track, row);
+  box.append(controls);
+  col.append(box);
+
+  let chips = [];
+  if (markers.length) {
+    const list = $("div", "chapters");
+    chips = markers.map(mk => {
+      const c = $("button", "chap");
+      const a = $("span", "mono", clock(mk.t)); const b = $("span"); b.textContent = mk.text || T("метка", "marker");
+      c.append(a, b); c.onclick = () => { m.currentTime = mk.t; if (m.paused) m.play(); };
+      list.append(c); return c;
+    });
+    col.append(list);
+  }
+  main.append(col);
+
+  function toggle() { if (m.paused) m.play(); else m.pause(); }
+  const dur = () => isFinite(m.duration) ? m.duration : 0;
+  function update() {
+    const d = dur(), t = m.currentTime;
+    done.style.width = d ? (t / d * 100) + "%" : "0";
+    knob.style.left = d ? (t / d * 100) + "%" : "0";
+    time.textContent = clock(t) + " / " + clock(d);
+    if (m.buffered.length && d) buf.style.width = (m.buffered.end(m.buffered.length - 1) / d * 100) + "%";
+    let now = -1;
+    markers.forEach((mk, i) => { if (mk.t <= t + .05) now = i; });
+    chips.forEach((c, i) => c.classList.toggle("now", i === now));
+  }
+  function placeMarks() { const d = dur(); marks.forEach((e, i) => { e.style.left = d ? Math.min(100, markers[i].t / d * 100) + "%" : "0"; }); }
+  m.addEventListener("timeupdate", update);
+  m.addEventListener("progress", update);
+  m.addEventListener("loadedmetadata", () => { placeMarks(); update(); });
+  m.addEventListener("play", () => { box.classList.add("playing"); play.innerHTML = icon.pause; if (box.playBtn) box.playBtn.innerHTML = icon.pause; });
+  m.addEventListener("pause", () => { box.classList.remove("playing"); play.innerHTML = icon.play; if (box.playBtn) box.playBtn.innerHTML = icon.play; });
+  m.addEventListener("volumechange", () => { mute.innerHTML = m.muted || m.volume === 0 ? icon.mute : icon.sound; vol.value = m.muted ? 0 : m.volume; });
+
+  // the timeline: click / drag to seek, the marker's note on hover
+  const at = e => { const r = track.getBoundingClientRect(); return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); };
+  let dragging = false;
+  track.addEventListener("pointerdown", e => { dragging = true; track.classList.add("drag"); track.setPointerCapture(e.pointerId); m.currentTime = at(e) * dur(); update(); });
+  track.addEventListener("pointermove", e => {
+    const f = at(e), d = dur();
+    if (dragging) { m.currentTime = f * d; update(); }
+    const r = track.getBoundingClientRect();
+    let near = null;
+    markers.forEach(mk => { if (d && Math.abs(mk.t / d - f) * r.width < 8) near = mk; });
+    if (near) {
+      tip.innerHTML = ""; const a = $("span", "mono", clock(near.t)); const b = $("span"); b.textContent = near.text || T("метка", "marker");
+      tip.append(a, b); tip.style.left = (near.t / d * 100) + "%";
+    } else {
+      tip.innerHTML = ""; tip.append($("span", "mono", clock(f * d))); tip.style.left = f * 100 + "%";
+    }
+    tip.classList.add("on");
+  });
+  track.addEventListener("pointerup", () => { dragging = false; track.classList.remove("drag"); });
+  track.addEventListener("pointerleave", () => tip.classList.remove("on"));
+
+  // controls hide while it plays and the mouse rests
+  let idle;
+  const wake = () => { box.classList.remove("idle"); clearTimeout(idle); idle = setTimeout(() => box.classList.add("idle"), 2200); };
+  box.addEventListener("pointermove", wake);
+  box.addEventListener("pointerleave", () => { if (!m.paused) box.classList.add("idle"); });
+
+  addEventListener("keydown", e => {
+    if (e.target.closest && e.target.closest("input")) return;
+    if (e.key === " " || e.key === "k") { e.preventDefault(); toggle(); }
+    else if (e.key === "ArrowRight") m.currentTime = Math.min(dur(), m.currentTime + (e.shiftKey ? 1 : 5));
+    else if (e.key === "ArrowLeft") m.currentTime = Math.max(0, m.currentTime - (e.shiftKey ? 1 : 5));
+    else if (e.key === "m") m.muted = !m.muted;
+    else if (e.key === "f" && !audio) document.fullscreenElement ? document.exitFullscreen() : box.requestFullscreen?.();
+    else if (e.key === "." || e.key === ",") {
+      // the next / previous marker
+      const t = m.currentTime, next = e.key === "." ? markers.find(mk => mk.t > t + .3) : markers.filter(mk => mk.t < t - .3).pop();
+      if (next) m.currentTime = next.t;
+    }
+  });
+  // ?t=42 opens at that second
+  const start = parseFloat(new URLSearchParams(location.search).get("t"));
+  if (start > 0) m.addEventListener("loadedmetadata", () => { m.currentTime = start; }, { once: true });
+}
+</script>
+</body>
+</html>

@@ -11,6 +11,35 @@ use std::sync::{Arc, Mutex};
 pub enum Kind {
     Mp4,
     Gif,
+    /// The sound alone (the video track switched off).
+    Audio(AudioFormat),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AudioFormat {
+    Mp3,
+    M4a,
+    Wav,
+}
+
+impl AudioFormat {
+    pub const ALL: [AudioFormat; 3] = [AudioFormat::Mp3, AudioFormat::M4a, AudioFormat::Wav];
+
+    pub fn ext(self) -> &'static str {
+        match self {
+            AudioFormat::Mp3 => "mp3",
+            AudioFormat::M4a => "m4a",
+            AudioFormat::Wav => "wav",
+        }
+    }
+
+    pub fn desc(self) -> &'static str {
+        match self {
+            AudioFormat::Mp3 => crate::i18n::l("192 кбит/с, играет везде", "192 kbit/s, plays everywhere"),
+            AudioFormat::M4a => crate::i18n::l("aac, меньше mp3 при том же звуке", "aac, smaller than mp3 for the same sound"),
+            AudioFormat::Wav => crate::i18n::l("без сжатия, для монтажа", "uncompressed, for editing"),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -52,6 +81,7 @@ pub fn target_path(src: &Path, kind: Kind, trimmed: bool) -> PathBuf {
         Kind::Mp4 if trimmed => (lf!("{stem} (обрезка)", "{stem} (trimmed)"), "mp4"),
         Kind::Mp4 => (lf!("{stem} (правка)", "{stem} (edited)"), "mp4"),
         Kind::Gif => (stem, "gif"),
+        Kind::Audio(f) => (stem, f.ext()),
     };
     let mut p = dir.join(format!("{base}.{ext}"));
     let mut n = 2;
@@ -75,6 +105,7 @@ pub fn start(ctx: &eframe::egui::Context, src: PathBuf, dst: PathBuf, info: Medi
         let r = match opt.kind {
             Kind::Mp4 => mp4(&src, &dst, &info, &opt, &progress, &cancel),
             Kind::Gif => gif(&src, &dst, &opt, &progress, &cancel),
+            Kind::Audio(f) => audio(&src, &dst, f, &opt, &progress, &cancel),
         };
         if r.is_err() || cancel.load(Ordering::SeqCst) {
             let _ = std::fs::remove_file(&dst);
@@ -200,6 +231,74 @@ pub fn mp4(src: &Path, dst: &Path, info: &MediaInfo, opt: &Options, progress: &A
     enc.finish().map_err(err)?;
     progress.store(1000, Ordering::Relaxed);
     Ok(())
+}
+
+/// The kept tracks of `from..to`, mixed (with their gains) into one stereo
+/// track and saved as `format`.
+pub fn audio(src: &Path, dst: &Path, format: AudioFormat, opt: &Options, progress: &AtomicU32, cancel: &AtomicBool) -> Result<(), String> {
+    if opt.tracks.is_empty() {
+        return Err(crate::i18n::l("все дорожки звука выключены", "every sound track is off").into());
+    }
+    let len = (opt.to - opt.from).max(1);
+    let total = (len as i128 * AUDIO_RATE as i128 / HNS as i128) as usize * AUDIO_CHANNELS as usize;
+    let mut mixed = vec![0f32; total];
+    for (i, (stream, gain)) in opt.tracks.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let pcm = read_range(src, *stream, opt.from, total).map_err(err)?;
+        for (m, s) in mixed.iter_mut().zip(&pcm) {
+            *m += *s as f32 * gain;
+        }
+        set_progress(progress, i as i64 + 1, opt.tracks.len() as i64, 0, 400);
+    }
+    let pcm: Vec<i16> = mixed.iter().map(|s| s.clamp(-32768.0, 32767.0) as i16).collect();
+    drop(mixed);
+    let step = |f: f32| progress.store(400 + (590.0 * f.clamp(0.0, 1.0)) as u32, Ordering::Relaxed);
+    match format {
+        AudioFormat::Wav => write_wav(dst, &pcm).map_err(|e| e.to_string())?,
+        AudioFormat::Mp3 => crate::record::encoder::write_mp3(dst, &pcm, &step)?,
+        AudioFormat::M4a => {
+            let enc = Encoder::new(dst, None, 1, None).map_err(err)?;
+            let chunk = (AUDIO_RATE / 10 * AUDIO_CHANNELS) as usize; // 100 ms
+            let n = pcm.len().div_ceil(chunk).max(1);
+            for (i, c) in pcm.chunks(chunk).enumerate() {
+                if cancel.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
+                enc.write_audio(0, c, i as i64 * HNS / 10).map_err(err)?;
+                step((i + 1) as f32 / n as f32);
+            }
+            enc.end_audio().map_err(err)?;
+            enc.finish().map_err(err)?;
+        }
+    }
+    progress.store(1000, Ordering::Relaxed);
+    Ok(())
+}
+
+/// 16-bit stereo PCM WAV at 48 kHz.
+fn write_wav(dst: &Path, pcm: &[i16]) -> std::io::Result<()> {
+    use std::io::Write;
+    let data = (pcm.len() * 2) as u32;
+    let mut f = std::io::BufWriter::new(std::fs::File::create(dst)?);
+    let (rate, ch) = (AUDIO_RATE, AUDIO_CHANNELS as u16);
+    f.write_all(b"RIFF")?;
+    f.write_all(&(36 + data).to_le_bytes())?;
+    f.write_all(b"WAVEfmt ")?;
+    f.write_all(&16u32.to_le_bytes())?;
+    f.write_all(&1u16.to_le_bytes())?; // PCM
+    f.write_all(&ch.to_le_bytes())?;
+    f.write_all(&rate.to_le_bytes())?;
+    f.write_all(&(rate * ch as u32 * 2).to_le_bytes())?;
+    f.write_all(&(ch * 2).to_le_bytes())?;
+    f.write_all(&16u16.to_le_bytes())?;
+    f.write_all(b"data")?;
+    f.write_all(&data.to_le_bytes())?;
+    for s in pcm {
+        f.write_all(&s.to_le_bytes())?;
+    }
+    f.flush()
 }
 
 /// `total` interleaved samples of a track starting exactly at `from`.
@@ -435,6 +534,38 @@ mod tests {
         }
     }
 
+    /// Saves 0.5..2.5 s of the sound of `BLINKER_TEST_EXPORT` as MP3, M4A, WAV.
+    #[test]
+    fn export_audio() {
+        let Ok(src) = std::env::var("BLINKER_TEST_EXPORT") else { return };
+        let src = PathBuf::from(src);
+        crate::media::startup();
+        let info = crate::media::probe(&src).unwrap();
+        let tracks: Vec<(u32, f32)> = info.audio_streams.iter().map(|s| (*s, 1.0)).collect();
+        for f in AudioFormat::ALL {
+            let dst = src.with_file_name(format!("sound.{}", f.ext()));
+            let _ = std::fs::remove_file(&dst);
+            let opt = Options {
+                kind: Kind::Audio(f),
+                from: HNS / 2,
+                to: HNS * 5 / 2,
+                tracks: tracks.clone(),
+                mix_down: true,
+                bitrate_quality: crate::config::RecQuality::Balanced,
+                gif_width: 320,
+                gif_fps: 15,
+                quality: None,
+                codec: crate::record::encoder::Codec::H264,
+            };
+            let (p, c) = (AtomicU32::new(0), AtomicBool::new(false));
+            audio(&src, &dst, f, &opt, &p, &c).unwrap();
+            let size = std::fs::metadata(&dst).unwrap().len();
+            eprintln!("{}: {size} bytes", f.ext());
+            assert!(size > 1000);
+            assert_eq!(p.load(Ordering::Relaxed), 1000);
+        }
+    }
+
     /// Trims `BLINKER_TEST_EXPORT` (mp4 with audio) to 0.5..2.5 s as MP4
     /// (mixed and separate tracks) and GIF, then checks the results.
     #[test]
@@ -462,7 +593,7 @@ mod tests {
             let t = std::time::Instant::now();
             let r = match kind {
                 Kind::Mp4 => mp4(&src, &dst, &info, &opt, &p, &c),
-                Kind::Gif => gif(&src, &dst, &opt, &p, &c),
+                Kind::Gif | Kind::Audio(_) => gif(&src, &dst, &opt, &p, &c),
             };
             r.unwrap();
             let size = std::fs::metadata(&dst).unwrap().len();

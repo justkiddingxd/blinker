@@ -4,7 +4,7 @@
 use crate::config::{HotkeyAction, TrayAction};
 use crate::hotkey;
 use crate::icons::Icon;
-use crate::runtime::{Command, HomeTab, Shared, WM_RELOAD_HOTKEYS, WM_RESTART, WM_SUSPEND_HOTKEYS};
+use crate::runtime::{Command, HomeTab, Shared, WM_RELOAD_HOTKEYS, WM_RESTART, WM_SUSPEND_HOTKEYS, WM_TRAY_STATE};
 use crate::theme;
 use crate::traymenu::{self, Item};
 use crate::win;
@@ -152,6 +152,8 @@ unsafe extern "system" fn tray_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
 struct Tray {
     hwnd: HWND,
     icon: HICON,
+    /// Showing the "replay is on" icon.
+    live: bool,
 }
 
 impl Tray {
@@ -187,7 +189,7 @@ impl Tray {
                 return None;
             }
             let icon = make_icon(&theme::logo(32));
-            let tray = Tray { hwnd, icon };
+            let tray = Tray { hwnd, icon, live: false };
             tray.add();
             Some(tray)
         }
@@ -201,14 +203,41 @@ impl Tray {
         d
     }
 
+    fn tip(&self) -> String {
+        if self.live { lf!("blinker · идёт повтор", "blinker · replay is on") } else { "blinker".into() }
+    }
+
     fn add(&self) {
         let mut d = self.data();
         d.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         d.uCallbackMessage = WM_TRAY;
         d.hIcon = self.icon;
-        let tip: Vec<u16> = "blinker".encode_utf16().collect();
+        let tip: Vec<u16> = self.tip().encode_utf16().take(127).collect();
         d.szTip[..tip.len()].copy_from_slice(&tip);
         unsafe { Shell_NotifyIconW(NIM_ADD, &d) };
+    }
+
+    /// Red sparkle while the instant replay records.
+    fn set_live(&mut self, live: bool) {
+        if live == self.live {
+            return;
+        }
+        self.live = live;
+        let color = if live { theme::DANGER } else { theme::ACCENT };
+        let icon = unsafe { make_icon(&theme::logo_in(32, color)) };
+        if icon.is_null() {
+            return;
+        }
+        let old = std::mem::replace(&mut self.icon, icon);
+        let mut d = self.data();
+        d.uFlags = NIF_ICON | NIF_TIP;
+        d.hIcon = self.icon;
+        let tip: Vec<u16> = self.tip().encode_utf16().take(127).collect();
+        d.szTip[..tip.len()].copy_from_slice(&tip);
+        unsafe {
+            Shell_NotifyIconW(NIM_MODIFY, &d);
+            DestroyIcon(old);
+        }
     }
 
     fn anchor() -> (i32, i32) {
@@ -280,31 +309,29 @@ fn tray_action(shared: &Shared, action: TrayAction) {
 fn show_menu(shared: &Shared) {
     let cfg = shared.config();
     let hk = |a: HotkeyAction| hotkey::display_parts(cfg.primary_binding(a)).join(" ");
-    let shots = vec![
-        Item::new(1, Icon::Region, crate::i18n::t("область"), &hk(HotkeyAction::Region)),
-        Item::new(2, Icon::Screen, crate::i18n::t("весь экран"), &hk(HotkeyAction::Screen)),
-        Item::new(3, Icon::Window, crate::i18n::t("активное окно"), &hk(HotkeyAction::Window)),
-        Item::new(4, Icon::Repeat, crate::i18n::t("повторить область"), &hk(HotkeyAction::Last)),
-    ];
+    let l = crate::i18n::l;
     let recording = shared.recording.load(std::sync::atomic::Ordering::SeqCst);
-    let rec = if recording {
-        vec![
-            Item::new(11, Icon::Close, crate::i18n::t("остановить запись"), &hk(HotkeyAction::Record)),
-            Item::new(12, Icon::Pause, crate::i18n::t("пауза / продолжить"), &hk(HotkeyAction::Pause)),
-        ]
+    // the main actions as big tiles, the rest as a list
+    let tiles = if recording {
+        vec![Item::new(11, Icon::Close, l("стоп", "stop"), ""), Item::new(12, Icon::Pause, l("пауза", "pause"), "")]
     } else {
         vec![
-            Item::new(9, Icon::Record, crate::i18n::t("видео"), &hk(HotkeyAction::Record)),
-            Item::new(13, Icon::Video, "gif", &hk(HotkeyAction::RecordGif)),
+            Item::new(1, Icon::Region, crate::i18n::t("область"), ""),
+            Item::new(2, Icon::Screen, l("экран", "screen"), ""),
+            Item::new(3, Icon::Window, l("окно", "window"), ""),
+            Item::new(9, Icon::Record, crate::i18n::t("видео"), ""),
+            Item::new(13, Icon::Video, "gif", ""),
         ]
     };
     let mut items = vec![
-        Item::sub(Icon::Region, crate::i18n::t("скриншот"), shots),
-        Item::sub(Icon::Record, crate::i18n::t("запись"), rec),
+        Item::tiles(tiles),
+        Item::separator(),
+        Item::new(4, Icon::Repeat, crate::i18n::t("повторить область"), &hk(HotkeyAction::Last)),
     ];
-    // right under "recording", one click away
     if cfg.replay_enabled {
-        items.push(Item::new(10, Icon::Repeat, crate::i18n::t("сохранить повтор"), &hk(HotkeyAction::Replay)));
+        let live = shared.replay_live.load(std::sync::atomic::Ordering::SeqCst);
+        let label = if live { l("сохранить повтор · идёт", "save the replay · on") } else { crate::i18n::t("сохранить повтор") };
+        items.push(Item::new(10, Icon::Repeat, label, &hk(HotkeyAction::Replay)));
     }
     items.extend([
         Item::separator(),
@@ -330,8 +357,16 @@ fn show_menu(shared: &Shared) {
     shared.push(cmd);
 }
 
+/// The replay started or stopped (any thread): the tray thread recolors the icon.
+pub fn tray_state_changed(shared: &Shared) {
+    let tid = shared.shell_thread.load(Ordering::Relaxed);
+    if tid != 0 {
+        win::post_thread_message(tid, WM_TRAY_STATE);
+    }
+}
+
 fn run(shared: Arc<Shared>) {
-    let tray = Tray::create();
+    let mut tray = Tray::create();
     let mut hotkeys = Hotkeys { ids: Vec::new() };
     hotkeys.register(&shared);
     let activate = win::activation_event();
@@ -363,6 +398,11 @@ fn run(shared: Arc<Shared>) {
                 }
                 WM_SUSPEND_HOTKEYS => hotkeys.unregister(),
                 WM_RESTART => shared.push(Command::Restart),
+                WM_TRAY_STATE => {
+                    if let Some(t) = &mut tray {
+                        t.set_live(shared.replay_live.load(Ordering::SeqCst));
+                    }
+                }
                 _ => unsafe {
                     TranslateMessage(&msg);
                     DispatchMessageW(&msg);

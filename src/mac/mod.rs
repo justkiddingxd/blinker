@@ -488,6 +488,11 @@ pub fn is_foreground(hwnd: HWND) -> bool {
     unsafe { ffi::bk_window_is_key(hwnd) != 0 }
 }
 
+/// The system window buttons from `x` on, centered on `cy` points from the top.
+pub fn window_buttons_at(hwnd: HWND, x: f32, cy: f32) {
+    unsafe { ffi::bk_window_buttons_at(hwnd, x as f64, cy as f64) };
+}
+
 pub fn style_borderless(hwnd: HWND) {
     unsafe { ffi::bk_window_style_borderless(hwnd) };
 }

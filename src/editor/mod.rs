@@ -127,14 +127,14 @@ pub fn run(shared: &Arc<Shared>, state: EditorState, notice: Option<String>) -> 
     let viewport = egui::ViewportBuilder::default()
         .with_title(title)
         .with_icon(theme::icon_data(64))
-        .with_decorations(false)
-        .with_inner_size(size)
-        .with_min_inner_size([760.0, 480.0]);
+        .with_inner_size(size);
+    let viewport = crate::chrome::style(viewport);
     let shared2 = shared.clone();
     runtime::run_window(shared, viewport, true, move |cc| {
         let hwnd = win::hwnd_of(cc);
         if let Some(h) = hwnd {
             win::style_borderless(h);
+            crate::chrome::place_window_buttons(h, crate::chrome::TITLE_H + 4.0);
             win::cloak(h, true);
             win::force_foreground(h);
         }
@@ -445,6 +445,7 @@ impl EditorApp {
                 ui.painter().hline(r.x_range().expand(14.0), r.bottom() + 0.5, Stroke::new(1.0, LINE));
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
+                    crate::chrome::leading_space(ui);
                     crate::chrome::mark(ui);
                     let name = match &self.st.path {
                         Some(p) => p.file_name().unwrap_or_default().to_string_lossy().into_owned(),
@@ -455,7 +456,7 @@ impl EditorApp {
                     let state = if self.st.dirty { crate::i18n::t("изменён") } else { crate::i18n::t("сохранён") };
                     ui.label(egui::RichText::new(state).font(mono(11.0)).color(FAINT));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        crate::chrome::window_buttons(ui, true);
+                        crate::chrome::window_buttons(ui);
                         ui.spacing_mut().item_spacing.x = 4.0;
                         sep(ui);
                         if ui::button(ui, crate::i18n::t("копировать"), ui::Kind::Accent).on_hover_text(crate::i18n::kb("ctrl+c")).clicked() {
@@ -1394,7 +1395,6 @@ impl eframe::App for EditorApp {
             self.confirm_close = true;
         }
 
-        crate::chrome::resize_edges(&ctx);
         self.top_bar(ui);
         self.status_bar(ui);
         self.tool_strip(ui);

@@ -8,16 +8,22 @@
 //! Content-Type: image/png | image/jpeg | image/webp | image/gif | video/mp4
 //! Content-Length: <size>
 //! X-Filename: <file name, percent-encoded UTF-8>
+//! X-Blinker-Markers: <percent-encoded JSON>   (videos with timeline markers)
+//!     [{"t": 12.5, "text": "what happens here"}, ...]   t in seconds
 //! <raw file bytes>
 //!
 //! 200 / 201  {"url": "https://…", "delete_url": "https://…" (optional)}
 //! 4xx / 5xx  {"error": "message"}  (or any text)
 //! ```
 //!
+//! With no address set, files go to post.blinker.cool (the same protocol, no
+//! token; files live there 3 days, videos up to 100 MB). A ShareX custom
+//! uploader (`CustomUploader`) can be used instead of this protocol.
+//!
 //! HTTP goes through WinHTTP on Windows and NSURLSession on macOS (system TLS
 //! and proxy settings, no extra crates).
 
-use crate::config::Config;
+use crate::config::{Config, CustomUploader};
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::ptr::{null, null_mut};
@@ -26,10 +32,44 @@ use std::sync::{Arc, Mutex};
 #[cfg(windows)]
 use windows_sys::Win32::Networking::WinHttp::*;
 
+/// The upload address when none is set.
+pub const DEFAULT_URL: &str = "https://post.blinker.cool/api/upload";
+pub const DEFAULT_HOST: &str = "post.blinker.cool";
+/// The largest file the default server takes.
+pub const DEFAULT_MAX_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Where the files go.
+#[derive(Clone)]
+pub enum Target {
+    /// The blinker protocol: an address and a token.
+    Blinker { url: String, token: String },
+    Custom(CustomUploader),
+}
+
+impl Target {
+    pub fn of(cfg: &Config) -> Target {
+        if let Some(c) = &cfg.upload_custom {
+            return Target::Custom(c.clone());
+        }
+        let url = cfg.upload_url.trim();
+        if url.is_empty() {
+            Target::Blinker { url: DEFAULT_URL.into(), token: String::new() }
+        } else {
+            Target::Blinker { url: url.into(), token: cfg.upload_token.trim().into() }
+        }
+    }
+
+    pub fn is_default(&self) -> bool {
+        matches!(self, Target::Blinker { url, .. } if url == DEFAULT_URL)
+    }
+}
+
 pub struct Job {
     /// 0..=1000 of the body sent.
     pub progress: AtomicU32,
     pub result: Mutex<Option<Result<String, String>>>,
+    /// Shown once with the result: what the default server keeps and how long.
+    pub note: Option<String>,
 }
 
 impl Job {
@@ -41,8 +81,9 @@ impl Job {
     }
 }
 
-pub fn configured(cfg: &Config) -> bool {
-    !cfg.upload_url.trim().is_empty()
+/// There is always somewhere to upload (post.blinker.cool by default).
+pub fn configured(_cfg: &Config) -> bool {
+    true
 }
 
 pub fn content_type(path: &Path) -> &'static str {
@@ -52,15 +93,37 @@ pub fn content_type(path: &Path) -> &'static str {
         Some("webp") => "image/webp",
         Some("gif") => "image/gif",
         Some("mp4") => "video/mp4",
+        Some("mp3") => "audio/mpeg",
+        Some("m4a") => "audio/mp4",
+        Some("wav") => "audio/wav",
         _ => "application/octet-stream",
     }
+}
+
+/// A point on a video's timeline with a note (from the video editor).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Marker {
+    /// Seconds from the start of the uploaded file.
+    pub t: f64,
+    pub text: String,
 }
 
 /// Uploads `path` in the background; on success the link is copied.
 /// `wait` lets the caller hand over a file still being written (autosave).
 pub fn start(cfg: &Config, path: PathBuf, wait: Option<Arc<std::sync::atomic::AtomicBool>>) -> Arc<Job> {
-    let job = Arc::new(Job { progress: AtomicU32::new(0), result: Mutex::new(None) });
-    let (j, url, token) = (job.clone(), cfg.upload_url.trim().to_string(), cfg.upload_token.trim().to_string());
+    start_with(cfg, path, wait, Vec::new())
+}
+
+/// Like `start`, with the video's timeline markers.
+pub fn start_with(cfg: &Config, path: PathBuf, wait: Option<Arc<std::sync::atomic::AtomicBool>>, markers: Vec<Marker>) -> Arc<Job> {
+    let target = Target::of(cfg);
+    // the first upload to our server says what it keeps
+    let note = (target.is_default() && !cfg.post_notice_seen).then(|| {
+        crate::config::save(&Config { post_notice_seen: true, ..crate::config::load() });
+        lf!("{DEFAULT_HOST} хранит файлы 3 дня, видео до 100 мб", "{DEFAULT_HOST} keeps files for 3 days, videos up to 100 mb")
+    });
+    let job = Arc::new(Job { progress: AtomicU32::new(0), result: Mutex::new(None), note });
+    let j = job.clone();
     std::thread::spawn(move || {
         if let Some(flag) = wait {
             let t = std::time::Instant::now();
@@ -71,8 +134,11 @@ pub fn start(cfg: &Config, path: PathBuf, wait: Option<Arc<std::sync::atomic::At
         let r = std::fs::read(&path)
             .map_err(|e| lf!("файл не читается: {e}", "can't read the file: {e}"))
             .and_then(|body| {
+                if target.is_default() && body.len() as u64 > DEFAULT_MAX_BYTES {
+                    return Err(lf!("{DEFAULT_HOST} принимает файлы до 100 мб", "{DEFAULT_HOST} takes files up to 100 mb"));
+                }
                 let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-                post(&url, &token, &name, content_type(&path), &body, &j.progress)
+                post(&target, &name, content_type(&path), &body, &markers, &j.progress)
             });
         if let Ok(link) = &r {
             crate::output::copy_text(link);
@@ -94,7 +160,7 @@ pub fn test(cfg: &Config) -> Result<String, String> {
         image::ExtendedColorType::Rgba8,
     )
     .map_err(|e| e.to_string())?;
-    post(cfg.upload_url.trim(), cfg.upload_token.trim(), "blinker-test.png", "image/png", &png, &AtomicU32::new(0))
+    post(&Target::of(cfg), "blinker-test.png", "image/png", &png, &[], &AtomicU32::new(0))
 }
 
 #[cfg(windows)]
@@ -138,15 +204,53 @@ fn last_error(what: &str) -> String {
     if hint.is_empty() { lf!("{what}: ошибка {code}", "{what}: error {code}") } else { format!("{what}: {hint}") }
 }
 
-fn post(url: &str, token: &str, name: &str, ctype: &str, body: &[u8], progress: &AtomicU32) -> Result<String, String> {
-    if url.is_empty() {
-        return Err(crate::i18n::t("не указан адрес сервера").into());
+/// Markers as the JSON array of the protocol, at most ~6 KB (a header).
+fn markers_json(markers: &[Marker]) -> String {
+    let mut out = String::from("[");
+    for m in markers {
+        let item = format!("{{\"t\":{:.2},\"text\":\"{}\"}}", m.t.max(0.0), json_escape(&m.text));
+        if out.len() + item.len() > 6000 {
+            break;
+        }
+        if out.len() > 1 {
+            out.push(',');
+        }
+        out.push_str(&item);
     }
-    let mut headers = vec![("Content-Type", ctype.to_string()), ("X-Filename", percent(name))];
-    if !token.is_empty() {
-        headers.push(("Authorization", format!("Bearer {token}")));
+    out.push(']');
+    out
+}
+
+pub fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
     }
-    let (status, text) = send("POST", url, &headers, body, progress)?;
+    out
+}
+
+fn post(target: &Target, name: &str, ctype: &str, body: &[u8], markers: &[Marker], progress: &AtomicU32) -> Result<String, String> {
+    let (status, text) = match target {
+        Target::Blinker { url, token } => {
+            let mut headers = vec![("Content-Type", ctype.to_string()), ("X-Filename", percent(name))];
+            if !markers.is_empty() {
+                headers.push(("X-Blinker-Markers", percent(&markers_json(markers))));
+            }
+            if !token.is_empty() {
+                headers.push(("Authorization", format!("Bearer {token}")));
+            }
+            send("POST", url, &headers, body, progress)?
+        }
+        Target::Custom(c) => send_custom(c, name, ctype, body, progress)?,
+    };
     if !(200..300).contains(&status) {
         let msg = json_string(&text, "error").unwrap_or_else(|| text.chars().take(160).collect());
         return Err(match status {
@@ -155,7 +259,119 @@ fn post(url: &str, token: &str, name: &str, ctype: &str, body: &[u8], progress: 
             _ => lf!("сервер ответил {status}: {}", "the server answered {status}: {}", msg.trim()),
         });
     }
-    json_string(&text, "url").ok_or_else(|| crate::i18n::t("в ответе сервера нет поля \"url\"").to_string())
+    match target {
+        Target::Blinker { .. } => json_string(&text, "url").ok_or_else(|| crate::i18n::t("в ответе сервера нет поля \"url\"").to_string()),
+        Target::Custom(c) => link_from(&c.url_template, &text)
+            .ok_or_else(|| lf!("в ответе сервера нет ссылки ({})", "no link in the server's answer ({})", c.url_template)),
+    }
+}
+
+/// ShareX placeholders in a value: the file name.
+fn fill(value: &str, name: &str) -> String {
+    value.replace("{filename}", name).replace("$filename$", name)
+}
+
+/// A ShareX custom uploader: query parameters, headers, then the raw file or
+/// a multipart form with it.
+fn send_custom(c: &CustomUploader, name: &str, ctype: &str, body: &[u8], progress: &AtomicU32) -> Result<(u32, String), String> {
+    if c.url.trim().is_empty() {
+        return Err(crate::i18n::t("не указан адрес сервера").into());
+    }
+    let mut url = fill(c.url.trim(), name);
+    for (i, (k, v)) in c.parameters.iter().enumerate() {
+        url.push(if i == 0 && !url.contains('?') { '?' } else { '&' });
+        url.push_str(&format!("{}={}", query_escape(k), query_escape(&fill(v, name))));
+    }
+    let mut headers: Vec<(&str, String)> = c.headers.iter().map(|(k, v)| (k.as_str(), fill(v, name))).collect();
+    let method = if c.method.trim().is_empty() { "POST".to_string() } else { c.method.trim().to_uppercase() };
+    if c.body.eq_ignore_ascii_case("Binary") {
+        headers.push(("Content-Type", ctype.to_string()));
+        return send(&method, &url, &headers, body, progress);
+    }
+    let boundary = format!("----blinker{:016x}", body.len() as u64 ^ 0x9e37_79b9_7f4a_7c15);
+    let mut form = Vec::with_capacity(body.len() + 1024);
+    for (k, v) in &c.arguments {
+        form.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{}\r\n", fill(v, name)).as_bytes());
+    }
+    let field = if c.file_form_name.is_empty() { "file" } else { c.file_form_name.as_str() };
+    form.extend_from_slice(
+        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{}\"\r\nContent-Type: {ctype}\r\n\r\n", name.replace('"', "'"))
+            .as_bytes(),
+    );
+    form.extend_from_slice(body);
+    form.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    headers.push(("Content-Type", format!("multipart/form-data; boundary={boundary}")));
+    send(&method, &url, &headers, &form, progress)
+}
+
+fn query_escape(s: &str) -> String {
+    s.bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect()
+}
+
+/// The link out of a server answer by a ShareX URL template: text with
+/// `{json:a.b[0].c}`, `$json:a.b$` or `{response}` in it. Empty = the whole answer.
+pub fn link_from(template: &str, response: &str) -> Option<String> {
+    let template = template.trim();
+    if template.is_empty() {
+        return Some(response.trim().to_string()).filter(|s| !s.is_empty());
+    }
+    let json: Option<serde_json::Value> = serde_json::from_str(response).ok();
+    let mut out = String::new();
+    let mut rest = template;
+    while !rest.is_empty() {
+        let next = rest.find(['{', '$']);
+        let Some(i) = next else {
+            out.push_str(rest);
+            break;
+        };
+        out.push_str(&rest[..i]);
+        let close = if rest[i..].starts_with('{') { '}' } else { '$' };
+        let Some(end) = rest[i + 1..].find(close) else {
+            out.push_str(&rest[i..]);
+            break;
+        };
+        let token = &rest[i + 1..i + 1 + end];
+        let value = if token == "response" {
+            Some(response.trim().to_string())
+        } else if let Some(path) = token.strip_prefix("json:") {
+            json.as_ref().and_then(|j| json_path(j, path))
+        } else {
+            None
+        };
+        match value {
+            Some(v) => out.push_str(&v),
+            None if token.starts_with("json:") => return None,
+            None => out.push_str(&rest[i..i + 2 + end]),
+        }
+        rest = &rest[i + 2 + end..];
+    }
+    Some(out).filter(|s| !s.trim().is_empty())
+}
+
+/// `data.files[0].url` in a JSON value; strings come without quotes.
+fn json_path(v: &serde_json::Value, path: &str) -> Option<String> {
+    let mut cur = v;
+    for part in path.split('.') {
+        let (key, idx) = match part.find('[') {
+            Some(b) => (&part[..b], Some(&part[b..])),
+            None => (part, None),
+        };
+        if !key.is_empty() {
+            cur = cur.get(key)?;
+        }
+        if let Some(idx) = idx {
+            for i in idx.split(']').filter(|s| !s.is_empty()) {
+                cur = cur.get(i.trim_start_matches('[').parse::<usize>().ok()?)?;
+            }
+        }
+    }
+    Some(match cur {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Null => return None,
+        other => other.to_string(),
+    })
 }
 
 /// A GET with `headers`: (status, response text). Also used for the update check.
@@ -296,6 +512,23 @@ pub fn json_string(json: &str, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn sharex_templates() {
+        let r = r#"{"data":{"files":[{"url":"https://x.y/a.png"}]},"ok":true}"#;
+        assert_eq!(super::link_from("{json:data.files[0].url}", r).as_deref(), Some("https://x.y/a.png"));
+        assert_eq!(super::link_from("$json:data.files[0].url$", r).as_deref(), Some("https://x.y/a.png"));
+        assert_eq!(super::link_from("https://i.y/{json:ok}", r).as_deref(), Some("https://i.y/true"));
+        assert_eq!(super::link_from("", " https://plain \n").as_deref(), Some("https://plain"));
+        assert_eq!(super::link_from("{response}", "https://r").as_deref(), Some("https://r"));
+        assert_eq!(super::link_from("{json:missing}", r), None);
+    }
+
+    #[test]
+    fn markers_as_json() {
+        let m = vec![super::Marker { t: 1.5, text: "a \"b\"\nc".into() }, super::Marker { t: 3.0, text: String::new() }];
+        assert_eq!(super::markers_json(&m), r#"[{"t":1.50,"text":"a \"b\"\nc"},{"t":3.00,"text":""}]"#);
+    }
+
+    #[test]
     fn parses_response() {
         let j = r#"{ "url" : "https:\/\/s.example.com\/a b", "delete_url": "x" }"#;
         assert_eq!(super::json_string(j, "url").as_deref(), Some("https://s.example.com/a b"));
@@ -311,9 +544,10 @@ mod live {
     fn upload_local() {
         let Ok(url) = std::env::var("BLINKER_TEST_UPLOAD") else { return };
         let mut cfg = crate::config::Config { upload_url: url, upload_token: "test-token".into(), ..Default::default() };
+        cfg.upload_custom = None;
         let r = super::test(&cfg);
         eprintln!("ok token: {r:?}");
-        assert!(r.as_ref().is_ok_and(|u| u.contains("blinker-test.png")), "{r:?}");
+        assert!(r.as_ref().is_ok_and(|u| u.starts_with("http")), "{r:?}");
         cfg.upload_token = "wrong".into();
         let r = super::test(&cfg);
         eprintln!("bad token: {r:?}");

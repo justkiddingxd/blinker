@@ -254,6 +254,29 @@ impl ToastSize {
     }
 }
 
+/// A ShareX-style custom uploader (imported from ShareX or a .sxcu file):
+/// any server that takes a multipart form or the raw file and answers with
+/// the link somewhere in its response.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CustomUploader {
+    pub name: String,
+    /// "POST" / "PUT"
+    pub method: String,
+    pub url: String,
+    /// Query string parameters.
+    pub parameters: Vec<(String, String)>,
+    pub headers: Vec<(String, String)>,
+    /// "MultipartFormData" or "Binary".
+    pub body: String,
+    /// Multipart: the form field of the file.
+    pub file_form_name: String,
+    /// Multipart: the other form fields.
+    pub arguments: Vec<(String, String)>,
+    /// Where the link is in the response: "{json:data.url}", "{response}"...
+    pub url_template: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -323,12 +346,21 @@ pub struct Config {
     /// Instant replay: keep the last `replay_secs` of the screen on disk.
     pub replay_enabled: bool,
     pub replay_secs: u32,
+    /// Saving the replay empties it: the next save starts from that moment.
+    pub replay_reset_on_save: bool,
     pub replay_desktop_audio: bool,
     pub replay_mic: bool,
     pub beauty: Beauty,
-    /// Upload endpoint (see `upload.rs` for the protocol); empty = off.
+    /// Upload endpoint (see `upload.rs` for the protocol); empty = the
+    /// default server, post.blinker.cool.
     pub upload_url: String,
     pub upload_token: String,
+    /// A ShareX custom uploader instead of the blinker protocol.
+    pub upload_custom: Option<CustomUploader>,
+    /// The note about post.blinker.cool (3 days, 100 MB) was shown.
+    pub post_notice_seen: bool,
+    /// The offer to bring over ShareX settings was made (once).
+    pub sharex_offered: bool,
     /// Upload every capture right away and copy the link.
     pub upload_auto: bool,
     pub tg_mode: TgMode,
@@ -388,11 +420,15 @@ impl Default for Config {
             rec_show_keys: false,
             replay_enabled: false,
             replay_secs: 60,
+            replay_reset_on_save: false,
             replay_desktop_audio: true,
             replay_mic: false,
             beauty: Beauty::default(),
             upload_url: String::new(),
             upload_token: String::new(),
+            upload_custom: None,
+            post_notice_seen: false,
+            sharex_offered: false,
             upload_auto: false,
             tg_mode: TgMode::Balanced,
             gif_width: 800,

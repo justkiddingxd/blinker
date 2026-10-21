@@ -327,3 +327,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// Sound only, as MP3 (LAME, 192 kbit/s): interleaved stereo 16-bit PCM at
+/// 48 kHz. `progress` gets 0..1.
+pub fn write_mp3(dst: &Path, pcm: &[i16], progress: &dyn Fn(f32)) -> std::result::Result<(), String> {
+    use mp3lame_encoder::{Bitrate, Builder, FlushNoGap, InterleavedPcm, Quality};
+    let mut enc = Builder::new()
+        .ok_or("lame")?
+        .with_num_channels(AUDIO_CHANNELS as u8)
+        .and_then(|b| b.with_sample_rate(AUDIO_RATE))
+        .and_then(|b| b.with_brate(Bitrate::Kbps192))
+        .and_then(|b| b.with_quality(Quality::Best))
+        .and_then(|b| b.build())
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::with_capacity(pcm.len() / 3);
+    let chunk = AUDIO_RATE as usize * AUDIO_CHANNELS as usize; // one second
+    let n = pcm.len().div_ceil(chunk).max(1);
+    for (i, c) in pcm.chunks(chunk).enumerate() {
+        out.reserve(mp3lame_encoder::max_required_buffer_size(c.len()));
+        enc.encode_to_vec(InterleavedPcm(c), &mut out).map_err(|e| e.to_string())?;
+        progress((i + 1) as f32 / n as f32);
+    }
+    out.reserve(7200);
+    enc.flush_to_vec::<FlushNoGap>(&mut out).map_err(|e| e.to_string())?;
+    std::fs::write(dst, out).map_err(|e| e.to_string())
+}

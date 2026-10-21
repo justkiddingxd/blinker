@@ -25,6 +25,10 @@ use windows::Win32::Media::MediaFoundation::*;
 /// Length of one video segment.
 const SEG: i64 = 5 * HNS;
 
+/// How long the replay can be: 10 s .. 30 min.
+pub const MIN_SECS: u32 = 10;
+pub const MAX_SECS: u32 = 30 * 60;
+
 struct Segment {
     path: PathBuf,
     start: i64,
@@ -237,6 +241,9 @@ pub struct Replay {
     rings: Arc<PcmRings>,
     tracks: Vec<Source>,
     secs: std::sync::atomic::AtomicU32,
+    /// A save never reaches back before this (replay clock): the moment of
+    /// the previous save, when saving starts the replay over.
+    floor: AtomicI64,
     pub monitor: Monitor,
     size: (u32, u32),
     /// Settings this replay was started with (restart when they change).
@@ -270,7 +277,7 @@ impl Replay {
         let target = super::video::monitor_target(IRect::new(monitor.rect.x, monitor.rect.y, w as i32, h as i32), &monitor);
         let gpu = Arc::new(Gpu::new().map_err(|e| format!("{}: {e}", super::video::GPU_API))?);
         let spec = super::video_spec(cfg, w, h, 1, &monitor);
-        let secs = cfg.replay_secs.clamp(10, 600);
+        let secs = cfg.replay_secs.clamp(MIN_SECS, MAX_SECS);
         let seg = Arc::new(Segmenter {
             dir: dir.clone(),
             spec,
@@ -304,6 +311,7 @@ impl Replay {
             rings,
             tracks,
             secs: std::sync::atomic::AtomicU32::new(secs),
+            floor: AtomicI64::new(0),
             monitor,
             size: (w, h),
             key: config_key(cfg),
@@ -312,7 +320,7 @@ impl Replay {
 
     /// Changes the buffer length without dropping what is already recorded.
     pub fn set_secs(&self, secs: u32) {
-        let secs = secs.clamp(10, 600);
+        let secs = secs.clamp(MIN_SECS, MAX_SECS);
         if self.secs.swap(secs, Ordering::SeqCst) != secs {
             self.seg.keep.store(secs as i64 * HNS, Ordering::SeqCst);
             self.rings.resize(secs);
@@ -332,11 +340,15 @@ impl Replay {
         let _ = std::fs::remove_dir_all(dir());
     }
 
-    /// Saves the last `secs` seconds as an MP4 in the captures folder.
+    /// Saves the last `secs` seconds as an MP4 in the captures folder (with
+    /// `replay_reset_on_save`, only what came after the previous save).
     pub fn save(&self, cfg: &Config) -> Result<Finished, String> {
         let now = self.clock.now();
         self.seg.flush();
-        let from = (now - self.secs.load(Ordering::SeqCst) as i64 * HNS).max(0);
+        let from = (now - self.secs.load(Ordering::SeqCst) as i64 * HNS).max(self.floor.load(Ordering::SeqCst)).max(0);
+        if now - from < HNS {
+            return Err(crate::i18n::t("буфер повтора ещё пуст").into());
+        }
         let segs: Vec<(PathBuf, i64)> = self
             .seg
             .done
@@ -364,6 +376,9 @@ impl Replay {
                 }
                 last
             });
+        if cfg.replay_reset_on_save {
+            self.floor.store(now, Ordering::SeqCst);
+        }
         let m = self.monitor;
         Ok(Finished {
             path,
