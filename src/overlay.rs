@@ -10,7 +10,7 @@ use crate::theme::*;
 use crate::ui::{self, TiledTexture};
 use crate::win::{self, IRect, Monitor};
 use eframe::egui::{
-    self, Align2, Color32, CursorIcon, Id, Key, Pos2, Rect, Stroke, StrokeKind, TextureHandle,
+    self, Color32, CursorIcon, Id, Key, Pos2, Rect, Stroke, StrokeKind, TextureHandle,
     TextureOptions, Vec2, pos2, vec2,
 };
 use image::RgbaImage;
@@ -664,8 +664,13 @@ impl OverlayApp {
             self.phase = Phase::Adjusting;
             return self.finish(Action::Copy, now);
         }
+        // Ctrl / Cmd + C: the text field layer turns it into a Copy event
+        // before any key press shows, so both are looked for (and plain Ctrl
+        // on a Mac too)
+        let copy_keys = input.events.iter().any(|e| matches!(e, egui::Event::Copy))
+            || ((cmd || input.modifiers.ctrl) && input.key_pressed(Key::C));
         if self.sel.is_some() && self.phase == Phase::Adjusting {
-            if input.key_pressed(Key::Enter) || enter || (cmd && input.key_pressed(Key::C)) {
+            if input.key_pressed(Key::Enter) || enter || copy_keys {
                 return self.finish(Action::Copy, now);
             }
             if cmd && input.key_pressed(Key::S) {
@@ -704,6 +709,7 @@ impl OverlayApp {
                 self.sel = Some(t.translate(vec2(dx, dy)));
             }
         } else if input.key_pressed(Key::C)
+            && !copy_keys
             && let Some(p) = p
         {
             let px = self.snap.image.get_pixel(
@@ -1100,7 +1106,20 @@ impl OverlayApp {
 
         let side = cell * cells as f32;
         let pad = 4.0;
-        let outer = vec2(side + pad * 2.0, side + pad * 2.0 + 20.0);
+        // the caption: color, zoom and position on one line when they fit
+        // (Retina coordinates are long), the position on a second otherwise
+        let col = if cx >= 0 && cy >= 0 && (cx as u32) < img.width() && (cy as u32) < img.height() {
+            *img.get_pixel(cx as u32, cy as u32)
+        } else {
+            image::Rgba([0, 0, 0, 255])
+        };
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, Id::unique("loupe")));
+        let hex = painter.layout_no_wrap(format!("#{:02x}{:02x}{:02x}", col[0], col[1], col[2]), mono(11.0), TEXT);
+        let zoom = painter.layout_no_wrap(format!("×{:.0}", cell * ppp), mono(11.0), FAINT);
+        let coords = painter.layout_no_wrap(format!("{cx}, {cy}"), mono(11.0), FAINT);
+        let one_line = 15.0 + hex.size().x + 10.0 + coords.size().x + 10.0 + zoom.size().x <= side;
+        let caption_h = if one_line { 20.0 } else { 36.0 };
+        let outer = vec2(side + pad * 2.0, side + pad * 2.0 + caption_h);
         let mon = self.snap.monitor_at(cx, cy).rect;
         let mon_pt = Rect::from_min_max(
             pos2(mon.x as f32 / ppp, mon.y as f32 / ppp),
@@ -1114,7 +1133,6 @@ impl OverlayApp {
             pos.y = pt.y - 20.0 - outer.y;
         }
         let frame = Rect::from_min_size(pos, outer);
-        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, Id::unique("loupe")));
         painter.rect_filled(frame, 3, BG);
         painter.rect_stroke(frame, 3, Stroke::new(1.0, LINE), StrokeKind::Inside);
         let img_rect = Rect::from_min_size(pos + vec2(pad, pad), Vec2::splat(side));
@@ -1132,28 +1150,19 @@ impl OverlayApp {
         let c = Rect::from_min_size(img_rect.min + Vec2::splat(half as f32 * cell), Vec2::splat(cell));
         painter.rect_stroke(c, 0, Stroke::new(1.5, ACCENT), StrokeKind::Outside);
 
-        let col = if cx >= 0 && cy >= 0 && (cx as u32) < img.width() && (cy as u32) < img.height() {
-            *img.get_pixel(cx as u32, cy as u32)
-        } else {
-            image::Rgba([0, 0, 0, 255])
-        };
         let row_y = img_rect.bottom() + 11.0;
         let sw = Rect::from_center_size(pos2(img_rect.left() + 6.0, row_y), Vec2::splat(9.0));
         painter.rect_filled(sw, 0, Color32::from_rgb(col[0], col[1], col[2]));
-        painter.text(
-            pos2(sw.right() + 6.0, row_y),
-            Align2::LEFT_CENTER,
-            format!("#{:02x}{:02x}{:02x}", col[0], col[1], col[2]),
-            mono(11.0),
-            TEXT,
-        );
-        painter.text(
-            pos2(img_rect.right(), row_y),
-            Align2::RIGHT_CENTER,
-            format!("{cx},{cy}  ×{:.0}", cell * ppp),
-            mono(11.0),
-            FAINT,
-        );
+        painter.rect_stroke(sw, 0, Stroke::new(1.0, LINE), StrokeKind::Outside);
+        let h = hex.size().y;
+        painter.galley(pos2(sw.right() + 6.0, row_y - h / 2.0), hex, TEXT);
+        let zx = img_rect.right() - zoom.size().x;
+        painter.galley(pos2(zx, row_y - h / 2.0), zoom, FAINT);
+        if one_line {
+            painter.galley(pos2(zx - 10.0 - coords.size().x, row_y - h / 2.0), coords, FAINT);
+        } else {
+            painter.galley(pos2(img_rect.left(), row_y + 16.0 - h / 2.0), coords, FAINT);
+        }
     }
 
     /// Vertical icon toolbar to the right of the selection (left if no room).

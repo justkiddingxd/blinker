@@ -32,6 +32,22 @@ pub fn place_window_buttons(hwnd: crate::win::HWND, bar_h: f32) {
     let _ = (hwnd, bar_h);
 }
 
+/// macOS 26: the title bar of a `width` points wide window as a pane of
+/// glass floating at its top (the bar itself is drawn clear over it).
+pub fn glass_bar(hwnd: crate::win::HWND, width: f32, bar_h: f32) {
+    #[cfg(target_os = "macos")]
+    if crate::theme::glass() {
+        crate::win::window_glass(hwnd, (6.0, 5.0, width - 12.0, bar_h - 8.0), 14.0, 0x121211);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (hwnd, width, bar_h);
+}
+
+/// The fill of a title bar: clear over the glass pane, else the panel color.
+pub fn bar_fill() -> egui::Color32 {
+    if crate::theme::glass() { egui::Color32::TRANSPARENT } else { crate::theme::PANEL }
+}
+
 /// Room for the macOS window buttons at the start of a title bar.
 pub fn leading_space(ui: &mut Ui) {
     if cfg!(target_os = "macos") {

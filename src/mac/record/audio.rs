@@ -1,6 +1,6 @@
 //! Audio from ScreenCaptureKit: the desktop mix (everything playing, except
-//! blinker's own sounds) and the default microphone, each into its own
-//! track, as 48 kHz stereo 16-bit.
+//! blinker's own sounds) and the microphone (the chosen one, or the
+//! default), each into its own track, as 48 kHz stereo 16-bit.
 
 use super::encoder::{AUDIO_CHANNELS, AUDIO_RATE, HNS};
 use super::{AudioSink, Clock};
@@ -14,6 +14,24 @@ use std::sync::{Arc, Mutex};
 pub enum Source {
     Desktop,
     Mic,
+}
+
+/// Records from this microphone from now on (`""` = the system default).
+pub fn use_mic(id: &str) {
+    let c = ffi::cstr(id);
+    unsafe { ffi::bk_set_mic(c.as_ptr()) };
+}
+
+/// The microphones there are: (device id, name).
+pub fn mics() -> Vec<(String, String)> {
+    extern "C" fn add(ctx: *mut c_void, id: *const std::ffi::c_char, name: *const std::ffi::c_char) {
+        let out = unsafe { &mut *(ctx as *mut Vec<(String, String)>) };
+        let s = |p: *const std::ffi::c_char| unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned();
+        out.push((s(id), s(name)));
+    }
+    let mut out: Vec<(String, String)> = Vec::new();
+    unsafe { ffi::bk_mic_list(add, &mut out as *mut _ as *mut c_void) };
+    out
 }
 
 /// Whether a source can be recorded (the microphone needs macOS 15).

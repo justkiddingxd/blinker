@@ -139,9 +139,14 @@ unsafe extern "C" {
     pub fn bk_notify_token(name: *const c_char) -> c_int;
     pub fn bk_notify_check(token: c_int) -> c_int;
     pub fn bk_window_buttons_at(w: *mut c_void, x: f64, cy: f64);
+    pub fn bk_glass_available() -> c_int;
+    pub fn bk_window_glass(w: *mut c_void, x: f64, y: f64, width: f64, height: f64, radius: f64, bg: u32) -> c_int;
     pub fn bk_tray_create(rgba: *const u8, w: c_int, h: c_int, cb: TrayCb);
     pub fn bk_tray_remove();
+    pub fn bk_set_mic(id: *const c_char);
+    pub fn bk_mic_list(cb: extern "C" fn(ctx: *mut c_void, id: *const c_char, name: *const c_char), ctx: *mut c_void);
     pub fn bk_tray_set_double(on: c_int);
+    pub fn bk_tray_menu_close();
     pub fn bk_tray_set_image(rgba: *const u8, w: c_int, h: c_int, template: c_int, tip: *const c_char);
     pub fn bk_tray_protect();
     pub fn bk_tray_revive();

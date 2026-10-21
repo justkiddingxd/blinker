@@ -22,6 +22,9 @@ const SIZE: (f32, f32) = (820.0, 580.0);
 /// The strip at the top that drags the window (the window buttons sit in it).
 const TITLE_BAR_H: f32 = 48.0;
 const NAV_W: f32 = 204.0;
+/// How far the glass sidebar (macOS 26) stands off the window's edges.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const GLASS_INSET: f32 = 7.0;
 
 /// Tab requested by the tray for the next show (read when the event fires).
 pub fn request_file() -> std::path::PathBuf {
@@ -36,7 +39,9 @@ pub fn run(shared: &Arc<Shared>, tab: HomeTab) {
     let viewport = egui::ViewportBuilder::default()
         .with_title(TITLE)
         .with_icon(theme::icon_data(64))
-        .with_inner_size([SIZE.0, SIZE.1]);
+        .with_inner_size([SIZE.0, SIZE.1])
+        // Liquid Glass shows through what egui leaves clear
+        .with_transparent(theme::glass());
     let viewport = chrome::style(viewport);
     let shared2 = shared.clone();
     runtime::run_window(shared, viewport, true, move |cc| {
@@ -44,6 +49,12 @@ pub fn run(shared: &Arc<Shared>, tab: HomeTab) {
         if let Some(h) = hwnd {
             win::style_borderless(h);
             chrome::place_window_buttons(h, TITLE_BAR_H);
+            #[cfg(target_os = "macos")]
+            if theme::glass() {
+                // the sidebar: a glass pane floating in the window, like Finder's
+                let (x, y) = (GLASS_INSET, GLASS_INSET);
+                win::window_glass(h, (x, y, NAV_W - 2.0 * x, SIZE.1 - 2.0 * y), 16.0, 0x161615);
+            }
             win::cloak(h, true);
             win::force_foreground(h);
         }
@@ -60,7 +71,12 @@ pub fn run(shared: &Arc<Shared>, tab: HomeTab) {
             request,
             upload_test: None,
             cfg: shared2.config(),
-            update: crate::update::watch(&cc.egui_ctx),
+            update: {
+                let slot = Arc::new(Mutex::new(None));
+                crate::update::watch(&cc.egui_ctx, &slot);
+                slot
+            },
+            check: None,
             install: None,
             shared: shared2,
             tab,
@@ -73,6 +89,10 @@ pub fn run(shared: &Arc<Shared>, tab: HomeTab) {
             upload_mode: None,
             sharex: None,
             notes: None,
+            all_notes: None,
+            changelog_open: false,
+            mics: None,
+            ffmpeg_dl: None,
             shown: None,
             page_at: 0.0,
         }
@@ -164,6 +184,8 @@ struct HomeApp {
     update: Arc<Mutex<Option<String>>>,
     /// An update being installed (after "update blinker").
     install: Option<Arc<crate::update::Install>>,
+    /// "Check for updates" being asked or answered.
+    check: Option<Arc<Mutex<crate::update::Check>>>,
     content_rect: Rect,
     /// The replay length field, in minutes, as typed.
     replay_min: String,
@@ -172,7 +194,15 @@ struct HomeApp {
     /// ShareX settings on this computer (looked up once).
     sharex: Option<Option<crate::sharex::Source>>,
     /// This version's notes, read once.
-    notes: Option<Vec<(bool, String)>>,
+    notes: Option<Vec<Note>>,
+    /// Every version's notes, for the changelog.
+    all_notes: Option<Vec<Note>>,
+    /// The changelog is open (a click on the version).
+    changelog_open: bool,
+    /// The microphones there are (read when the page opens).
+    mics: Option<Vec<(String, String)>>,
+    /// ffmpeg being downloaded.
+    ffmpeg_dl: Option<Arc<crate::ffmpeg::Download>>,
     /// Page currently on screen and when it started appearing.
     shown: Option<HomeTab>,
     page_at: f64,
@@ -182,13 +212,20 @@ impl HomeApp {
     /// The sidebar, the whole height of the window: the window buttons and
     /// the name at the top, sections in groups, the version at the bottom.
     fn nav(&mut self, ui: &mut egui::Ui) {
+        let glass = theme::glass();
+        // on glass the sidebar is clear: the pane behind shows through
+        let fill = if glass { egui::Color32::TRANSPARENT } else { PANEL };
         egui::Panel::left("nav")
             .exact_size(NAV_W)
             .resizable(false)
-            .frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin { left: 10, right: 10, top: 0, bottom: 12 }))
+            // the glass pane is its own edge; the flat look draws its own line below
+            .show_separator_line(false)
+            .frame(egui::Frame::new().fill(fill).inner_margin(egui::Margin { left: 12, right: 12, top: 0, bottom: 14 }))
             .show(ui, |ui| {
                 let r = ui.max_rect();
-                ui.painter().vline(r.right() + 10.5, r.y_range().expand(12.0), Stroke::new(1.0, LINE_SOFT));
+                if !glass {
+                    ui.painter().vline(r.right() + 12.5, r.y_range().expand(14.0), Stroke::new(1.0, LINE_SOFT));
+                }
                 let top = Rect::from_min_size(pos2(r.left() - 10.0, r.top()), vec2(NAV_W, TITLE_BAR_H));
                 chrome::drag_region(ui, top);
                 // the name: in the title strip on Windows, under the window
@@ -263,9 +300,17 @@ impl HomeApp {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 ui.add_space(8.0);
-                let version = ui.painter().layout_no_wrap(format!("blinker {}", crate::update::current()), mono(10.5), FAINT);
-                let (rect, _) = ui.allocate_exact_size(version.size(), Sense::hover());
-                ui.painter().galley(rect.min, version, FAINT);
+                // the version opens the changelog
+                let version = ui.painter().layout_no_wrap(format!("blinker {}", crate::update::current()), mono(10.5), egui::Color32::PLACEHOLDER);
+                let (rect, resp) = ui.allocate_exact_size(version.size(), Sense::click());
+                let col = if resp.hovered() { TEXT } else { FAINT };
+                ui.painter().galley(rect.min, version, col);
+                if resp.hovered() {
+                    ui.painter().hline(rect.x_range(), rect.bottom() + 0.5, Stroke::new(1.0, col));
+                }
+                if resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(l("история версий", "release notes")).clicked() {
+                    self.changelog_open = true;
+                }
                 let g = ui.painter().layout_no_wrap("github".into(), mono(10.5), egui::Color32::PLACEHOLDER);
                 let (rect, resp) = ui.allocate_exact_size(g.size(), Sense::click());
                 let col = if resp.hovered() { TEXT } else { DIM };
@@ -275,6 +320,26 @@ impl HomeApp {
                 }
                 if resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(crate::update::REPO_URL).clicked() {
                     win::open_url(crate::update::REPO_URL);
+                }
+                // check for updates: a small arrow, the answer in its tip
+                use crate::update::Check;
+                let state = self.check.as_ref().map(|c| c.lock().unwrap().clone());
+                let tip = match &state {
+                    Some(Check::Asking) => l("проверяю…", "checking…").to_string(),
+                    Some(Check::Latest) => l("это последняя версия", "this is the latest version").to_string(),
+                    Some(Check::Newer(v)) => lf!("вышла версия {v}", "version {v} is out"),
+                    Some(Check::Failed(e)) => lf!("не проверилось: {e}", "the check failed: {e}"),
+                    None => l("проверить обновления", "check for updates").to_string(),
+                };
+                let (rect, resp) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::click());
+                let col = match state {
+                    Some(Check::Asking) => FAINT.gamma_multiply(0.6),
+                    _ if resp.hovered() => TEXT,
+                    _ => FAINT,
+                };
+                icons::paint(ui.painter(), rect, Icon::Repeat, 12.0, col);
+                if resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(tip).clicked() && state != Some(Check::Asking) {
+                    self.check = Some(crate::update::check_now(ui.ctx(), &self.update));
                 }
             });
             use crate::update::Stage;
@@ -467,6 +532,9 @@ impl HomeApp {
             ui::setting_row(ui, t("микрофон"), t("дорожка 2"), |ui| {
                 ui::toggle(ui, &mut self.cfg.rec_mic);
             });
+            if self.cfg.rec_mic {
+                self.mic_row(ui);
+            }
         });
 
         ui::group(ui, l("в кадре", "on screen"), |ui| {
@@ -517,7 +585,16 @@ impl HomeApp {
                     }
                 }
             });
-            ui::setting_row(ui, t("чем сжимается"), &crate::reencode::engine_label(self.cfg.tg_mode), |_| {});
+            if crate::ffmpeg::find().is_some() {
+                ui::setting_row(ui, t("чем сжимается"), &crate::reencode::engine_label(self.cfg.tg_mode), |_| {});
+            } else {
+                // without ffmpeg it still works, with it the file comes out better
+                let desc = l(
+                    "сейчас встроенным кодировщиком. с ffmpeg видео сжимается лучше и быстрее",
+                    "the built-in encoder for now. with ffmpeg videos come out better and faster",
+                );
+                self.ffmpeg_row(ui, t("чем сжимается"), desc);
+            }
             ui::setting_row(
                 ui,
                 t("сжимать каждую запись"),
@@ -584,8 +661,35 @@ impl HomeApp {
                 ui::setting_row(ui, t("микрофон"), t("микрофон будет записываться всё время"), |ui| {
                     ui::toggle(ui, &mut self.cfg.replay_mic);
                 });
+                if self.cfg.replay_mic {
+                    self.mic_row(ui);
+                }
             });
         }
+    }
+
+    /// Which microphone (records and the replay use the same one).
+    fn mic_row(&mut self, ui: &mut egui::Ui) {
+        let mics = self.mics.get_or_insert_with(crate::record::audio::mics).clone();
+        let default = l("как в системе", "system default");
+        let current = mics.iter().find(|(id, _)| *id == self.cfg.mic_device).map(|(_, n)| n.clone());
+        let shown = match (&current, self.cfg.mic_device.is_empty()) {
+            (_, true) => default.to_string(),
+            (Some(n), _) => n.clone(),
+            (None, false) => l("отключён, пишет микрофон системы", "unplugged, the default one records").to_string(),
+        };
+        ui::setting_row(ui, l("какой микрофон", "which microphone"), "", |ui| {
+            egui::ComboBox::from_id_salt(("mic", ui.scope_id()))
+                .selected_text(egui::RichText::new(&shown).font(font(12.5)).color(TEXT))
+                .width(220.0)
+                .height(400.0)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.cfg.mic_device, String::new(), egui::RichText::new(default).font(font(12.5)));
+                    for (id, name) in &mics {
+                        ui.selectable_value(&mut self.cfg.mic_device, id.clone(), egui::RichText::new(name).font(font(12.5)));
+                    }
+                });
+        });
     }
 
     fn upload_page(&mut self, ui: &mut egui::Ui) {
@@ -675,6 +779,18 @@ impl HomeApp {
             ui::setting_row(ui, t("загружать каждый снимок"), t("в буфер попадёт ссылка вместо файла"), |ui| {
                 ui::toggle(ui, &mut self.cfg.upload_auto);
             });
+            ui::setting_row(
+                ui,
+                l("мои загрузки", "my uploads"),
+                l("ссылки, сколько им жить, удаление с сервера", "the links, how long they live, deleting from the server"),
+                |ui| {
+                    if ui::button(ui, l("открыть", "open"), ui::Kind::Ghost).clicked()
+                        && let Ok(exe) = std::env::current_exe()
+                    {
+                        let _ = std::process::Command::new(exe).args(["--history", "uploads"]).spawn();
+                    }
+                },
+            );
         });
         ui.add_space(16.0);
         let note = match (mode, self.cfg.upload_custom.is_some()) {
@@ -945,6 +1061,67 @@ impl HomeApp {
         self.poll_recorder(&ctx);
     }
 
+    /// ffmpeg: where it is, or a way to get it (a download in one click).
+    fn ffmpeg_row(&mut self, ui: &mut egui::Ui, title: &str, missing: &str) {
+        let found = crate::ffmpeg::find();
+        if let Some(job) = &self.ffmpeg_dl
+            && let Some(r) = job.result()
+        {
+            self.notice = Some(Notice::new(
+                ui.ctx(),
+                match r {
+                    Ok(_) => l("ffmpeg скачан", "ffmpeg is downloaded").to_string(),
+                    Err(e) => lf!("ffmpeg не скачался: {e}", "ffmpeg didn't download: {e}"),
+                },
+            ));
+            self.ffmpeg_dl = None;
+        }
+        let downloading = self.ffmpeg_dl.as_ref().map(|j| j.fraction());
+        let desc = match (&found, downloading) {
+            (_, Some(f)) => lf!("скачиваю {:.0}%", "downloading {:.0}%", f * 100.0),
+            (Some(p), None) => p.display().to_string(),
+            (None, None) => missing.to_string(),
+        };
+        let mut pick = false;
+        let mut auto = false;
+        let mut get = false;
+        ui::setting_row(ui, title, &desc, |ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.add_enabled_ui(downloading.is_none(), |ui| {
+                if found.is_none() {
+                    get = ui::button(ui, l("скачать", "download"), ui::Kind::Accent).on_hover_text(l("около 20–30 мб, в папку blinker", "about 20–30 mb, into blinker's folder")).clicked();
+                }
+                pick = ui::button(ui, l("папка…", "folder…"), ui::Kind::Ghost).clicked();
+                if !self.cfg.ffmpeg_dir.is_empty() {
+                    auto = ui::button(ui, l("искать само", "find it"), ui::Kind::Ghost).on_hover_text(l("забыть выбранную папку и найти ffmpeg самому", "forget the chosen folder and look for ffmpeg")).clicked();
+                }
+            });
+        });
+        if downloading.is_some() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
+        }
+        if get {
+            let ctx = ui.ctx().clone();
+            self.ffmpeg_dl = Some(crate::ffmpeg::download(move || ctx.request_repaint()));
+        }
+        if pick && let Some(d) = rfd::FileDialog::new().set_title(l("папка с ffmpeg", "the ffmpeg folder")).pick_folder() {
+            let exe = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+            // a "bin" inside is where ffmpeg usually is
+            let dir = if !d.join(exe).is_file() && d.join("bin").join(exe).is_file() { d.join("bin") } else { d };
+            if dir.join(exe).is_file() {
+                self.cfg.ffmpeg_dir = dir.display().to_string();
+            } else {
+                self.notice = Some(Notice::new(ui.ctx(), lf!("в этой папке нет {exe}", "there's no {exe} in this folder")));
+            }
+        }
+        if auto {
+            self.cfg.ffmpeg_dir.clear();
+        }
+        if pick || auto || get {
+            crate::ffmpeg::forget();
+        }
+    }
+
     fn sharex_group(&mut self, ui: &mut egui::Ui, found: Option<crate::sharex::Source>) {
         ui::group(ui, l("переезд с sharex", "moving from sharex"), |ui| {
             let desc = match &found {
@@ -1008,6 +1185,51 @@ impl HomeApp {
             ui::setting_row(ui, title, "", |ui| {
                 ui::toggle(ui, &mut self.cfg.autostart);
             });
+        });
+        ui::group(ui, "discord", |ui| {
+            ui::setting_row(
+                ui,
+                l("статус в discord", "discord status"),
+                l("«clipping with blinker» с логотипом и кнопкой на blinker.cool, пока blinker запущен", "“clipping with blinker” with the logo and a blinker.cool button while blinker runs"),
+                |ui| {
+                    ui::toggle(ui, &mut self.cfg.discord_presence);
+                },
+            );
+        });
+        ui::group(ui, "ffmpeg", |ui| {
+            let missing = l(
+                "не найден. blinker работает и без него, а с ним лучше сжимает для telegram",
+                "not found. blinker works without it, with it compressing for telegram is better",
+            );
+            self.ffmpeg_row(ui, l("папка ffmpeg", "ffmpeg folder"), missing);
+        });
+        ui::group(ui, l("обновления", "updates"), |ui| {
+            let newer = self.update.lock().unwrap().clone();
+            let state = self.check.as_ref().map(|c| c.lock().unwrap().clone());
+            use crate::update::Check;
+            let desc = match (&state, &newer) {
+                (Some(Check::Asking), _) => l("проверяю…", "checking…").to_string(),
+                (_, Some(v)) => lf!("вышла версия {v}", "version {v} is out"),
+                (Some(Check::Failed(e)), _) => lf!("не проверилось: {e}", "the check failed: {e}"),
+                (Some(Check::Latest), _) => lf!("у тебя последняя версия, {}", "you have the latest version, {}", crate::update::current()),
+                _ => lf!("сейчас стоит {}", "this is {}", crate::update::current()),
+            };
+            let busy = matches!(state, Some(Check::Asking)) || self.install.is_some();
+            let mut install = false;
+            ui::setting_row(ui, l("проверить обновление", "check for an update"), &desc, |ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                ui.add_enabled_ui(!busy, |ui| {
+                    if newer.is_some() {
+                        install = ui::button(ui, l("обновить", "update"), ui::Kind::Accent).clicked();
+                    }
+                    if ui::button(ui, l("проверить", "check"), ui::Kind::Ghost).clicked() {
+                        self.check = Some(crate::update::check_now(ui.ctx(), &self.update));
+                    }
+                });
+            });
+            if install {
+                self.install = Some(crate::update::install(ui.ctx()));
+            }
             ui::setting_row(
                 ui,
                 l("обновляться самому", "update by itself"),
@@ -1018,11 +1240,13 @@ impl HomeApp {
             );
         });
         ui::group(ui, l("значок в трее", "tray icon"), |ui| {
-            for (title, id, value) in [
-                (l("левый клик", "left click"), "tray-left", &mut self.cfg.tray_click),
-                (l("двойной клик", "double click"), "tray-double", &mut self.cfg.tray_double_click),
-                (l("правый клик", "right click"), "tray-right", &mut self.cfg.tray_right_click),
-            ] {
+            // a Mac menu bar icon has no double click: the first click opens its menu
+            let mut rows = vec![(l("левый клик", "left click"), "tray-left", &mut self.cfg.tray_click)];
+            if !cfg!(target_os = "macos") {
+                rows.push((l("двойной клик", "double click"), "tray-double", &mut self.cfg.tray_double_click));
+            }
+            rows.push((l("правый клик", "right click"), "tray-right", &mut self.cfg.tray_right_click));
+            for (title, id, value) in rows {
                 ui::setting_row(ui, title, "", |ui| {
                     egui::ComboBox::from_id_salt(id)
                         .selected_text(egui::RichText::new(value.label()).font(font(12.5)).color(TEXT))
@@ -1060,19 +1284,28 @@ impl HomeApp {
     }
 
     /// After an update: what the new version brings, once, over the settings.
+    /// And the whole changelog after a click on the version.
     fn whats_new(&mut self, ctx: &egui::Context) {
         let version = crate::update::current();
-        if self.cfg.seen_version == version {
+        let fresh = self.cfg.seen_version != version;
+        if !fresh && !self.changelog_open {
             return;
         }
-        let notes = self.notes.get_or_insert_with(whats_new).clone();
+        let (title, notes) = if fresh {
+            (l("что нового", "what's new"), self.notes.get_or_insert_with(whats_new).clone())
+        } else {
+            (l("история версий", "release notes"), self.all_notes.get_or_insert_with(changelog).clone())
+        };
         let mut close = notes.is_empty();
         if !close {
             let screen = ctx.content_rect();
             egui::Area::new(egui::Id::unique("whats-new-shade")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
                 let (r, resp) = ui.allocate_exact_size(screen.size(), Sense::click());
                 ui.painter().rect_filled(r, 0, egui::Color32::from_black_alpha(150));
-                let _ = resp;
+                // a click beside the card closes it
+                if resp.clicked() {
+                    close = true;
+                }
             });
             let w = 500f32.min(screen.width() - 60.0);
             let h = 440f32.min(screen.height() - 60.0);
@@ -1091,7 +1324,7 @@ impl HomeApp {
                             ui.add_space(4.0);
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 0.0;
-                                ui.label(egui::RichText::new(l("что нового", "what's new")).font(font_semibold(19.0)).color(TEXT));
+                                ui.label(egui::RichText::new(title).font(font_semibold(19.0)).color(TEXT));
                                 ui.label(egui::RichText::new(format!("blinker {version}")).font(mono(11.5)).color(FAINT));
                             });
                         });
@@ -1099,17 +1332,29 @@ impl HomeApp {
                         let button_h = 34.0 + 14.0;
                         egui::ScrollArea::vertical().max_height(ui.available_height() - button_h).auto_shrink([false, true]).show(ui, |ui| {
                             ui.spacing_mut().item_spacing.y = 6.0;
-                            for (heading, text) in &notes {
-                                if *heading {
-                                    ui.add_space(8.0);
-                                    ui.label(egui::RichText::new(text).font(font_medium(13.5)).color(TEXT));
-                                } else {
-                                    ui.horizontal_top(|ui| {
-                                        ui.spacing_mut().item_spacing.x = 8.0;
-                                        let (dot, _) = ui.allocate_exact_size(vec2(6.0, 18.0), Sense::hover());
-                                        ui.painter().circle_filled(pos2(dot.center().x, dot.top() + 9.0), 2.0, FAINT);
-                                        ui.add(egui::Label::new(egui::RichText::new(text).font(font(13.0)).color(TEXT2)).wrap());
-                                    });
+                            for (i, note) in notes.iter().enumerate() {
+                                match note {
+                                    Note::Version(v) => {
+                                        if i > 0 {
+                                            ui.add_space(14.0);
+                                            let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+                                            ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, LINE));
+                                            ui.add_space(6.0);
+                                        }
+                                        ui.label(egui::RichText::new(v).font(mono(12.5)).color(ACCENT));
+                                    }
+                                    Note::Heading(text) => {
+                                        ui.add_space(8.0);
+                                        ui.label(egui::RichText::new(text).font(font_medium(13.5)).color(TEXT));
+                                    }
+                                    Note::Item(text) => {
+                                        ui.horizontal_top(|ui| {
+                                            ui.spacing_mut().item_spacing.x = 8.0;
+                                            let (dot, _) = ui.allocate_exact_size(vec2(6.0, 18.0), Sense::hover());
+                                            ui.painter().circle_filled(pos2(dot.center().x, dot.top() + 9.0), 2.0, FAINT);
+                                            ui.add(egui::Label::new(egui::RichText::new(text).font(font(13.0)).color(TEXT2)).wrap());
+                                        });
+                                    }
                                 }
                             }
                         });
@@ -1126,9 +1371,12 @@ impl HomeApp {
             }
         }
         if close {
-            self.cfg.seen_version = version.to_string();
-            let v = version.to_string();
-            self.shared.update_config(|c| c.seen_version = v);
+            self.changelog_open = false;
+            if fresh {
+                self.cfg.seen_version = version.to_string();
+                let v = version.to_string();
+                self.shared.update_config(|c| c.seen_version = v);
+            }
         }
     }
 
@@ -1231,24 +1479,54 @@ fn brand_mark(ui: &mut egui::Ui, size: f32) {
     ui.painter().image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
 }
 
-/// The release notes of this version, from CHANGELOG.md (built in): the
-/// Russian half or the English one, as (is a heading, text) lines.
-fn whats_new() -> Vec<(bool, String)> {
-    const LOG: &str = include_str!("../CHANGELOG.md");
-    let head = format!("## {}", crate::update::current());
-    let Some(start) = LOG.lines().position(|l| l.trim() == head) else { return Vec::new() };
-    let section: Vec<&str> = LOG.lines().skip(start + 1).take_while(|l| !l.starts_with("## ")).collect();
-    let halves: Vec<&[&str]> = section.split(|l| l.trim() == "---").collect();
+/// A line of release notes.
+#[derive(Clone, PartialEq)]
+enum Note {
+    /// "blinker 0.3.0"
+    Version(String),
+    Heading(String),
+    Item(String),
+}
+
+const CHANGELOG: &str = include_str!("../CHANGELOG.md");
+
+/// One version's section of CHANGELOG.md (built in): its Russian half or
+/// its English one.
+fn section_notes(lines: &[&str]) -> Vec<Note> {
+    let halves: Vec<&[&str]> = lines.split(|l| l.trim() == "---").collect();
     let ru = crate::i18n::l("ru", "en") == "ru";
     let half = if ru || halves.len() < 2 { halves[0] } else { halves[1] };
     half.iter()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty())
-        .map(|l| {
-            let heading = l.starts_with("**") && l.ends_with("**");
-            (heading, plain(l.trim_start_matches("- ")))
-        })
+        .map(|l| if l.starts_with("**") && l.ends_with("**") { Note::Heading(plain(l)) } else { Note::Item(plain(l.trim_start_matches("- "))) })
         .collect()
+}
+
+/// The notes of this version.
+fn whats_new() -> Vec<Note> {
+    let head = format!("## {}", crate::update::current());
+    let Some(start) = CHANGELOG.lines().position(|l| l.trim() == head) else { return Vec::new() };
+    let section: Vec<&str> = CHANGELOG.lines().skip(start + 1).take_while(|l| !l.starts_with("## ")).collect();
+    section_notes(&section)
+}
+
+/// Every version, newest first.
+fn changelog() -> Vec<Note> {
+    let mut out = Vec::new();
+    let lines: Vec<&str> = CHANGELOG.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        if let Some(v) = lines[i].strip_prefix("## ") {
+            let end = lines[i + 1..].iter().position(|l| l.starts_with("## ")).map(|p| i + 1 + p).unwrap_or(lines.len());
+            out.push(Note::Version(format!("blinker {}", v.trim())));
+            out.extend(section_notes(&lines[i + 1..end]));
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    out
 }
 
 /// Markdown down to text: no `**`, no backticks, [links](…) as their words.
@@ -1395,7 +1673,7 @@ fn dashed(r: Rect) -> Vec<egui::Pos2> {
 
 impl eframe::App for HomeApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        BG.to_normalized_gamma_f32()
+        if theme::glass() { [0.0; 4] } else { BG.to_normalized_gamma_f32() }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1407,6 +1685,9 @@ impl eframe::App for HomeApp {
             if self.hidden.swap(false, Ordering::SeqCst) {
                 self.frame_no = 0;
                 self.shown = None;
+                crate::update::watch(&ctx, &self.update);
+                self.check = None;
+                self.mics = None;
             } else if let Some(h) = self.hwnd {
                 win::force_foreground(h);
             }

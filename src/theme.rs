@@ -132,6 +132,19 @@ pub fn apply(ctx: &egui::Context) {
     });
 }
 
+/// Liquid Glass panes (macOS 26) instead of flat panels.
+pub fn glass() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        static GLASS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *GLASS.get_or_init(crate::win::glass_available)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
 pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     let t = t.clamp(0.0, 1.0);
     let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
@@ -284,7 +297,41 @@ mod tests {
     #[test]
     fn logo_png() {
         let Ok(out) = std::env::var("BLINKER_TEST_LOGO") else { return };
-        super::logo(256).save(out).unwrap();
+        let size = std::env::var("BLINKER_TEST_LOGO_SIZE").ok().and_then(|v| v.parse().ok()).unwrap_or(256);
+        super::logo(size).save(out).unwrap();
+    }
+
+    /// The Windows icon: `BLINKER_TEST_ICO` = the .ico to write (PNG images
+    /// of the logo tile, 16 to 256 px).
+    #[test]
+    fn windows_ico() {
+        let Ok(out) = std::env::var("BLINKER_TEST_ICO") else { return };
+        let sizes = [16u32, 20, 24, 32, 40, 48, 64, 96, 128, 256];
+        let pngs: Vec<Vec<u8>> = sizes
+            .iter()
+            .map(|&s| {
+                let mut v = Vec::new();
+                super::logo(s).write_to(&mut std::io::Cursor::new(&mut v), image::ImageFormat::Png).unwrap();
+                v
+            })
+            .collect();
+        let mut ico = Vec::new();
+        ico.extend_from_slice(&[0, 0, 1, 0]);
+        ico.extend_from_slice(&(sizes.len() as u16).to_le_bytes());
+        let mut offset = 6 + 16 * sizes.len() as u32;
+        for (s, png) in sizes.iter().zip(&pngs) {
+            let d = if *s >= 256 { 0 } else { *s as u8 };
+            ico.extend_from_slice(&[d, d, 0, 0]);
+            ico.extend_from_slice(&1u16.to_le_bytes());
+            ico.extend_from_slice(&32u16.to_le_bytes());
+            ico.extend_from_slice(&(png.len() as u32).to_le_bytes());
+            ico.extend_from_slice(&offset.to_le_bytes());
+            offset += png.len() as u32;
+        }
+        for png in &pngs {
+            ico.extend_from_slice(png);
+        }
+        std::fs::write(out, ico).unwrap();
     }
 
     /// The macOS icon set: `BLINKER_TEST_ICONSET` = a `.iconset` folder (then

@@ -332,6 +332,8 @@ pub struct Config {
     pub tray_double_click: TrayAction,
     /// Install new versions by itself (in the background, then restart).
     pub auto_update: bool,
+    /// "Clipping with blinker" on the Discord profile.
+    pub discord_presence: bool,
     /// The version whose "what's new" was seen; another one shows it again.
     pub seen_version: String,
     /// Frames per second; 0 = the monitor's refresh rate.
@@ -342,6 +344,8 @@ pub struct Config {
     pub rec_desktop_audio: bool,
     /// Microphone into track 2.
     pub rec_mic: bool,
+    /// Which microphone (device id); empty = the system default.
+    pub mic_device: String,
     pub rec_cursor: bool,
     /// Open the video editor as soon as a recording stops.
     pub rec_open_editor: bool,
@@ -377,6 +381,8 @@ pub struct Config {
     pub gif_fps: u32,
     /// Re-encode every finished recording for Telegram right away.
     pub tg_auto: bool,
+    /// Where ffmpeg is (its folder or the file); empty = found by itself.
+    pub ffmpeg_dir: String,
 }
 
 impl Default for Config {
@@ -419,12 +425,14 @@ impl Default for Config {
             tray_right_click: if cfg!(target_os = "macos") { TrayAction::Region } else { TrayAction::Menu },
             tray_double_click: TrayAction::Nothing,
             auto_update: false,
+            discord_presence: false,
             seen_version: String::new(),
             rec_fps: 60,
             rec_codec: VideoCodec::H264,
             rec_quality: RecQuality::Balanced,
             rec_desktop_audio: true,
             rec_mic: true,
+            mic_device: String::new(),
             rec_cursor: true,
             rec_open_editor: false,
             rec_show_clicks: false,
@@ -446,6 +454,7 @@ impl Default for Config {
             gif_width: 800,
             gif_fps: 15,
             tg_auto: false,
+            ffmpeg_dir: String::new(),
         }
     }
 }

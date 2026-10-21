@@ -100,6 +100,11 @@ pub fn run(
             win::disable_transitions(h);
             win::no_dwm_border(h);
             win::cloak(h, true);
+            // macOS 26: the card is a pane of glass over the desktop
+            #[cfg(target_os = "macos")]
+            if theme::glass() {
+                win::window_glass(h, (0.0, 0.0, window.x, window.y), RADIUS as f32, 0);
+            }
         }
         let tex = cc.egui_ctx.load_texture("toast-thumb", theme::color_image(&thumb), egui::TextureOptions::LINEAR);
         let mut app = ToastApp {
@@ -344,8 +349,10 @@ impl eframe::App for ToastApp {
         let hover_t = ctx.animate_bool_with_time(egui::Id::unique("toast-hover"), hovered, 0.14);
 
         let painter = ui.painter().clone();
-        painter.rect_filled(card, RADIUS, PANEL.gamma_multiply(alpha));
-        painter.rect_stroke(card, RADIUS, Stroke::new(1.0, LINE.gamma_multiply(alpha)), StrokeKind::Inside);
+        // on glass only a dark tint, so the text stays readable
+        let (fill, edge) = if theme::glass() { (PANEL.gamma_multiply(0.45 * alpha), Color32::TRANSPARENT) } else { (PANEL.gamma_multiply(alpha), LINE.gamma_multiply(alpha)) };
+        painter.rect_filled(card, RADIUS, fill);
+        painter.rect_stroke(card, RADIUS, Stroke::new(1.0, edge), StrokeKind::Inside);
 
         // preview (drag = file, click = edit)
         let img_resp = ui.interact(img_rect, ui.scope_id().with("img"), Sense::click_and_drag());

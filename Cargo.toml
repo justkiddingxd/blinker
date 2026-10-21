@@ -1,6 +1,6 @@
 [package]
 name = "blinker"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 description = "Fast, quiet screenshot and screen recording tool for Windows and macOS"
 license = "GPL-3.0-only"
@@ -21,6 +21,8 @@ rfd = "0.17.2"
 rodio = { version = "0.23.0", default-features = false, features = ["playback", "wav", "mp3", "vorbis", "flac"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.145"
+# unpacks the downloaded ffmpeg (.gz)
+flate2 = "1.1.10"
 tiny-skia = "0.12.0"
 toml = "1.1.8"
 # ShareX settings backups (.sxb) are zip files
@@ -53,6 +55,8 @@ windows = { version = "0.62.2", features = [
     "Win32_System_WinRT_Direct3D11",
     "Win32_System_WinRT_Graphics",
     "Win32_System_WinRT_Graphics_Capture",
+    "Win32_Storage_FileSystem",
+    "Win32_UI_Shell",
     "Win32_UI_Shell_PropertiesSystem",
 ] }
 windows-numerics = "0.3.1"
@@ -77,6 +81,8 @@ windows-sys = { version = "0.61.2", features = [
 [build-dependencies]
 # compiles the Objective-C layer of the macOS build (unused on Windows)
 cc = "1.2.30"
+# the icon and version info of blinker.exe
+embed-resource = "3.0.12"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # the same winit eframe uses: macOS event loop options (activation policy, menu)

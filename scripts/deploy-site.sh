@@ -9,6 +9,6 @@ set -eu
 cd "$(dirname "$0")/.."
 
 HOST=${1:?usage: deploy-site.sh user@server}
-rsync -rltz --delete --exclude .DS_Store site/ "$HOST:/var/www/blinker.cool/site/"
+rsync -rltz --delete --exclude .DS_Store --exclude version.json site/ "$HOST:/var/www/blinker.cool/site/"
 ssh "$HOST" 'chown -R blinker-deploy:blinker-deploy /var/www/blinker.cool/site && chmod -R u=rwX,go=rX /var/www/blinker.cool/site'
 echo "deployed site/ to $HOST"

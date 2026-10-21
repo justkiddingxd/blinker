@@ -93,6 +93,11 @@ struct Meta {
     #[serde(default)]
     markers: Vec<Marker>,
     delete_token: String,
+    /// Pixels of an image (for the previews in messengers).
+    #[serde(default)]
+    width: u32,
+    #[serde(default)]
+    height: u32,
 }
 
 struct App {
@@ -142,6 +147,47 @@ fn sniff(b: &[u8]) -> Option<(&'static str, &'static str, &'static str)> {
     } else {
         return None;
     })
+}
+
+/// Width and height of a PNG, GIF, JPEG or WebP from its header.
+fn image_size(b: &[u8]) -> Option<(u32, u32)> {
+    let be16 = |i: usize| Some(u16::from_be_bytes([*b.get(i)?, *b.get(i + 1)?]) as u32);
+    let le16 = |i: usize| Some(u16::from_le_bytes([*b.get(i)?, *b.get(i + 1)?]) as u32);
+    let be32 = |i: usize| Some(u32::from_be_bytes([*b.get(i)?, *b.get(i + 1)?, *b.get(i + 2)?, *b.get(i + 3)?]));
+    let le24 = |i: usize| Some(*b.get(i)? as u32 | (*b.get(i + 1)? as u32) << 8 | (*b.get(i + 2)? as u32) << 16);
+    if b.starts_with(b"\x89PNG") {
+        return Some((be32(16)?, be32(20)?));
+    }
+    if b.starts_with(b"GIF8") {
+        return Some((le16(6)?, le16(8)?));
+    }
+    if b.len() > 30 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" {
+        return match &b[12..16] {
+            b"VP8 " => Some((le16(26)? & 0x3FFF, le16(28)? & 0x3FFF)),
+            b"VP8L" => {
+                let v = u32::from_le_bytes([b[21], b[22], b[23], b[24]]);
+                Some(((v & 0x3FFF) + 1, ((v >> 14) & 0x3FFF) + 1))
+            }
+            b"VP8X" => Some((le24(24)? + 1, le24(27)? + 1)),
+            _ => None,
+        };
+    }
+    if b.starts_with(b"\xFF\xD8") {
+        // walk the segments to the frame header (SOF0..SOF15 but DHT, JPG, DAC)
+        let mut i = 2;
+        while i + 9 < b.len() {
+            if b[i] != 0xFF {
+                return None;
+            }
+            let m = b[i + 1];
+            let len = be16(i + 2)? as usize;
+            if (0xC0..=0xCF).contains(&m) && ![0xC4, 0xC8, 0xCC].contains(&m) {
+                return Some((be16(i + 7)?, be16(i + 5)?));
+            }
+            i += 2 + len;
+        }
+    }
+    None
 }
 
 fn percent_decode(s: &str) -> String {
@@ -232,6 +278,7 @@ async fn upload(State(app): State<Arc<App>>, ConnectInfo(addr): ConnectInfo<Sock
 
     let id = random_id(10);
     let created = now();
+    let (width, height) = if kind == "image" { image_size(&body).unwrap_or((0, 0)) } else { (0, 0) };
     let meta = Meta {
         id: id.clone(),
         name: clean_name(&raw_name, ext),
@@ -243,6 +290,8 @@ async fn upload(State(app): State<Arc<App>>, ConnectInfo(addr): ConnectInfo<Sock
         expires: created + app.s.ttl,
         markers,
         delete_token: random_id(24),
+        width,
+        height,
     };
     let file = app.s.data.join(format!("{id}.{ext}"));
     if let Err(e) = tokio::fs::write(&file, &body).await {
@@ -288,9 +337,19 @@ async fn page(State(app): State<Arc<App>>, Path(id): Path<String>) -> Response {
     let base = &app.s.public_url;
     let raw = format!("{base}/f/{}.{}", meta.id, meta.ext);
     let og = match meta.kind.as_str() {
-        "image" => format!(
-            r#"<meta property="og:image" content="{raw}"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="{raw}">"#
-        ),
+        // the picture's size: with it Telegram and the like show it whole
+        // and large instead of a small square
+        "image" => {
+            let size = if meta.width > 0 && meta.height > 0 {
+                format!(r#"<meta property="og:image:width" content="{}"><meta property="og:image:height" content="{}">"#, meta.width, meta.height)
+            } else {
+                String::new()
+            };
+            format!(
+                r#"<meta property="og:type" content="website"><meta property="og:image" content="{raw}"><meta property="og:image:secure_url" content="{raw}"><meta property="og:image:type" content="{}">{size}<meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="{raw}">"#,
+                meta.mime
+            )
+        }
         "video" => format!(
             r#"<meta property="og:type" content="video.other"><meta property="og:video" content="{raw}"><meta property="og:video:secure_url" content="{raw}"><meta property="og:video:type" content="video/mp4"><meta name="twitter:card" content="player">"#
         ),
@@ -499,6 +558,16 @@ mod tests {
         assert_eq!(sniff(b"\0\0\0 ftypM4A ").map(|t| t.2), Some("m4a"));
         assert_eq!(sniff(b"ID3\x04").map(|t| t.2), Some("mp3"));
         assert_eq!(sniff(b"<html>"), None);
+    }
+
+    #[test]
+    fn sizes() {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend_from_slice(&840u32.to_be_bytes());
+        png.extend_from_slice(&636u32.to_be_bytes());
+        assert_eq!(image_size(&png), Some((840, 636)));
+        assert_eq!(image_size(b"GIF89a\x20\x03\x58\x02"), Some((800, 600)));
+        assert_eq!(image_size(b"<html>"), None);
     }
 
     #[test]

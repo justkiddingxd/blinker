@@ -102,8 +102,8 @@ fn command_of(a: HotkeyAction) -> Command {
 fn register(shared: &Shared) {
     unregister();
     let cfg = shared.config();
-    // the icon waits for a second click only when one means something
-    unsafe { ffi::bk_tray_set_double((cfg.tray_double_click != TrayAction::Nothing) as i32) };
+    // no double click on a Mac (see the settings): a click acts at once
+    unsafe { ffi::bk_tray_set_double(0) };
     let mut failed = std::collections::HashSet::new();
     let mut ids = HOTKEYS.lock().unwrap();
     let mut next = 1u32;
@@ -133,6 +133,9 @@ fn unregister() {
 extern "C" fn on_hotkey(id: u32) {
     let action = HOTKEYS.lock().unwrap().iter().find(|(i, _)| *i == id).map(|(_, a)| *a);
     if let (Some(a), Some(s)) = (action, shared()) {
+        // the menu bar menu holds the main thread while it's open: close it
+        // so the capture can start
+        unsafe { ffi::bk_tray_menu_close() };
         s.push(command_of(a));
     }
 }
@@ -171,11 +174,8 @@ pub fn tray_state_changed(shared: &Shared) {
 extern "C" fn on_tray(right: i32, clicks: i32) {
     let Some(s) = shared() else { return };
     let cfg = s.config();
-    let action = match (right != 0, clicks >= 2) {
-        (true, _) => cfg.tray_right_click,
-        (false, true) => cfg.tray_double_click,
-        (false, false) => cfg.tray_click,
-    };
+    let _ = clicks;
+    let action = if right != 0 { cfg.tray_right_click } else { cfg.tray_click };
     tray_action(s, action);
 }
 
@@ -243,6 +243,7 @@ fn show_menu(shared: &Shared) {
     }
     rows.extend([
         sep(),
+        item(14, 0, crate::i18n::l("история", "history"), "clock", None),
         item(6, 0, t("папка с снятым"), "folder", None),
         item(7, 0, t("настройки"), "gearshape", None),
         sep(),
@@ -277,6 +278,7 @@ extern "C" fn on_menu(id: i32) {
         10 => Command::ReplaySave,
         12 => Command::RecordPause,
         13 => Command::RecordGif,
+        14 => Command::OpenHistory,
         _ => return,
     };
     s.push(cmd);

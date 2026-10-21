@@ -387,6 +387,50 @@ pub fn set_autostart(enable: bool) -> bool {
     }
 }
 
+/// A shortcut in the Start menu, which is how Windows search finds apps:
+/// made on the first start, pointed at this exe again after it moved.
+pub fn ensure_start_menu_entry() {
+    use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, IPersistFile, STGM_READ};
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+    use windows::core::{Interface, PCWSTR};
+    let (Some(appdata), Ok(exe)) = (std::env::var_os("APPDATA"), std::env::current_exe()) else { return };
+    let lnk = std::path::PathBuf::from(appdata).join(r"Microsoft\Windows\Start Menu\Programs\blinker.lnk");
+    let w = |p: &std::path::Path| -> Vec<u16> {
+        use std::os::windows::ffi::OsStrExt;
+        p.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+    };
+    let r = (|| -> windows::core::Result<()> {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+            let file: IPersistFile = link.cast()?;
+            let lnk_w = w(&lnk);
+            if lnk.exists() && file.Load(PCWSTR(lnk_w.as_ptr()), STGM_READ).is_ok() {
+                let mut buf = [0u16; 1024];
+                if link.GetPath(&mut buf, null_mut(), 0).is_ok() {
+                    let len = buf.iter().position(|c| *c == 0).unwrap_or(buf.len());
+                    if std::path::PathBuf::from(String::from_utf16_lossy(&buf[..len])) == exe {
+                        return Ok(());
+                    }
+                }
+            }
+            let exe_w = w(&exe);
+            link.SetPath(PCWSTR(exe_w.as_ptr()))?;
+            link.SetIconLocation(PCWSTR(exe_w.as_ptr()), 0)?;
+            if let Some(dir) = exe.parent() {
+                link.SetWorkingDirectory(PCWSTR(w(dir).as_ptr()))?;
+            }
+            let desc = wide(crate::i18n::l("blinker — скриншоты и запись экрана", "blinker — screenshots and screen recording"));
+            link.SetDescription(PCWSTR(desc.as_ptr()))?;
+            file.Save(PCWSTR(lnk_w.as_ptr()), true)?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = r {
+        crate::config::log::error(format!("start menu shortcut: {e}"));
+    }
+}
+
 pub fn current_thread_id() -> u32 {
     unsafe { GetCurrentThreadId() }
 }

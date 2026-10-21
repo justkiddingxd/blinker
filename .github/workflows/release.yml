@@ -12,7 +12,8 @@
 #   BLINKER_P12_PASSWORD  its password
 # Without them the app is signed ad hoc (a warning on the run).
 #
-# The release notes are the version's section of CHANGELOG.md.
+# The release notes are the version's section of CHANGELOG.md. Last,
+# blinker.cool/version.json gets the new version (the apps' update check).
 #
 # "Run workflow" by hand builds the files without releasing them.
 
@@ -44,6 +45,8 @@ jobs:
           fi
       - name: Build
         run: cargo build --release --locked
+      - name: Tests
+        run: cargo test --release --locked
       - uses: actions/upload-artifact@v4
         with:
           name: windows
@@ -58,6 +61,12 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
+      # Xcode 26's actool builds the Liquid Glass icon (assets/macos/Blinker.icon)
+      - name: Newest Xcode
+        run: |
+          x=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -n "$x" ]; then sudo xcode-select -s "$x"; fi
+          xcodebuild -version || true
       - name: Signing certificate
         env:
           BLINKER_P12_BASE64: ${{ secrets.BLINKER_P12_BASE64 }}
@@ -112,3 +121,24 @@ jobs:
               --title "blinker ${GITHUB_REF_NAME#v}" --notes-file notes.md
           fi
           gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+      # the apps ask blinker.cool/version.json whether there is a newer version
+      - name: version.json on the site
+        env:
+          SITE_SSH_KEY: ${{ secrets.SITE_SSH_KEY }}
+          SITE_HOST: ${{ secrets.SITE_HOST }}
+          SITE_KNOWN_HOSTS: ${{ secrets.SITE_KNOWN_HOSTS }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          tag = os.environ["GITHUB_REF_NAME"]
+          base = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{tag}"
+          assets = {n: {"url": f"{base}/{n}", "size": os.path.getsize(f"dist/{n}")} for n in sorted(os.listdir("dist"))}
+          json.dump({"version": tag.lstrip("v"), "tag": tag, "notes": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/tag/{tag}", "assets": assets}, open("version.json", "w"), indent=2)
+          PY
+          cat version.json
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SITE_SSH_KEY" > ~/.ssh/site
+          chmod 600 ~/.ssh/site
+          printf '%s\n' "$SITE_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          rsync -t -e "ssh -i $HOME/.ssh/site -o IdentitiesOnly=yes -o BatchMode=yes" version.json "blinker-deploy@$SITE_HOST:/"
+          rm -f ~/.ssh/site

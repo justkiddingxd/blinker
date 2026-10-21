@@ -166,7 +166,8 @@ impl eframe::App for PinApp {
         if resp.double_clicked() || ctx.input(|i| i.key_pressed(Key::Escape)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(Key::C)) {
+        // Ctrl / Cmd + C arrives as a Copy event, not a key press
+        if ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)) || (i.modifiers.command && i.key_pressed(Key::C))) {
             self.copy(&ctx);
         }
         let scroll = ctx.input(|i| i.smooth_scroll_delta.y);

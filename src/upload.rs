@@ -139,7 +139,10 @@ pub fn start_with(cfg: &Config, path: PathBuf, wait: Option<Arc<std::sync::atomi
                     return Err(lf!("{DEFAULT_HOST} принимает файлы до 100 мб", "{DEFAULT_HOST} takes files up to 100 mb"));
                 }
                 let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-                post(&target, &name, content_type(&path), &body, &markers, &j.progress)
+                post(&target, &name, content_type(&path), &body, &markers, &j.progress).map(|p| {
+                    log_upload(&p, &path, body.len() as u64);
+                    p.url
+                })
             });
         if let Ok(link) = &r {
             crate::output::copy_text(link);
@@ -161,7 +164,7 @@ pub fn test(cfg: &Config) -> Result<String, String> {
         image::ExtendedColorType::Rgba8,
     )
     .map_err(|e| e.to_string())?;
-    post(&Target::of(cfg), "blinker-test.png", "image/png", &png, &[], &AtomicU32::new(0))
+    post(&Target::of(cfg), "blinker-test.png", "image/png", &png, &[], &AtomicU32::new(0)).map(|p| p.url)
 }
 
 #[cfg(windows)]
@@ -238,7 +241,15 @@ pub fn json_escape(s: &str) -> String {
     out
 }
 
-fn post(target: &Target, name: &str, ctype: &str, body: &[u8], markers: &[Marker], progress: &AtomicU32) -> Result<String, String> {
+/// What a server answered to an upload.
+struct Posted {
+    url: String,
+    delete_url: Option<String>,
+    /// Unix seconds.
+    expires: Option<u64>,
+}
+
+fn post(target: &Target, name: &str, ctype: &str, body: &[u8], markers: &[Marker], progress: &AtomicU32) -> Result<Posted, String> {
     let (status, text) = match target {
         Target::Blinker { url, token } => {
             let mut headers = vec![("Content-Type", ctype.to_string()), ("X-Filename", percent(name))];
@@ -261,10 +272,88 @@ fn post(target: &Target, name: &str, ctype: &str, body: &[u8], markers: &[Marker
         });
     }
     match target {
-        Target::Blinker { .. } => json_string(&text, "url").ok_or_else(|| crate::i18n::t("в ответе сервера нет поля \"url\"").to_string()),
+        Target::Blinker { .. } => {
+            let url = json_string(&text, "url").ok_or_else(|| crate::i18n::t("в ответе сервера нет поля \"url\"").to_string())?;
+            let expires = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|v| v.get("expires")?.as_u64());
+            Ok(Posted { url, delete_url: json_string(&text, "delete_url"), expires })
+        }
         Target::Custom(c) => link_from(&c.url_template, &text)
+            .map(|url| Posted { url, delete_url: None, expires: None })
             .ok_or_else(|| lf!("в ответе сервера нет ссылки ({})", "no link in the server's answer ({})", c.url_template)),
     }
+}
+
+// ---------------------------------------------------------------------------
+// What was uploaded: a list kept in the app's folder (the history window
+// shows it, with "delete from the server" where the server gave a link)
+
+/// One upload.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Uploaded {
+    pub url: String,
+    #[serde(default)]
+    pub delete_url: Option<String>,
+    /// The file on this computer (it may be gone since).
+    pub path: PathBuf,
+    pub size: u64,
+    /// Unix seconds.
+    pub at: u64,
+    #[serde(default)]
+    pub expires: Option<u64>,
+}
+
+fn log_file() -> PathBuf {
+    crate::config::app_dir().join("uploads.json")
+}
+
+fn now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// Every upload still worth showing, newest first (expired ones fall away).
+pub fn uploads() -> Vec<Uploaded> {
+    let mut list: Vec<Uploaded> = std::fs::read(log_file()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let t = now();
+    list.retain(|u| u.expires.is_none_or(|e| e > t));
+    list.sort_by(|a, b| b.at.cmp(&a.at));
+    list
+}
+
+fn save_uploads(list: &[Uploaded]) {
+    let _ = std::fs::create_dir_all(crate::config::app_dir());
+    if let Ok(json) = serde_json::to_vec_pretty(list) {
+        let _ = std::fs::write(log_file(), json);
+    }
+}
+
+fn log_upload(p: &Posted, path: &Path, size: u64) {
+    // another process may be adding one too: read, add, write at once
+    static LOCK: Mutex<()> = Mutex::new(());
+    let _g = LOCK.lock().unwrap();
+    let mut list = uploads();
+    list.insert(0, Uploaded { url: p.url.clone(), delete_url: p.delete_url.clone(), path: path.to_path_buf(), size, at: now(), expires: p.expires });
+    list.truncate(500);
+    save_uploads(&list);
+}
+
+/// Deletes the file from the server (its delete link), then from the list.
+pub fn delete_upload(u: &Uploaded) -> Result<(), String> {
+    if let Some(del) = &u.delete_url {
+        let (status, text) = get(del, &[])?;
+        // gone already counts as deleted
+        if !(200..300).contains(&status) && status != 404 {
+            return Err(json_string(&text, "error").unwrap_or_else(|| lf!("сервер ответил {status}", "the server answered {status}")));
+        }
+    }
+    forget_upload(u);
+    Ok(())
+}
+
+/// Takes it off the list only (a server without a delete link).
+pub fn forget_upload(u: &Uploaded) {
+    let mut list = uploads();
+    list.retain(|x| x.url != u.url);
+    save_uploads(&list);
 }
 
 /// ShareX placeholders in a value: the file name.

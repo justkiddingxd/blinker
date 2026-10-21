@@ -14,7 +14,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 pub struct Job {
     /// 0..=1000
@@ -103,22 +103,9 @@ impl TgMode {
     }
 }
 
-/// ffmpeg from C:\ffmpeg\bin or PATH (looked up once). On macOS also the
-/// Homebrew / MacPorts folders: apps started from Finder get a bare PATH.
-pub fn ffmpeg() -> Option<&'static Path> {
-    static FF: OnceLock<Option<PathBuf>> = OnceLock::new();
-    FF.get_or_init(|| {
-        let (name, known): (&str, &[&str]) = if cfg!(windows) {
-            ("ffmpeg.exe", &[r"C:\ffmpeg\bin\ffmpeg.exe"])
-        } else {
-            ("ffmpeg", &["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/opt/local/bin/ffmpeg"])
-        };
-        if let Some(k) = known.iter().map(PathBuf::from).find(|p| p.is_file()) {
-            return Some(k);
-        }
-        std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join(name)).find(|f| f.is_file()))
-    })
-    .as_deref()
+/// ffmpeg, when there is one (see `crate::ffmpeg::find`).
+pub fn ffmpeg() -> Option<PathBuf> {
+    crate::ffmpeg::find()
 }
 
 #[cfg(windows)]
@@ -133,17 +120,19 @@ fn quiet(cmd: &mut Command) -> &mut Command {
     cmd
 }
 
-/// Whether ffmpeg was built with this encoder (cached).
+/// Whether ffmpeg was built with this encoder (asked once per ffmpeg).
 fn has_encoder(ff: &Path, name: &str) -> bool {
-    static LIST: OnceLock<String> = OnceLock::new();
-    LIST.get_or_init(|| {
-        quiet(Command::new(ff).args(["-hide_banner", "-encoders"]))
+    static LISTS: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
+    let mut lists = LISTS.lock().unwrap();
+    if !lists.iter().any(|(p, _)| p == ff) {
+        let list = quiet(Command::new(ff).args(["-hide_banner", "-encoders"]))
             .stderr(Stdio::null())
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-            .unwrap_or_default()
-    })
-    .contains(name)
+            .unwrap_or_default();
+        lists.push((ff.to_path_buf(), list));
+    }
+    lists.iter().any(|(p, l)| p == ff && l.contains(name))
 }
 
 /// Short description of the engine that would be used.
@@ -151,7 +140,7 @@ pub fn engine_label(mode: TgMode) -> String {
     match ffmpeg() {
         Some(ff) => {
             let gpu = if mode.hevc() { "hevc_nvenc" } else { "h264_nvenc" };
-            if has_encoder(ff, gpu) {
+            if has_encoder(&ff, gpu) {
                 lf!("ffmpeg · {gpu} (видеокарта)", "ffmpeg · {gpu} (gpu)")
             } else {
                 lf!("ffmpeg · {} (процессор)", "ffmpeg · {} (cpu)", if mode.hevc() { "libx265" } else { "libx264" })
@@ -197,7 +186,7 @@ pub fn start(src: PathBuf, mode: TgMode, edit: Option<Edit>, repaint: impl Fn() 
                     mix_down: true,
                 });
                 match ffmpeg() {
-                    Some(ff) => run_ffmpeg(ff, &src, &dst, mode, &edit, &info, &j, &repaint),
+                    Some(ff) => run_ffmpeg(&ff, &src, &dst, mode, &edit, &info, &j, &repaint),
                     None => run_builtin(&src, &dst, mode, &edit, &info, &j),
                 }
             }

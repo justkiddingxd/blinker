@@ -255,6 +255,38 @@ typedef struct {
 }
 @end
 
+/// The microphone picked in the settings (uniqueID); empty = the default.
+static NSString *g_mic;
+
+void bk_set_mic(const char *id) {
+    NSString *s = id ? [NSString stringWithUTF8String:id] : @"";
+    @synchronized([BKStream class]) {
+        g_mic = s;
+    }
+}
+
+static AVCaptureDevice *chosen_mic(void) {
+    NSString *want;
+    @synchronized([BKStream class]) {
+        want = g_mic;
+    }
+    AVCaptureDevice *d = want.length ? [AVCaptureDevice deviceWithUniqueID:want] : nil;
+    // one that's gone: the default
+    return d ?: [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeAudio];
+}
+
+typedef void (*bk_mic_cb)(void *ctx, const char *id, const char *name);
+
+void bk_mic_list(bk_mic_cb cb, void *ctx) {
+    @autoreleasepool {
+        AVCaptureDeviceDiscoverySession *s =
+            [AVCaptureDeviceDiscoverySession discoverySessionWithDeviceTypes:@[AVCaptureDeviceTypeMicrophone, AVCaptureDeviceTypeExternal]
+                                                                   mediaType:AVMediaTypeAudio
+                                                                    position:AVCaptureDevicePositionUnspecified];
+        for (AVCaptureDevice *d in s.devices) cb(ctx, d.uniqueID.UTF8String, d.localizedName.UTF8String);
+    }
+}
+
 int bk_mic_available(void) {
     if (@available(macOS 15.0, *)) {
         return [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeAudio] != nil ? 1 : 0;
@@ -319,7 +351,7 @@ void *bk_stream_start(const bk_stream_cfg *c, bk_video_cb vcb, bk_audio_cb acb, 
                 cfg.excludesCurrentProcessAudio = YES;
             } else if (@available(macOS 15.0, *)) {
                 cfg.captureMicrophone = YES;
-                AVCaptureDevice *mic = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeAudio];
+                AVCaptureDevice *mic = chosen_mic();
                 if (mic) cfg.microphoneCaptureDeviceID = mic.uniqueID;
             } else {
                 BK_ERR(err, errlen, @"microphone capture needs macOS 15");

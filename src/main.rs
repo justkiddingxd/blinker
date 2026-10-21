@@ -8,8 +8,11 @@ mod capture;
 mod chrome;
 mod config;
 mod demo;
+mod discord;
 mod editor;
+mod ffmpeg;
 mod geom;
+mod history;
 mod home;
 mod hotkey;
 #[cfg_attr(target_os = "macos", path = "mac/media.rs")]
@@ -74,6 +77,14 @@ fn main() {
         run_settings(arg_after("--settings").as_deref());
         return;
     }
+    if has("--history") {
+        let tab = history::Tab::from_arg(arg_after("--history").as_deref().unwrap_or(""));
+        let _ = std::fs::write(history::request_file(), tab.arg());
+        if !win::signal_event(history::SHOW_EVENT) {
+            history::run(&Shared::new(config::load()), tab);
+        }
+        return;
+    }
     // for working on the card: `--toast picture.png` shows it for that file
     if let Some(path) = arg_after("--toast") {
         let Ok(img) = image::open(&path) else { return };
@@ -122,6 +133,9 @@ fn main() {
     let shared = Shared::new(cfg);
     let shell = shell::spawn(shared.clone());
     update::auto(shared.clone());
+    discord::run(shared.clone());
+    #[cfg(windows)]
+    std::thread::spawn(win::ensure_start_menu_entry);
 
     // the first start next to ShareX: settings open where it is brought over
     let sharex = !shared.config().sharex_offered && sharex::detect().is_some();
@@ -151,6 +165,14 @@ fn main() {
 fn spawn_self(args: &[&std::ffi::OsStr]) {
     if let Ok(exe) = std::env::current_exe() {
         let _ = std::process::Command::new(exe).args(args).spawn();
+    }
+}
+
+/// One history window: a running one is brought forward.
+fn open_history(tab: history::Tab) {
+    let _ = std::fs::write(history::request_file(), tab.arg());
+    if !win::signal_event(history::SHOW_EVENT) {
+        spawn_self(&["--history".as_ref(), tab.arg().as_ref()]);
     }
 }
 
@@ -262,6 +284,7 @@ fn controller(shared: &Arc<Shared>) -> bool {
                 let gif = matches!(cmd_now, Command::RecordGif);
                 if let Some(rec) = recording.take() {
                     shared.recording.store(false, std::sync::atomic::Ordering::SeqCst);
+                    *shared.recording_note.lock().unwrap() = None;
                     finish_recording(shared, rec);
                     continue;
                 }
@@ -277,6 +300,14 @@ fn controller(shared: &Arc<Shared>) -> bool {
                         move || s3.push(Command::RecordPause),
                     ) {
                         Ok(r) => {
+                            let cfg = shared.config();
+                            let note = if out.gif {
+                                format!("GIF · {} fps", cfg.gif_fps)
+                            } else {
+                                format!("{} × {} · {} fps", r.rect.w, r.rect.h, record::resolve_fps(&cfg, &r.monitor))
+                            };
+                            let start = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                            *shared.recording_note.lock().unwrap() = Some((start, note));
                             recording = Some(r);
                             shared.recording.store(true, std::sync::atomic::Ordering::SeqCst);
                         }
@@ -326,6 +357,7 @@ fn controller(shared: &Arc<Shared>) -> bool {
                 }
             }
             Command::OpenHome(tab) => open_settings(tab),
+            Command::OpenHistory => open_history(history::Tab::Shots),
             Command::OpenFolder => {
                 let dir = shared.config().save_dir;
                 let _ = std::fs::create_dir_all(&dir);

@@ -377,6 +377,51 @@ void bk_window_buttons_at(void *w, double x, double cy) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Liquid Glass (macOS 26): a glass pane behind a part of our (transparent) GL
+// view, the way Finder's sidebar floats in its window
+
+int bk_glass_available(void) {
+    if (@available(macOS 26.0, *)) return 1;
+    return 0;
+}
+
+static char kBKGlass;
+
+/// A glass pane at (x, y, w, h) points from the window's top left, under
+/// the egui view, which has to leave that part transparent. `bg`: the
+/// window gets this background around it (0 = none, for floating cards).
+int bk_window_glass(void *w, double x, double y, double width, double height, double radius, uint32_t bg) {
+    if (@available(macOS 26.0, *)) {
+        NSWindow *win = (__bridge NSWindow *)w;
+        bk_on_main(^{
+            NSView *content = win.contentView;
+            NSView *frame = content.superview;
+            if (!frame) return;
+            NSGlassEffectView *glass = objc_getAssociatedObject(win, &kBKGlass);
+            if (!glass) {
+                glass = [[NSGlassEffectView alloc] initWithFrame:NSZeroRect];
+                glass.style = NSGlassEffectViewStyleRegular;
+                [frame addSubview:glass positioned:NSWindowBelow relativeTo:content];
+                objc_setAssociatedObject(win, &kBKGlass, glass, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            glass.cornerRadius = radius;
+            CGFloat top = NSHeight(frame.bounds);
+            glass.frame = NSMakeRect(x, top - y - height, width, height);
+            win.opaque = NO;
+            win.backgroundColor = bg ? [NSColor colorWithSRGBRed:((bg >> 16) & 0xFF) / 255.0
+                                                          green:((bg >> 8) & 0xFF) / 255.0
+                                                           blue:(bg & 0xFF) / 255.0
+                                                          alpha:1.0]
+                                     : NSColor.clearColor;
+            content.wantsLayer = YES;
+            content.layer.opaque = NO;
+        });
+        return 1;
+    }
+    return 0;
+}
+
 void bk_window_style_borderless(void *w) {
     NSWindow *win = (__bridge NSWindow *)w;
     bk_on_main(^{
@@ -802,6 +847,9 @@ static NSMenuItem *make_tiles(const bk_menu_item *items, int n) {
     return row;
 }
 
+/// The tray menu while it is open.
+static NSMenu *g_open_menu;
+
 static NSMenuItem *make_item(const bk_menu_item *it) {
     NSMenuItem *m = [[NSMenuItem alloc] initWithTitle:bk_str(it->label) action:nil keyEquivalent:@""];
     if (it->symbol) {
@@ -852,9 +900,18 @@ void bk_tray_menu(const bk_menu_item *items, int n, bk_menu_cb cb) {
     // opened after the click that asked for it has been handled
     dispatch_async(dispatch_get_main_queue(), ^{
         g_item.menu = root;
+        g_open_menu = root;
         [g_item.button performClick:nil];
+        g_open_menu = nil;
         g_item.menu = nil;
     });
+}
+
+/// Closes the tray menu if it is open: a hotkey pressed while it shows
+/// (the main thread is inside the menu until it closes).
+void bk_tray_menu_close(void) {
+    NSMenu *m = g_open_menu;
+    if (m) [m cancelTrackingWithoutAnimation];
 }
 
 // ---------------------------------------------------------------------------

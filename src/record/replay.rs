@@ -257,8 +257,8 @@ pub fn dir() -> PathBuf {
 /// The settings that require restarting the replay when changed.
 pub fn config_key(cfg: &Config) -> String {
     format!(
-        "{}|{}|{}|{}|{:?}|{}|{:?}",
-        cfg.replay_enabled, cfg.replay_desktop_audio, cfg.replay_mic, cfg.rec_fps, cfg.rec_quality, cfg.rec_cursor, cfg.rec_codec
+        "{}|{}|{}|{}|{:?}|{}|{:?}|{}",
+        cfg.replay_enabled, cfg.replay_desktop_audio, cfg.replay_mic, cfg.rec_fps, cfg.rec_quality, cfg.rec_cursor, cfg.rec_codec, cfg.mic_device
     )
 }
 
@@ -288,6 +288,7 @@ impl Replay {
             finalizing: Arc::new(AtomicUsize::new(0)),
             n: AtomicUsize::new(0),
         });
+        super::audio::use_mic(&cfg.mic_device);
         let tracks = super::audio_sources(cfg.replay_desktop_audio, cfg.replay_mic);
         let rings = Arc::new(PcmRings::new(&dir, tracks.len(), secs).map_err(|e| e.to_string())?);
         let clock = Clock::new();

@@ -267,6 +267,7 @@ pub fn start(
         return Err(crate::i18n::t("слишком маленькая область").into());
     }
     // A GIF has no sound and is written to a temporary MP4 first.
+    audio::use_mic(&cfg.mic_device);
     let tracks = if gif { Vec::new() } else { audio_sources(cfg.rec_desktop_audio, cfg.rec_mic) };
     let gpu = Arc::new(Gpu::new().map_err(|e| format!("{}: {e}", video::GPU_API))?);
     let path = if gif {

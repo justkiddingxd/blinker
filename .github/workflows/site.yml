@@ -33,7 +33,8 @@ jobs:
           printf '%s\n' "$SITE_SSH_KEY" > ~/.ssh/site
           chmod 600 ~/.ssh/site
           printf '%s\n' "$SITE_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          rsync -rltz --delete --exclude .DS_Store \
+          # version.json comes from the release workflow, not from the repository
+          rsync -rltz --delete --exclude .DS_Store --exclude version.json \
             -e "ssh -i $HOME/.ssh/site -o IdentitiesOnly=yes -o BatchMode=yes" \
             site/ "blinker-deploy@$SITE_HOST:/"
           rm -f ~/.ssh/site

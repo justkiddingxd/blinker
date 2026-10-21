@@ -30,6 +30,14 @@ const STRIP_H: f32 = 54.0;
 const TRACK_H: f32 = 46.0;
 /// The lane of markers above the filmstrip.
 const MARK_H: f32 = 20.0;
+/// Trim grips: their width, and how far outside the range they still grab.
+const GRIP_W: f32 = 12.0;
+const GRIP_REACH: f32 = 14.0;
+
+thread_local! {
+    /// The window's width, for the glass title bar (macOS 26).
+    static GLASS_W: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+}
 
 pub fn run(path: PathBuf) {
     let info = match media::probe(&path) {
@@ -44,7 +52,9 @@ pub fn run(path: PathBuf) {
     let viewport = egui::ViewportBuilder::default()
         .with_title(format!("{name} — blinker"))
         .with_icon(theme::icon_data(64))
-        .with_inner_size(window_size());
+        .with_inner_size(window_size())
+        .with_transparent(theme::glass());
+    GLASS_W.with(|w| w.set(window_size()[0]));
     let viewport = chrome::style(viewport);
     let shared2 = shared.clone();
     runtime::run_window(&shared, viewport, true, move |cc| {
@@ -52,6 +62,7 @@ pub fn run(path: PathBuf) {
         if let Some(h) = hwnd {
             win::style_borderless(h);
             chrome::place_window_buttons(h, chrome::TITLE_H + 4.0);
+            chrome::glass_bar(h, GLASS_W.with(|w| w.get()), chrome::TITLE_H + 4.0);
             win::cloak(h, true);
             win::force_foreground(h);
         }
@@ -141,6 +152,9 @@ struct VideoApp {
     marker_drag: Option<usize>,
     /// The note field takes the keyboard on its next frame.
     marker_focus: bool,
+    /// "Upload" on an edited clip: it is saved first, then the saved file goes up.
+    upload_after_save: bool,
+    ffmpeg_dl: Option<Arc<crate::ffmpeg::Download>>,
 }
 
 impl VideoApp {
@@ -207,6 +221,8 @@ impl VideoApp {
             marker_edit: None,
             marker_drag: None,
             marker_focus: false,
+            upload_after_save: false,
+            ffmpeg_dl: None,
             info,
         }
     }
@@ -325,6 +341,25 @@ impl VideoApp {
         self.job = Some(export::start(ctx, self.path.clone(), dst, self.info.clone(), opt));
     }
 
+    /// Anything changed: what is uploaded has to be saved first.
+    fn edited(&self) -> bool {
+        self.trimmed() || !self.video_on || self.tracks.iter().any(|t| t.gain.muted || (t.gain.volume - 1.0).abs() > 0.01)
+    }
+
+    /// "Upload": the source as it is, or the edited clip once it's saved.
+    fn upload(&mut self, ctx: &egui::Context) {
+        if self.upload.is_some() || self.job.is_some() {
+            return;
+        }
+        if self.edited() {
+            self.upload_after_save = true;
+            self.export(ctx, self.save_kind());
+        } else {
+            let markers = self.source_markers();
+            self.upload = Some(crate::upload::start_with(&self.shared.config(), self.path.clone(), None, markers));
+        }
+    }
+
     /// The primary "save": MP4, or the sound alone with the video track off.
     fn save_kind(&self) -> ExportKind {
         if self.video_on { ExportKind::Mp4 } else { ExportKind::Audio(self.audio_format) }
@@ -426,12 +461,16 @@ impl VideoApp {
                     ExportKind::Mp4 => crate::i18n::t("видео сохранено"),
                 };
                 let markers = if job.kind == ExportKind::Mp4 { self.clip_markers() } else { Vec::new() };
+                if std::mem::take(&mut self.upload_after_save) {
+                    self.upload = Some(crate::upload::start_with(&self.shared.config(), path.clone(), None, markers.clone()));
+                }
                 self.done = Some(Done { text: format!("{what} · {}", human_size(size)), path, markers });
                 self.job = None;
             }
             Some(Err(e)) => {
                 self.notice = Some(Notice::new(ctx, if e == crate::i18n::t("отменено") { e } else { lf!("не удалось сохранить: {e}", "could not save: {e}") }));
                 self.job = None;
+                self.upload_after_save = false;
             }
         }
     }
@@ -442,11 +481,14 @@ impl VideoApp {
         let ctx = ui.ctx().clone();
         egui::Panel::top("topbar")
             .exact_size(chrome::TITLE_H + 4.0)
-            .frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin { left: 14, right: 0, top: 0, bottom: 0 }))
+            .show_separator_line(false)
+            .frame(egui::Frame::new().fill(chrome::bar_fill()).inner_margin(egui::Margin { left: 14, right: 0, top: 0, bottom: 0 }))
             .show(ui, |ui| {
                 let r = ui.max_rect();
                 chrome::drag_region(ui, r.expand2(vec2(14.0, 0.0)));
-                ui.painter().hline(r.x_range().expand(14.0), r.bottom() + 0.5, Stroke::new(1.0, LINE));
+                if !theme::glass() {
+                    ui.painter().hline(r.x_range().expand(14.0), r.bottom() + 0.5, Stroke::new(1.0, LINE));
+                }
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     chrome::leading_space(ui);
@@ -474,6 +516,7 @@ impl VideoApp {
                                 if ui::button(ui, &label, ui::Kind::Accent).on_hover_text(crate::i18n::kb("ctrl+s")).clicked() {
                                     self.export(&ctx, self.save_kind());
                                 }
+                                self.upload_button(ui, &ctx);
                                 let fmt = ui::button(ui, crate::i18n::l("формат", "format"), ui::Kind::Ghost);
                                 egui::Popup::menu(&fmt).show(|ui| {
                                     ui.set_min_width(260.0);
@@ -502,6 +545,8 @@ impl VideoApp {
                             if ui::button(ui, crate::i18n::t("сохранить mp4"), ui::Kind::Accent).on_hover_text(crate::i18n::kb("ctrl+s")).clicked() {
                                 self.export(&ctx, ExportKind::Mp4);
                             }
+                            self.upload_button(ui, &ctx);
+                            sep(ui);
                             let tg = ui::button(ui, crate::i18n::t("для telegram"), ui::Kind::Ghost);
                             egui::Popup::menu(&tg).show(|ui| {
                                 ui.set_min_width(300.0);
@@ -521,6 +566,24 @@ impl VideoApp {
                                         .font(mono(11.0))
                                         .color(FAINT),
                                 );
+                                // no ffmpeg: it works, but ffmpeg does it better; one click to get it
+                                if crate::ffmpeg::find().is_none() {
+                                    match self.ffmpeg_dl.as_ref().map(|j| (j.fraction(), j.result())) {
+                                        Some((f, None)) => {
+                                            ui.label(egui::RichText::new(lf!("скачиваю ffmpeg {:.0}%", "downloading ffmpeg {:.0}%", f * 100.0)).font(font(12.0)).color(DIM));
+                                            ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
+                                        }
+                                        Some((_, Some(Err(e)))) => {
+                                            ui.label(egui::RichText::new(lf!("ffmpeg не скачался: {e}", "ffmpeg didn't download: {e}")).font(font(12.0)).color(DANGER));
+                                        }
+                                        _ => {
+                                            if ui::button(ui, crate::i18n::l("скачать ffmpeg: сожмёт лучше", "get ffmpeg: compresses better"), ui::Kind::Ghost).clicked() {
+                                                let c = ctx.clone();
+                                                self.ffmpeg_dl = Some(crate::ffmpeg::download(move || c.request_repaint()));
+                                            }
+                                        }
+                                    }
+                                }
                                 ui.label(
                                     egui::RichText::new(crate::i18n::t("с обрезкой и громкостью дорожек, звук в одну дорожку"))
                                         .font(font(12.0))
@@ -613,6 +676,23 @@ impl VideoApp {
                     });
                 });
             });
+    }
+
+    /// "Upload" next to "save" (when uploads are on).
+    fn upload_button(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        if !crate::upload::configured(&self.shared.config()) {
+            return;
+        }
+        let tip = if self.edited() {
+            crate::i18n::l("сохранить правку, загрузить и скопировать ссылку · метки тоже", "save the edit, upload it and copy the link · markers too")
+        } else {
+            crate::i18n::l("загрузить и скопировать ссылку · метки тоже", "upload and copy the link · markers too")
+        };
+        ui.add_enabled_ui(self.upload.is_none(), |ui| {
+            if ui::button(ui, crate::i18n::l("загрузить", "upload"), ui::Kind::Ghost).on_hover_text(tip).clicked() {
+                self.upload(ctx);
+            }
+        });
     }
 
     fn timeline(&mut self, ui: &mut egui::Ui) {
@@ -820,10 +900,11 @@ impl VideoApp {
                         self.trim = (0, self.dur());
                     }
                     let len = fmt_time(self.trim.1 - self.trim.0, true);
-                    ui.label(egui::RichText::new(lf!("фрагмент {len}", "clip {len}")).font(mono(12.0)).color(ACCENT));
+                    let range = format!("{} – {}", fmt_time(self.trim.0, true), fmt_time(self.trim.1, true));
+                    ui.label(egui::RichText::new(lf!("останется {range} · {len}", "keeps {range} · {len}")).font(mono(12.0)).color(ACCENT));
                 } else {
                     ui.label(
-                        egui::RichText::new(crate::i18n::t("края полосы обрезают · i и o ставят начало и конец"))
+                        egui::RichText::new(crate::i18n::l("тяни края рамки, чтобы обрезать · i и o ставят начало и конец · m метка", "drag the frame's edges to trim · i and o set the start and end · m adds a marker"))
                             .font(font(12.0))
                             .color(FAINT),
                     );
@@ -900,49 +981,66 @@ impl VideoApp {
         }
     }
 
-    fn timeline_input(&mut self, ui: &mut egui::Ui, area: Rect, strip: Rect) {
-        let resp = ui.interact(area, ui.scope_id().with("timeline"), Sense::click_and_drag());
-        let near = |x: f32, px: f32| (x - px).abs() <= 8.0;
+    /// The trim edge `pt` is on: within the grip (it sits inside the range)
+    /// or a little outside it, on the filmstrip or the tracks.
+    fn edge_at(&self, pt: egui::Pos2, area: Rect) -> Option<Drag> {
+        if !area.expand2(vec2(GRIP_REACH, 0.0)).contains(pt) {
+            return None;
+        }
         let (xi, xo) = (self.x_of(self.trim.0, area), self.x_of(self.trim.1, area));
+        let di = if pt.x >= xi - GRIP_REACH && pt.x <= xi + GRIP_W + 4.0 { Some((pt.x - xi).abs()) } else { None };
+        let do_ = if pt.x <= xo + GRIP_REACH && pt.x >= xo - GRIP_W - 4.0 { Some((pt.x - xo).abs()) } else { None };
+        match (di, do_) {
+            (Some(a), Some(b)) => Some(if a <= b { Drag::In } else { Drag::Out }),
+            (Some(_), None) => Some(Drag::In),
+            (None, Some(_)) => Some(Drag::Out),
+            (None, None) => None,
+        }
+    }
+
+    fn timeline_input(&mut self, ui: &mut egui::Ui, area: Rect, strip: Rect) {
+        let _ = strip;
+        let resp = ui.interact(area.expand2(vec2(GRIP_REACH, 0.0)), ui.scope_id().with("timeline"), Sense::click_and_drag());
+        // what a press grabs is decided where it went down, not where the
+        // pointer is once the move counts as a drag
+        if resp.is_pointer_button_down_on() && self.drag == Drag::None {
+            if let Some(origin) = ui.input(|i| i.pointer.press_origin()) {
+                self.drag = self.edge_at(origin, area).unwrap_or(Drag::Playhead);
+            }
+        }
         if let Some(pt) = resp.hover_pos() {
-            let on_strip = pt.y <= strip.bottom() + 4.0;
-            if on_strip && (near(pt.x, xi) || near(pt.x, xo)) || matches!(self.drag, Drag::In | Drag::Out) {
+            if self.edge_at(pt, area).is_some() || matches!(self.drag, Drag::In | Drag::Out) {
                 ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
             } else {
                 ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
             }
         }
-        if resp.drag_started() || resp.clicked() {
-            if let Some(pt) = resp.interact_pointer_pos() {
-                let on_strip = pt.y <= strip.bottom() + 4.0;
-                self.drag = if on_strip && near(pt.x, xi) && (pt.x <= xi || !near(pt.x, xo)) {
-                    Drag::In
-                } else if on_strip && near(pt.x, xo) {
-                    Drag::Out
-                } else {
-                    Drag::Playhead
-                };
-            }
-        }
         if let Some(pt) = resp.interact_pointer_pos()
-            && (resp.dragged() || resp.clicked() || resp.drag_started())
+            && (resp.dragged() || resp.clicked() || resp.drag_started() || resp.is_pointer_button_down_on())
         {
             let t = self.t_of(pt.x, area);
             let min_len = HNS / 5;
+            // held still: nothing to do (a seek decodes a frame)
             match self.drag {
                 Drag::In => {
-                    self.trim.0 = t.min(self.trim.1 - min_len).max(0);
-                    self.seek(self.trim.0);
+                    let v = t.min(self.trim.1 - min_len).max(0);
+                    if v != self.trim.0 || self.pos != v {
+                        self.trim.0 = v;
+                        self.seek(v);
+                    }
                 }
                 Drag::Out => {
-                    self.trim.1 = t.max(self.trim.0 + min_len).min(self.dur());
-                    self.seek(self.trim.1);
+                    let v = t.max(self.trim.0 + min_len).min(self.dur());
+                    if v != self.trim.1 || self.pos != v {
+                        self.trim.1 = v;
+                        self.seek(v);
+                    }
                 }
-                Drag::Playhead => self.seek(t),
-                Drag::None => {}
+                Drag::Playhead if t != self.pos || self.playing => self.seek(t),
+                _ => {}
             }
         }
-        if resp.drag_stopped() || resp.clicked() {
+        if !ui.input(|i| i.pointer.primary_down()) {
             self.drag = Drag::None;
         }
     }
@@ -956,19 +1054,31 @@ impl VideoApp {
         if xo < area.right() {
             p.rect_filled(Rect::from_min_max(pos2(xo, area.top()), area.max), 0, shade);
         }
-        // selected range on the filmstrip: accent frame with grips
+        // the kept range: an accent frame over the filmstrip and a thin one
+        // round the tracks, grips on both ends
         let sel = Rect::from_min_max(pos2(xi, strip.top()), pos2(xo, strip.bottom()));
-        p.rect_stroke(sel, 3, Stroke::new(2.0, ACCENT), StrokeKind::Inside);
-        for (x, left) in [(xi, true), (xo, false)] {
+        p.rect_stroke(Rect::from_min_max(pos2(xi, strip.top()), pos2(xo, area.bottom())), 4, Stroke::new(1.0, ACCENT.gamma_multiply(0.35)), StrokeKind::Inside);
+        p.rect_stroke(sel, 4, Stroke::new(2.0, ACCENT), StrokeKind::Inside);
+        for (x, left, which) in [(xi, true, Drag::In), (xo, false, Drag::Out)] {
             let g = if left {
-                Rect::from_min_max(pos2(x, strip.top()), pos2(x + 9.0, strip.bottom()))
+                Rect::from_min_max(pos2(x, strip.top()), pos2(x + GRIP_W, strip.bottom()))
             } else {
-                Rect::from_min_max(pos2(x - 9.0, strip.top()), pos2(x, strip.bottom()))
+                Rect::from_min_max(pos2(x - GRIP_W, strip.top()), pos2(x, strip.bottom()))
             };
-            p.rect_filled(g, 3, ACCENT);
+            let hot = self.drag == which;
+            p.rect_filled(g, 4, if hot { ACCENT_HI } else { ACCENT });
             let cx = g.center().x;
-            for dy in [-5.0, 0.0, 5.0] {
-                p.hline((cx - 2.0)..=(cx + 2.0), g.center().y + dy, Stroke::new(1.0, ON_ACCENT));
+            for dx in [-1.5, 1.5] {
+                p.vline(cx + dx, (g.center().y - 7.0)..=(g.center().y + 7.0), Stroke::new(1.2, ON_ACCENT));
+            }
+            // the time of the edge, above it while it's dragged
+            if hot {
+                let t = if left { self.trim.0 } else { self.trim.1 };
+                let text = fmt_time(t, true);
+                let g2 = p.layout_no_wrap(text, mono(11.0), ON_ACCENT);
+                let bubble = Rect::from_center_size(pos2(x, strip.top() - 13.0), g2.size() + vec2(12.0, 6.0));
+                p.rect_filled(bubble, 5, ACCENT);
+                p.galley(bubble.center() - g2.size() / 2.0, g2, ON_ACCENT);
             }
         }
         // playhead
@@ -1136,7 +1246,7 @@ impl VideoApp {
 
 impl eframe::App for VideoApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        CANVAS.to_normalized_gamma_f32()
+        if theme::glass() { [0.0; 4] } else { CANVAS.to_normalized_gamma_f32() }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

@@ -103,91 +103,72 @@ pub(crate) struct PillLook {
 /// Pill size and the x ranges of its pause and stop buttons at scale `s`.
 pub(crate) fn pill_layout(s: f32) -> ((i32, i32), (i32, i32), (i32, i32)) {
     let px = |v: f32| (v * s).round() as i32;
-    let size = (px(156.0), px(32.0));
-    (size, (size.0 - px(66.0), size.0 - px(35.0)), (size.0 - px(35.0), size.0 - px(3.0)))
+    let size = (px(170.0), px(40.0));
+    (size, (size.0 - px(70.0), size.0 - px(38.0)), (size.0 - px(37.0), size.0 - px(5.0)))
 }
 
 /// One breath of the recording dot: slow and never fully dark.
 const BREATH: f32 = 2.6;
 const PAUSED: Color32 = Color32::from_rgb(0xE0, 0xA8, 0x3A);
 
-/// "● 0:12 | ⏸ ■" on a dark rounded plate.
+/// A card like the rest of blinker: a red chip with the dot and the time,
+/// then pause and a red stop.
 pub(crate) fn draw_pill(look: &PillLook, s: f32) -> Option<sk::Pixmap> {
     let ((w, h), pause_x, stop_x) = pill_layout(s);
     let (w, h) = (w as f32, h as f32);
     let mut pm = sk::Pixmap::new(w as u32, h as u32)?;
     let id = sk::Transform::identity();
     let cy = h / 2.0;
+    let line = sk::Stroke { width: 1.0, ..Default::default() };
 
-    // plate: a faint top-to-bottom shade, a hairline and a lit top edge
-    if let Some(bg) = theme::rounded_rect_path(0.5, 0.5, w - 1.0, h - 1.0, h / 2.0 - 0.5) {
-        let mut paint = sk::Paint { anti_alias: true, ..Default::default() };
-        paint.shader = sk::LinearGradient::new(
-            sk::Point::from_xy(0.0, 0.0),
-            sk::Point::from_xy(0.0, h),
-            vec![
-                sk::GradientStop::new(0.0, sk::Color::from_rgba8(36, 36, 34, 246)),
-                sk::GradientStop::new(1.0, sk::Color::from_rgba8(22, 22, 21, 246)),
-            ],
-            sk::SpreadMode::Pad,
-            id,
-        )
-        .unwrap_or(sk::Shader::SolidColor(sk::Color::from_rgba8(26, 26, 24, 246)));
-        pm.fill_path(&bg, &paint, sk::FillRule::Winding, id, None);
-        let line = sk::Stroke { width: 1.0, ..Default::default() };
-        pm.stroke_path(&bg, &paint_of(Color32::from_rgb(0x3A, 0x3A, 0x36)), &line, id, None);
-    }
-    if let Some(top) = theme::rounded_rect_path(1.5, 1.5, w - 3.0, h - 3.0, h / 2.0 - 1.5) {
-        let line = sk::Stroke { width: 1.0, ..Default::default() };
-        let clip = sk::Rect::from_xywh(0.0, 0.0, w, h * 0.35).and_then(|r| {
-            let mut m = sk::Mask::new(w as u32, h as u32)?;
-            m.fill_path(&sk::PathBuilder::from_rect(r), sk::FillRule::Winding, false, id);
-            Some(m)
-        });
-        pm.stroke_path(&top, &paint_of(Color32::from_white_alpha(14)), &line, id, clip.as_ref());
+    // the card
+    let radius = 12.0 * s;
+    if let Some(bg) = theme::rounded_rect_path(0.5, 0.5, w - 1.0, h - 1.0, radius) {
+        fill(&mut pm, Some(bg.clone()), Color32::from_rgba_unmultiplied(0x1C, 0x1C, 0x1A, 250));
+        pm.stroke_path(&bg, &paint_of(theme::LINE_HI), &line, id, None);
     }
 
-    // the dot: breathing red while recording, steady amber while paused
-    let (dx, r) = (17.0 * s, 4.5 * s);
+    // the chip: tinted red while recording, amber while paused
+    let tint = if look.paused { PAUSED } else { REC };
+    let chip = (5.0 * s, 5.0 * s, pause_x.0 as f32 - 10.0 * s, h - 10.0 * s);
+    fill(&mut pm, theme::rounded_rect_path(chip.0, chip.1, chip.2, chip.3, 8.0 * s), Color32::from_rgba_unmultiplied(tint.r(), tint.g(), tint.b(), 34));
+    let (dx, r) = (chip.0 + 13.0 * s, 4.0 * s);
     if look.paused {
-        fill(&mut pm, sk::PathBuilder::from_circle(dx, cy, r), PAUSED);
+        // two short bars instead of the dot
+        for x in [dx - 2.6 * s, dx + 1.0 * s] {
+            fill(&mut pm, theme::rounded_rect_path(x - 0.8 * s, cy - 4.5 * s, 2.4 * s, 9.0 * s, 1.0 * s), PAUSED);
+        }
     } else {
         let k = 0.5 - 0.5 * (look.clock / BREATH * std::f32::consts::TAU).cos();
-        for (grow, alpha) in [(4.5, 0.10), (2.6, 0.16)] {
-            let a = (alpha * k * 255.0) as u8;
-            fill(&mut pm, sk::PathBuilder::from_circle(dx, cy, r + grow * s * (0.6 + 0.4 * k)), Color32::from_rgba_unmultiplied(REC.r(), REC.g(), REC.b(), a));
-        }
-        let a = (255.0 * (0.78 + 0.22 * k)) as u8;
-        fill(&mut pm, sk::PathBuilder::from_circle(dx, cy, r), Color32::from_rgba_unmultiplied(REC.r(), REC.g(), REC.b(), a));
+        let a = (60.0 * k) as u8;
+        fill(&mut pm, sk::PathBuilder::from_circle(dx, cy, r + 3.0 * s), Color32::from_rgba_unmultiplied(REC.r(), REC.g(), REC.b(), a));
+        fill(&mut pm, sk::PathBuilder::from_circle(dx, cy, r), REC);
     }
     if let Ok(f) = FontRef::try_from_slice(theme::FONT_MONO_MEDIUM) {
-        let col = if look.paused { theme::DIM } else { theme::TEXT };
-        draw_text(&mut pm, &f, 13.0 * s, 30.0 * s, cy, &fmt_time(look.secs), col);
+        let col = if look.paused { PAUSED } else { theme::TEXT };
+        draw_text(&mut pm, &f, 13.5 * s, dx + 11.0 * s, cy, &fmt_time(look.secs), col);
     }
 
-    let x0 = pause_x.0 as f32;
-    if let Some(sep) = sk::Rect::from_xywh(x0 - 1.0 * s, 8.0 * s, 1.0, h - 16.0 * s) {
-        pm.fill_rect(sep, &paint_of(theme::LINE), id, None);
-    }
+    // the buttons: rounded squares, stop filled red
     for (btn, (a, b)) in [(Btn::Pause, pause_x), (Btn::Stop, stop_x)] {
-        let c = ((a + b) as f32 / 2.0, cy);
+        let (bx, bw) = (a as f32, (b - a) as f32);
+        let by = (h - bw) / 2.0;
+        let c = (bx + bw / 2.0, cy);
         let hovered = look.hover == Some(btn);
-        if hovered {
-            let bg = if btn == Btn::Stop { Color32::from_rgba_unmultiplied(REC.r(), REC.g(), REC.b(), 60) } else { Color32::from_white_alpha(30) };
-            fill(&mut pm, sk::PathBuilder::from_circle(c.0, c.1, 11.5 * s), bg);
-        }
-        let fg = match (btn, hovered) {
-            (Btn::Stop, true) => REC,
-            (_, true) => theme::ACCENT_HI,
-            _ => theme::TEXT,
+        let plate = match (btn, hovered) {
+            (Btn::Stop, true) => Color32::from_rgb(0xF0, 0x5A, 0x5F),
+            (Btn::Stop, false) => REC,
+            (_, true) => Color32::from_white_alpha(30),
+            _ => Color32::from_white_alpha(12),
         };
+        fill(&mut pm, theme::rounded_rect_path(bx, by, bw, bw, 8.0 * s), plate);
+        let fg = if btn == Btn::Stop { Color32::WHITE } else if hovered { theme::ACCENT_HI } else { theme::TEXT };
         match btn {
             Btn::Stop => {
                 let sq = 9.0 * s;
                 fill(&mut pm, theme::rounded_rect_path(c.0 - sq / 2.0, c.1 - sq / 2.0, sq, sq, 2.0 * s), fg);
             }
             Btn::Pause if look.paused => {
-                // resume: a play triangle with rounded feel
                 let mut pb = sk::PathBuilder::new();
                 pb.move_to(c.0 - 3.0 * s, c.1 - 5.5 * s);
                 pb.line_to(c.0 + 5.5 * s, c.1);

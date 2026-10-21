@@ -73,6 +73,7 @@ pub fn probe(path: &Path) -> Result<MediaInfo> {
 
 pub fn probe_reader(reader: &IMFSourceReader) -> Result<MediaInfo> {
     let mut info = MediaInfo::default();
+    let mut rates = Vec::new();
     unsafe {
         let mut i = 0u32;
         while let Ok(t) = reader.GetNativeMediaType(i, 0) {
@@ -95,8 +96,18 @@ pub fn probe_reader(reader: &IMFSourceReader) -> Result<MediaInfo> {
                 info.fps = if d > 0.0 { n / d } else { 30.0 };
             } else if major == MFMediaType_Audio {
                 info.audio_streams.push(i);
+                rates.push(t.GetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND).unwrap_or(0));
             }
             i += 1;
+        }
+        // Our recordings: the desktop sound (128 kbit/s) is track 1, the
+        // microphone (96 kbit/s) track 2. The file source may list them the
+        // other way round: the bitrate tells which is which.
+        if let ([a, b], [ra, rb]) = (info.audio_streams.as_mut_slice(), rates.as_slice())
+            && *ra == 12_000
+            && *rb == 16_000
+        {
+            std::mem::swap(a, b);
         }
         info.audio_tracks = info.audio_streams.len();
         if let Ok(pv) = reader.GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE.0 as u32, &MF_PD_DURATION) {

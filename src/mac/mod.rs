@@ -220,7 +220,7 @@ pub fn init_process() {
     let has = |f: &str| args.iter().any(|a| a == f);
     let kind = if has("--pin") || has("--demo") {
         Kind::Pin
-    } else if has("--settings") || has("--edit") || has("--video") || args.iter().any(|a| !a.starts_with("--") && Path::new(a).is_file()) {
+    } else if has("--settings") || has("--history") || has("--edit") || has("--video") || args.iter().any(|a| !a.starts_with("--") && Path::new(a).is_file()) {
         Kind::Regular
     } else {
         Kind::Tray
@@ -486,6 +486,17 @@ pub fn force_foreground(hwnd: HWND) {
 
 pub fn is_foreground(hwnd: HWND) -> bool {
     unsafe { ffi::bk_window_is_key(hwnd) != 0 }
+}
+
+/// Liquid Glass is there (macOS 26).
+pub fn glass_available() -> bool {
+    unsafe { ffi::bk_glass_available() != 0 }
+}
+
+/// A glass pane behind `rect` (points, window coordinates); `bg` = the
+/// window's color around it (0x00RRGGBB, 0 = clear).
+pub fn window_glass(hwnd: HWND, rect: (f32, f32, f32, f32), radius: f32, bg: u32) -> bool {
+    unsafe { ffi::bk_window_glass(hwnd, rect.0 as f64, rect.1 as f64, rect.2 as f64, rect.3 as f64, radius as f64, bg) != 0 }
 }
 
 /// The system window buttons from `x` on, centered on `cy` points from the top.

@@ -35,6 +35,25 @@ cp "$BIN" "$APP/Contents/MacOS/blinker"
 cp assets/macos/blinker.icns "$APP/Contents/Resources/blinker.icns"
 sed "s/@VERSION@/$VERSION/g" assets/macos/Info.plist > "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
+# macOS 26: the Liquid Glass icon (an Icon Composer file) next to the old
+# one, when this Mac's Xcode can build it (Xcode 26's actool)
+if xcrun --find actool >/dev/null 2>&1; then
+    ICON_OUT=$(mktemp -d)
+    if xcrun actool assets/macos/Blinker.icon --compile "$ICON_OUT" --app-icon Blinker --include-all-app-icons \
+        --enable-on-demand-resources NO --development-region en --target-device mac --platform macosx \
+        --minimum-deployment-target 14.0 --output-partial-info-plist "$ICON_OUT/partial.plist" >"$ICON_OUT/log" 2>&1 &&
+        [ -f "$ICON_OUT/Assets.car" ]; then
+        cp "$ICON_OUT/Assets.car" "$APP/Contents/Resources/Assets.car"
+        /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string Blinker" "$APP/Contents/Info.plist"
+        ICON="Liquid Glass"
+    else
+        echo "warning: the Liquid Glass icon wasn't built:" >&2
+        sed 's/^/    /' "$ICON_OUT/log" >&2
+    fi
+    rm -rf "$ICON_OUT"
+else
+    echo "note: no actool (Xcode 26): the app keeps the plain icon" >&2
+fi
 KEYCHAIN="$HOME/Library/Keychains/blinker-signing.keychain-db"
 KEYCHAIN_PASSWORD_FILE="$HOME/Library/Application Support/Blinker Signing/keychain-password"
 if [ -f "$KEYCHAIN" ] && [ -f "$KEYCHAIN_PASSWORD_FILE" ]; then
@@ -69,5 +88,5 @@ if [ ! -x "$DMGBUILD" ]; then
 fi
 rm -f target/release/Blinker.dmg
 "$DMGBUILD" -s scripts/dmg-settings.py -D app="$APP" Blinker target/release/Blinker.dmg >/dev/null
-echo "built $APP ($VERSION, signed: $SIGNED)"
+echo "built $APP ($VERSION, signed: $SIGNED, icon: ${ICON:-plain})"
 codesign -d -r- "$APP" 2>&1 | sed -n 's/^designated => /requirement: /p'

@@ -1,6 +1,6 @@
 //! Audio from WASAPI: the desktop mix (loopback of the default output) and the
-//! default microphone, each into its own track. Windows converts both to
-//! 48 kHz stereo 16-bit for us (AUTOCONVERTPCM).
+//! microphone (the chosen one, or the default), each into its own track.
+//! Windows converts both to 48 kHz stereo 16-bit for us (AUTOCONVERTPCM).
 
 use super::encoder::{AUDIO_CHANNELS, AUDIO_RATE, HNS};
 use super::{AudioSink, Clock};
@@ -17,6 +17,48 @@ pub enum Source {
     Mic,
 }
 
+/// The microphone picked in the settings (device id); empty = the default.
+static MIC: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// Records from this microphone from now on (`""` = the system default).
+pub fn use_mic(id: &str) {
+    *MIC.lock().unwrap() = id.to_string();
+}
+
+/// The microphones there are: (device id, name).
+pub fn mics() -> Vec<(String, String)> {
+    crate::media::startup();
+    let mut out = Vec::new();
+    unsafe {
+        let Ok(en) = CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL) else { return out };
+        let Ok(list) = en.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE) else { return out };
+        let n = list.GetCount().unwrap_or(0);
+        // PKEY_Device_FriendlyName
+        let key = windows::Win32::Foundation::PROPERTYKEY {
+            fmtid: windows::core::GUID::from_u128(0xa45c254e_df1c_4efd_8020_67d146a850e0),
+            pid: 14,
+        };
+        for i in 0..n {
+            let Ok(dev) = list.Item(i) else { continue };
+            let Ok(id) = dev.GetId() else { continue };
+            let id_s = id.to_string().unwrap_or_default();
+            windows::Win32::System::Com::CoTaskMemFree(Some(id.0 as _));
+            let name = dev
+                .OpenPropertyStore(windows::Win32::System::Com::STGM_READ)
+                .and_then(|store| store.GetValue(&key))
+                .and_then(|v| windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc(&v))
+                .map(|p| {
+                    let s = p.to_string().unwrap_or_default();
+                    windows::Win32::System::Com::CoTaskMemFree(Some(p.0 as _));
+                    s
+                })
+                .unwrap_or_else(|_| id_s.clone());
+            out.push((id_s, name));
+        }
+    }
+    out
+}
+
 struct Client {
     client: IAudioClient,
     capture: IAudioCaptureClient,
@@ -27,7 +69,18 @@ fn open(source: Source) -> Result<Client> {
     unsafe {
         let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
         let flow = if source == Source::Desktop { eRender } else { eCapture };
-        let dev = en.GetDefaultAudioEndpoint(flow, eConsole)?;
+        let chosen = MIC.lock().unwrap().clone();
+        let picked = (source == Source::Mic && !chosen.is_empty())
+            .then(|| {
+                let w: Vec<u16> = chosen.encode_utf16().chain(std::iter::once(0)).collect();
+                en.GetDevice(windows::core::PCWSTR(w.as_ptr())).ok()
+            })
+            .flatten();
+        // a microphone that's gone falls back to the default one
+        let dev = match picked {
+            Some(d) => d,
+            None => en.GetDefaultAudioEndpoint(flow, eConsole)?,
+        };
         let client: IAudioClient = dev.Activate(CLSCTX_ALL, None)?;
         let fmt = WAVEFORMATEX {
             wFormatTag: 1, // WAVE_FORMAT_PCM

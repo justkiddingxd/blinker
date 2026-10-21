@@ -54,6 +54,8 @@ pub enum Command {
     /// Settings changed in another process (replay on/off...).
     Reconfigure,
     OpenHome(HomeTab),
+    /// The history window (screenshots, recordings, uploads).
+    OpenHistory,
     OpenFolder,
     Quit,
     /// Quit and start the (just updated) app again.
@@ -86,6 +88,9 @@ pub struct Shared {
     pub recording: std::sync::atomic::AtomicBool,
     /// The instant replay is buffering (the tray icon turns red).
     pub replay_live: std::sync::atomic::AtomicBool,
+    /// The recording going on: when it started (unix seconds) and what it
+    /// is ("1920 × 1080 · 60 fps"), for the Discord status.
+    pub recording_note: Mutex<Option<(u64, String)>>,
 }
 
 impl Shared {
@@ -100,6 +105,7 @@ impl Shared {
             last_region: Mutex::new(None),
             recording: std::sync::atomic::AtomicBool::new(false),
             replay_live: std::sync::atomic::AtomicBool::new(false),
+            recording_note: Mutex::new(None),
         })
     }
 

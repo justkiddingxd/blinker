@@ -112,6 +112,11 @@ pub enum EditorExit {
     Closed,
 }
 
+thread_local! {
+    /// The window's width, for the glass title bar (macOS 26).
+    static GLASS_W: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+}
+
 pub fn run(shared: &Arc<Shared>, state: EditorState, notice: Option<String>) -> EditorExit {
     let exit: Rc<RefCell<Option<EditorExit>>> = Rc::default();
     let exit2 = exit.clone();
@@ -127,7 +132,9 @@ pub fn run(shared: &Arc<Shared>, state: EditorState, notice: Option<String>) -> 
     let viewport = egui::ViewportBuilder::default()
         .with_title(title)
         .with_icon(theme::icon_data(64))
-        .with_inner_size(size);
+        .with_inner_size(size)
+        .with_transparent(theme::glass());
+    GLASS_W.with(|w| w.set(size.x));
     let viewport = crate::chrome::style(viewport);
     let shared2 = shared.clone();
     runtime::run_window(shared, viewport, true, move |cc| {
@@ -135,6 +142,7 @@ pub fn run(shared: &Arc<Shared>, state: EditorState, notice: Option<String>) -> 
         if let Some(h) = hwnd {
             win::style_borderless(h);
             crate::chrome::place_window_buttons(h, crate::chrome::TITLE_H + 4.0);
+            crate::chrome::glass_bar(h, GLASS_W.with(|w| w.get()), crate::chrome::TITLE_H + 4.0);
             win::cloak(h, true);
             win::force_foreground(h);
         }
@@ -438,11 +446,14 @@ impl EditorApp {
         let ctx = ui.ctx().clone();
         egui::Panel::top("topbar")
             .exact_size(crate::chrome::TITLE_H + 4.0)
-            .frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin { left: 14, right: 0, top: 0, bottom: 0 }))
+            .show_separator_line(false)
+            .frame(egui::Frame::new().fill(crate::chrome::bar_fill()).inner_margin(egui::Margin { left: 14, right: 0, top: 0, bottom: 0 }))
             .show(ui, |ui| {
                 let r = ui.max_rect();
                 crate::chrome::drag_region(ui, r.expand2(vec2(14.0, 0.0)));
-                ui.painter().hline(r.x_range().expand(14.0), r.bottom() + 0.5, Stroke::new(1.0, LINE));
+                if !theme::glass() {
+                    ui.painter().hline(r.x_range().expand(14.0), r.bottom() + 0.5, Stroke::new(1.0, LINE));
+                }
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     crate::chrome::leading_space(ui);
@@ -774,15 +785,17 @@ impl EditorApp {
         let typing = ctx.egui_wants_keyboard_input();
         let (cmd, shift) = ctx.input(|i| (i.modifiers.command, i.modifiers.shift));
         let pressed = |k: Key| ctx.input(|i| i.key_pressed(k));
+        // Ctrl / Cmd + C arrives as a Copy event, not a key press; text being
+        // typed keeps it to itself
+        if ctx.memory(|m| m.focused().is_none()) && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)) || (i.modifiers.command && i.key_pressed(Key::C))) {
+            self.copy(ctx);
+        }
         if cmd {
             if pressed(Key::Z) {
                 if shift { self.st.redo() } else { self.st.undo() }
             }
             if pressed(Key::Y) {
                 self.st.redo();
-            }
-            if pressed(Key::C) {
-                self.copy(ctx);
             }
             if pressed(Key::S) {
                 if shift { self.save_as(ctx) } else { self.save(ctx); }
@@ -1366,6 +1379,10 @@ fn menu_item(ui: &mut egui::Ui, icon: Icon, label: &str, key: &str) -> bool {
 }
 
 impl eframe::App for EditorApp {
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        if theme::glass() { [0.0; 4] } else { visuals.panel_fill.to_normalized_gamma_f32() }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.frame_no = self.frame_no.saturating_add(1);

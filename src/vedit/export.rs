@@ -534,6 +534,37 @@ mod tests {
         }
     }
 
+    /// Track order: a file written with a tone in track 0 and silence in
+    /// track 1 reads back in that order.
+    #[test]
+    fn track_order() {
+        crate::media::startup();
+        let dst = std::env::temp_dir().join(format!("blinker-order-{}.mp4", std::process::id()));
+        let _ = std::fs::remove_file(&dst);
+        let spec = VideoSpec { width: 64, height: 64, fps: 10, bitrate: 200_000, codec: crate::record::encoder::Codec::H264, quality: None, keyframe_secs: 1 };
+        let enc = Encoder::new(&dst, Some(&spec), 2, None).unwrap();
+        let frames = AUDIO_RATE as usize; // 1 s
+        let tone: Vec<i16> = (0..frames).flat_map(|i| { let v = ((i as f32 * 440.0 * 6.283 / AUDIO_RATE as f32).sin() * 12000.0) as i16; [v, v] }).collect();
+        let silence = vec![0i16; frames * 2];
+        let black = vec![0u8; 64 * 64 * 4];
+        for k in 0..10 {
+            let t = k as i64 * HNS / 10;
+            let c = frames * 2 / 10;
+            enc.write_audio(0, &tone[k * c..(k + 1) * c], t).unwrap();
+            enc.write_audio(1, &silence[k * c..(k + 1) * c], t).unwrap();
+            enc.write_bgra(&black, t, HNS / 10).unwrap();
+        }
+        enc.end_audio().unwrap();
+        enc.finish().unwrap();
+        drop(enc);
+        let info = crate::media::probe(&dst).unwrap();
+        let energy = |stream: u32| -> f64 { read_range(&dst, stream, 0, frames).unwrap().iter().map(|s| (*s as f64).abs()).sum::<f64>() };
+        let (a, b) = (energy(info.audio_streams[0]), energy(info.audio_streams[1]));
+        eprintln!("streams {:?}: first {a:.0}, second {b:.0}", info.audio_streams);
+        let _ = std::fs::remove_file(&dst);
+        assert!(a > b * 10.0, "the tone is in the second track");
+    }
+
     /// Saves 0.5..2.5 s of the sound of `BLINKER_TEST_EXPORT` as MP3, M4A, WAV.
     #[test]
     fn export_audio() {

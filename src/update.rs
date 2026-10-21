@@ -1,7 +1,9 @@
-//! Updates. Is there a newer blinker? The latest GitHub release (the one
-//! blinker.cool offers for download) against this build: asked in the
-//! background at most every few hours, the answer cached on disk. And
-//! installing it in one click: download, check, swap the app, start again.
+//! Updates. Is there a newer blinker? The latest release as blinker.cool
+//! tells it (`/version.json`, written there by the release workflow; the
+//! GitHub API when the site doesn't answer) against this build: asked when
+//! the settings open (at most every 10 minutes) or on "check for updates",
+//! the answer cached on disk. And installing it in one click: download,
+//! check, swap the app, start again.
 
 use eframe::egui;
 use std::path::{Path, PathBuf};
@@ -12,6 +14,10 @@ pub const REPO_URL: &str = "https://github.com/justkiddingxd/blinker";
 /// Where an update is downloaded (with the Mac guide).
 pub const SITE_URL: &str = "https://blinker.cool";
 const LATEST_API: &str = "https://api.github.com/repos/justkiddingxd/blinker/releases/latest";
+/// The latest release with its files: {"version", "tag", "assets": {name: {"url", "size"}}}.
+const SITE_VERSION: &str = "https://blinker.cool/version.json";
+/// The settings ask again after this.
+const SETTINGS_EVERY: Duration = Duration::from_secs(10 * 60);
 /// GitHub allows 60 unauthenticated requests an hour: plenty, but no need to ask often.
 const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 
@@ -71,8 +77,38 @@ struct Release {
     asset: Option<(String, u64)>,
 }
 
-/// The latest release, straight from GitHub.
+/// The latest release: from our site, or from GitHub when it doesn't answer.
 fn fetch_release() -> Result<Release, String> {
+    match fetch_site() {
+        Ok(r) => Ok(r),
+        Err(e) => {
+            crate::config::log::error(format!("update check on the site: {e}, asking github"));
+            fetch_github()
+        }
+    }
+}
+
+fn fetch_site() -> Result<Release, String> {
+    let (status, body) = crate::upload::get(SITE_VERSION, &[("Cache-Control", "no-cache".to_string())])?;
+    if status != 200 {
+        return Err(format!("the site answered {status}"));
+    }
+    site_release(&body).ok_or_else(|| "no version in version.json".to_string())
+}
+
+/// version.json into a release (this system's file, when it has one).
+fn site_release(body: &str) -> Option<Release> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let version = v.get("version").and_then(|x| x.as_str())?;
+    let tag = v.get("tag").and_then(|x| x.as_str()).map(String::from).unwrap_or_else(|| format!("v{version}"));
+    let asset = v.pointer(&format!("/assets/{ASSET}")).and_then(|a| {
+        Some((a.get("url")?.as_str()?.to_string(), a.get("size")?.as_u64()?))
+    });
+    Some(Release { tag, asset })
+}
+
+/// The latest release, straight from GitHub.
+fn fetch_github() -> Result<Release, String> {
     let headers = [("Accept", "application/vnd.github+json".to_string())];
     let (status, body) = crate::upload::get(LATEST_API, &headers)?;
     if status != 200 {
@@ -97,13 +133,19 @@ fn fetch() -> Result<String, String> {
     fetch_release().map(|r| r.tag)
 }
 
+fn newer(tag: &str) -> Option<String> {
+    is_newer(tag).then(|| tag.trim_start_matches(['v', 'V']).to_string())
+}
+
 /// A newer version, when there is one. Filled from the cache right away and
-/// refreshed in the background when the cache is old; `ctx` repaints then.
-pub fn watch(ctx: &egui::Context) -> Arc<Mutex<Option<String>>> {
-    let newer = |tag: &str| is_newer(tag).then(|| tag.trim_start_matches(['v', 'V']).to_string());
+/// refreshed in the background when the cache is older than 10 minutes
+/// (call it again each time the settings are shown); `ctx` repaints then.
+pub fn watch(ctx: &egui::Context, slot: &Arc<Mutex<Option<String>>>) {
     let cache = cached();
-    let slot = Arc::new(Mutex::new(cache.as_ref().and_then(|(_, tag)| newer(tag))));
-    let fresh = cache.is_some_and(|(at, _)| at.elapsed().is_ok_and(|age| age < EVERY));
+    if let Some((_, tag)) = &cache {
+        *slot.lock().unwrap() = newer(tag);
+    }
+    let fresh = cache.is_some_and(|(at, _)| at.elapsed().is_ok_and(|age| age < SETTINGS_EVERY));
     if !fresh {
         let (slot, ctx) = (slot.clone(), ctx.clone());
         std::thread::spawn(move || match fetch() {
@@ -115,7 +157,35 @@ pub fn watch(ctx: &egui::Context) -> Arc<Mutex<Option<String>>> {
             Err(e) => crate::config::log::error(format!("update check: {e}")),
         });
     }
-    slot
+}
+
+/// "Check for updates": asks right away, whatever the cache says.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Check {
+    Asking,
+    /// This is the latest version.
+    Latest,
+    Newer(String),
+    Failed(String),
+}
+
+pub fn check_now(ctx: &egui::Context, slot: &Arc<Mutex<Option<String>>>) -> Arc<Mutex<Check>> {
+    let state = Arc::new(Mutex::new(Check::Asking));
+    let (st, slot, ctx) = (state.clone(), slot.clone(), ctx.clone());
+    std::thread::spawn(move || {
+        let r = match fetch() {
+            Ok(tag) => {
+                remember(&tag);
+                let n = newer(&tag);
+                *slot.lock().unwrap() = n.clone();
+                n.map(Check::Newer).unwrap_or(Check::Latest)
+            }
+            Err(e) => Check::Failed(e),
+        };
+        *st.lock().unwrap() = r;
+        ctx.request_repaint();
+    });
+    state
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +298,7 @@ pub fn auto(shared: std::sync::Arc<crate::runtime::Shared>) {
 
 /// `curl` ships with macOS and Windows 10+: follows GitHub's redirects, uses
 /// the system's TLS and proxy. Progress comes from the file's size.
-fn download(url: &str, dst: &Path, size: u64, progress: impl Fn(u64)) -> Result<(), String> {
+pub(crate) fn download(url: &str, dst: &Path, size: u64, progress: impl Fn(u64)) -> Result<(), String> {
     let mut cmd = std::process::Command::new(if cfg!(windows) { "curl.exe" } else { "/usr/bin/curl" });
     cmd.args(["-fsSL", "--retry", "2", "--connect-timeout", "20", "-o"]).arg(dst).arg(url);
     cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
@@ -410,6 +480,16 @@ pub fn relaunch() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn site_file() {
+        let body = r#"{"version":"9.1.0","tag":"v9.1.0","assets":{"Blinker-macos.zip":{"url":"https://x/m.zip","size":12},"blinker.exe":{"url":"https://x/b.exe","size":34}}}"#;
+        let r = super::site_release(body).unwrap();
+        assert_eq!(r.tag, "v9.1.0");
+        let (url, size) = r.asset.unwrap();
+        assert!(url.starts_with("https://x/") && size > 0);
+        assert!(super::site_release("{}").is_none());
+    }
+
     #[test]
     fn versions() {
         use super::parse;

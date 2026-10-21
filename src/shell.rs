@@ -359,6 +359,7 @@ fn show_menu(shared: &Shared) {
     }
     items.extend([
         Item::separator(),
+        Item::new(14, Icon::Frame, crate::i18n::l("история", "history"), ""),
         Item::new(6, Icon::Folder, crate::i18n::t("папка с снятым"), ""),
         Item::new(7, Icon::Settings, crate::i18n::t("настройки"), ""),
         Item::separator(),
@@ -376,6 +377,7 @@ fn show_menu(shared: &Shared) {
         Some(10) => Command::ReplaySave,
         Some(12) => Command::RecordPause,
         Some(13) => Command::RecordGif,
+        Some(14) => Command::OpenHistory,
         _ => return,
     };
     shared.push(cmd);
