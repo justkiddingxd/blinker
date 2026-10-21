@@ -81,9 +81,10 @@ impl Job {
     }
 }
 
-/// There is always somewhere to upload (post.blinker.cool by default).
-pub fn configured(_cfg: &Config) -> bool {
-    true
+/// Uploading is on (there is always somewhere to upload: post.blinker.cool
+/// by default).
+pub fn configured(cfg: &Config) -> bool {
+    cfg.upload_enabled
 }
 
 pub fn content_type(path: &Path) -> &'static str {

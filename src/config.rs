@@ -357,6 +357,8 @@ pub struct Config {
     pub replay_desktop_audio: bool,
     pub replay_mic: bool,
     pub beauty: Beauty,
+    /// Uploading at all: off hides every upload button and the U key.
+    pub upload_enabled: bool,
     /// Upload endpoint (see `upload.rs` for the protocol); empty = the
     /// default server, post.blinker.cool.
     pub upload_url: String,
@@ -433,6 +435,7 @@ impl Default for Config {
             replay_desktop_audio: true,
             replay_mic: false,
             beauty: Beauty::default(),
+            upload_enabled: true,
             upload_url: String::new(),
             upload_token: String::new(),
             upload_custom: None,

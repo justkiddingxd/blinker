@@ -7,7 +7,8 @@ Each version's section becomes its release notes on GitHub (`.github/workflows/r
 **Загрузка**
 - Сервер по умолчанию — **post.blinker.cool**: без регистрации, файлы живут 3 дня, видео до 100 мб. У каждой ссылки своя страница: просмотр картинки, плеер видео и звука.
 - Свой такой же сервер поднимается одной командой: `docker compose up` в папке `server` ([инструкция](https://github.com/justkiddingxd/blinker/blob/main/server/README.ru.md)).
-- Загрузчики ShareX: подключи файл `.sxcu`, и снимки уходят на твой Zipline, XBackBone и другие.
+- Загрузчики ShareX: подключи файл `.sxcu` (раздел «система»), и снимки уходят на твой Zipline, XBackBone и другие.
+- Загрузку можно выключить совсем: пропадут все её кнопки и клавиша `u`.
 
 **Переезд с ShareX**
 - Перенос настроек ShareX одной кнопкой: горячие клавиши, папка, формат, что делать после снимка, уведомление, звук, загрузчик. При первом запуске рядом с ShareX настройки сами открываются на этой кнопке.
@@ -36,7 +37,8 @@ Each version's section becomes its release notes on GitHub (`.github/workflows/r
 **Uploads**
 - The default server is **post.blinker.cool**: no sign-up, files live 3 days, videos up to 100 mb. Every link opens a page of its own: an image viewer, a video and sound player.
 - The same server runs anywhere with `docker compose up` in the `server` folder ([how](https://github.com/justkiddingxd/blinker/blob/main/server/README.md)).
-- ShareX uploaders: pick an `.sxcu` file and captures go to your Zipline, XBackBone and the like.
+- ShareX uploaders: pick an `.sxcu` file ("system") and captures go to your Zipline, XBackBone and the like.
+- Uploads can be switched off altogether: every upload button and the `u` key go away.
 
 **Moving from ShareX**
 - ShareX settings in one click: hotkeys, folder, format, after-capture steps, notification, sound, uploader. On the first start next to ShareX the settings open at that button.

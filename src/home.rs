@@ -590,6 +590,19 @@ impl HomeApp {
 
     fn upload_page(&mut self, ui: &mut egui::Ui) {
         Self::page_title(ui, t("загрузка"), l("файл уходит на сервер, в буфер попадает ссылка", "the file goes to a server, the link goes to the clipboard"));
+        ui::group(ui, "", |ui| {
+            ui::setting_row(
+                ui,
+                l("загрузка", "uploads"),
+                l("кнопки загрузки в уведомлении и редакторах, клавиша u при выделении", "the upload buttons on the card and in the editors, the u key while selecting"),
+                |ui| {
+                    ui::toggle(ui, &mut self.cfg.upload_enabled);
+                },
+            );
+        });
+        if !self.cfg.upload_enabled {
+            return;
+        }
         if self.upload_mode.is_none() {
             self.upload_mode = Some(UploadMode::of(&self.cfg));
         }
@@ -604,49 +617,36 @@ impl HomeApp {
             )
         };
         ui::group(ui, l("сервер", "server"), |ui| {
-            ui::setting_row(ui, l("куда загружать", "upload to"), mode.desc(), |ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                for m in [UploadMode::ShareX, UploadMode::Own, UploadMode::Default] {
-                    if ui::filter(ui, m.label(), mode == m).clicked() && mode != m {
-                        mode = m;
-                        match m {
-                            UploadMode::Default => {
+            // a ShareX uploader (brought over or from a .sxcu) takes the place of both
+            if let Some(c) = self.cfg.upload_custom.clone() {
+                let title = if c.name.is_empty() { l("загрузчик sharex", "sharex uploader").to_string() } else { lf!("загрузчик «{}»", "the “{}” uploader", c.name) };
+                let mut off = false;
+                ui::setting_row(ui, &title, &c.url, |ui| {
+                    off = ui::button(ui, l("убрать", "remove"), ui::Kind::Ghost).clicked();
+                });
+                if off {
+                    self.cfg.upload_custom = None;
+                    mode = UploadMode::of(&self.cfg);
+                }
+            } else {
+                ui::setting_row(ui, l("куда загружать", "upload to"), mode.desc(), |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for m in [UploadMode::Own, UploadMode::Default] {
+                        if ui::filter(ui, m.label(), mode == m).clicked() && mode != m {
+                            mode = m;
+                            if m == UploadMode::Default {
                                 self.cfg.upload_url.clear();
-                                self.cfg.upload_custom = None;
-                            }
-                            UploadMode::Own => self.cfg.upload_custom = None,
-                            UploadMode::ShareX => {
-                                if self.cfg.upload_custom.is_none() {
-                                    self.pick_sxcu(ui.ctx());
-                                }
-                                if self.cfg.upload_custom.is_none() {
-                                    mode = UploadMode::of(&self.cfg);
-                                }
                             }
                         }
                     }
-                }
-            });
-            match mode {
-                UploadMode::Default => {}
-                UploadMode::Own => {
+                });
+                if mode == UploadMode::Own {
                     ui::setting_row(ui, t("адрес сервера"), "", |ui| {
                         field(ui, &mut self.cfg.upload_url, "https://share.example.com/api/upload", false);
                     });
                     ui::setting_row(ui, t("токен"), "", |ui| {
                         field(ui, &mut self.cfg.upload_token, t("секретный ключ"), true);
                     });
-                }
-                UploadMode::ShareX => {
-                    let (name, url) = self.cfg.upload_custom.as_ref().map(|c| (c.name.clone(), c.url.clone())).unwrap_or_default();
-                    let title = if name.is_empty() { l("загрузчик sharex", "sharex uploader").to_string() } else { name };
-                    let mut pick = false;
-                    ui::setting_row(ui, &title, &url, |ui| {
-                        pick = ui::button(ui, l("другой .sxcu…", "another .sxcu…"), ui::Kind::Ghost).clicked();
-                    });
-                    if pick {
-                        self.pick_sxcu(ui.ctx());
-                    }
                 }
             }
             let status = match self.upload_test.as_ref().map(|r| r.lock().unwrap().clone()) {
@@ -677,18 +677,18 @@ impl HomeApp {
             });
         });
         ui.add_space(16.0);
-        let note = match mode {
-            UploadMode::Default => l(
+        let note = match (mode, self.cfg.upload_custom.is_some()) {
+            (_, true) => l(
+                "загрузчик перенесён из sharex. другой подключается в разделе «система».",
+                "the uploader came from sharex. another one is picked in “system”.",
+            ),
+            (UploadMode::Default, _) => l(
                 "post.blinker.cool — наш сервер: без регистрации, файлы живут 3 дня, видео до 100 мб. свой такой же можно поднять из папки server в репозитории.",
                 "post.blinker.cool is our server: no sign-up, files live 3 days, videos up to 100 mb. you can run your own from the server folder of the repository.",
             ),
-            UploadMode::Own => l(
+            (UploadMode::Own, _) => l(
                 "сервер получает post с файлом в теле и отвечает {\"url\": \"…\"}. готовый сервер — в папке server репозитория.",
                 "the server gets a post with the file as the body and answers {\"url\": \"…\"}. a ready one is in the server folder of the repository.",
-            ),
-            UploadMode::ShareX => l(
-                "подойдёт любой сервер с загрузчиком для sharex (.sxcu): zipline, xbackbone, chibisafe…",
-                "any server with a sharex uploader (.sxcu) works: zipline, xbackbone, chibisafe…",
             ),
         };
         ui.add(egui::Label::new(egui::RichText::new(note).font(font(12.0)).color(FAINT)).wrap());
@@ -968,6 +968,18 @@ impl HomeApp {
             if let Some(src) = action {
                 self.import_sharex(ui.ctx(), src);
             }
+            let mut pick = false;
+            ui::setting_row(
+                ui,
+                l("загрузчик sharex", "sharex uploader"),
+                l("файл .sxcu: снимки уходят на твой zipline, xbackbone и другие", "an .sxcu file: captures go to your zipline, xbackbone and the like"),
+                |ui| {
+                    pick = ui::button(ui, l("выбрать .sxcu…", "choose .sxcu…"), ui::Kind::Ghost).clicked();
+                },
+            );
+            if pick {
+                self.pick_sxcu(ui.ctx());
+            }
         });
     }
 
@@ -1184,25 +1196,17 @@ impl HomeApp {
 enum UploadMode {
     Default,
     Own,
-    ShareX,
 }
 
 impl UploadMode {
     fn of(cfg: &Config) -> UploadMode {
-        if cfg.upload_custom.is_some() {
-            UploadMode::ShareX
-        } else if cfg.upload_url.trim().is_empty() {
-            UploadMode::Default
-        } else {
-            UploadMode::Own
-        }
+        if cfg.upload_url.trim().is_empty() { UploadMode::Default } else { UploadMode::Own }
     }
 
     fn label(self) -> &'static str {
         match self {
             UploadMode::Default => "blinker.cool",
             UploadMode::Own => l("свой сервер", "own server"),
-            UploadMode::ShareX => "sharex",
         }
     }
 
@@ -1210,7 +1214,6 @@ impl UploadMode {
         match self {
             UploadMode::Default => l("бесплатно, 3 дня, до 100 мб", "free, 3 days, up to 100 mb"),
             UploadMode::Own => l("адрес и токен своего сервера", "your own server's address and token"),
-            UploadMode::ShareX => l("загрузчик из sharex (.sxcu)", "an uploader from sharex (.sxcu)"),
         }
     }
 }
