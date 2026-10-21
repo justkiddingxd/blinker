@@ -149,6 +149,36 @@ pub fn logo(size: u32) -> image::RgbaImage {
     pixmap_to_image(&pm)
 }
 
+/// The macOS app icon: the same tile on Apple's icon grid (a margin around a
+/// rounder square, soft shadow), so it sits well next to other Dock icons.
+pub fn app_icon(size: u32) -> image::RgbaImage {
+    let s = size as f32;
+    let mut pm = sk::Pixmap::new(size, size).expect("icon size");
+    let (inset, side) = (s * 100.0 / 1024.0, s * 824.0 / 1024.0);
+    let radius = side * 0.225;
+    for (grow, alpha) in [(s * 0.012, 34u8), (s * 0.006, 40u8)] {
+        let mut shadow = sk::Paint::default();
+        shadow.anti_alias = true;
+        shadow.set_color_rgba8(0, 0, 0, alpha);
+        if let Some(p) = rounded_rect_path(inset - grow, inset - grow + s * 0.012, side + grow * 2.0, side + grow * 2.0, radius + grow) {
+            pm.fill_path(&p, &shadow, sk::FillRule::Winding, sk::Transform::identity(), None);
+        }
+    }
+    let mut bg = sk::Paint::default();
+    bg.anti_alias = true;
+    bg.set_color_rgba8(0x1C, 0x1C, 0x1A, 255);
+    if let Some(p) = rounded_rect_path(inset, inset, side, side, radius) {
+        pm.fill_path(&p, &bg, sk::FillRule::Winding, sk::Transform::identity(), None);
+        let mut edge = sk::Paint::default();
+        edge.anti_alias = true;
+        edge.set_color_rgba8(0x2B, 0x2B, 0x28, 255);
+        let st = sk::Stroke { width: (s / 512.0).max(1.0), ..Default::default() };
+        pm.stroke_path(&p, &edge, &st, sk::Transform::identity(), None);
+    }
+    fill_sparkle(&mut pm, side * 0.33);
+    pixmap_to_image(&pm)
+}
+
 /// Just the sparkle, filling a transparent `size`² square.
 pub fn mark_image(size: u32) -> image::RgbaImage {
     let mut pm = sk::Pixmap::new(size, size).expect("mark size");
@@ -209,7 +239,8 @@ pub fn pixmap_to_image(pm: &sk::Pixmap) -> image::RgbaImage {
 }
 
 pub fn icon_data(size: u32) -> Arc<egui::IconData> {
-    let img = logo(size);
+    // a Mac shows it in the Dock: the full icon on Apple's grid
+    let (img, size) = if cfg!(target_os = "macos") { (app_icon(256), 256) } else { (logo(size), size) };
     Arc::new(egui::IconData { rgba: img.into_raw(), width: size, height: size })
 }
 
@@ -224,5 +255,18 @@ mod tests {
     fn logo_png() {
         let Ok(out) = std::env::var("BLINKER_TEST_LOGO") else { return };
         super::logo(256).save(out).unwrap();
+    }
+
+    /// The macOS icon set: `BLINKER_TEST_ICONSET` = a `.iconset` folder (then
+    /// `iconutil -c icns` it).
+    #[test]
+    fn iconset() {
+        let Ok(dir) = std::env::var("BLINKER_TEST_ICONSET") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for base in [16u32, 32, 128, 256, 512] {
+            super::app_icon(base).save(dir.join(format!("icon_{base}x{base}.png"))).unwrap();
+            super::app_icon(base * 2).save(dir.join(format!("icon_{base}x{base}@2x.png"))).unwrap();
+        }
     }
 }

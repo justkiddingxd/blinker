@@ -2,7 +2,7 @@
 name = "blinker"
 version = "0.1.0"
 edition = "2024"
-description = "Fast, quiet screenshot and screen recording tool for Windows"
+description = "Fast, quiet screenshot and screen recording tool for Windows and macOS"
 license = "GPL-3.0-only"
 repository = "https://github.com/justkiddingxd/blinker"
 
@@ -22,6 +22,8 @@ rodio = { version = "0.23.0", default-features = false, features = ["playback", 
 serde = { version = "1.0.229", features = ["derive"] }
 tiny-skia = "0.12.0"
 toml = "1.1.8"
+
+[target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
     "Foundation",
     "Graphics_Capture",
@@ -56,6 +58,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Dwm",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Accessibility",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_Threading",
@@ -66,8 +69,15 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_Globalization",
     "Win32_System_LibraryLoader",
     "Win32_Security",
-    "Win32_System_ProcessStatus",
 ] }
+
+[build-dependencies]
+# compiles the Objective-C layer of the macOS build (unused on Windows)
+cc = "1.2.30"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# the same winit eframe uses: macOS event loop options (activation policy, menu)
+winit = { version = "0.30.13", default-features = false }
 
 # Image codecs are painfully slow unoptimized; keep deps fast even in debug.
 [profile.dev.package."*"]

@@ -186,6 +186,7 @@ version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "arboard",
+ "cc",
  "chrono",
  "color_quant",
  "dirs",
@@ -202,6 +203,7 @@ dependencies = [
  "windows 0.62.2",
  "windows-numerics",
  "windows-sys 0.61.2",
+ "winit",
 ]
 
 [[package]]

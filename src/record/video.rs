@@ -24,6 +24,27 @@ use windows::Win32::System::WinRT::Direct3D11::{CreateDirect3D11DeviceFromDXGIDe
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 use windows::core::{Interface, Result};
 
+/// One captured frame as it travels from capture to the encoder.
+pub type Frame = ID3D11Texture2D;
+
+/// Name of the graphics API (for error messages).
+pub const GPU_API: &str = "Direct3D";
+
+/// Capture target for one window: it is followed wherever it goes. Returns
+/// the target and the window's bounds (even size).
+pub fn window_target(h: isize) -> (Target, crate::win::IRect) {
+    let hwnd = HWND(h as _);
+    let b = crate::win::frame_bounds(h as _);
+    let size = ((b.w as u32) & !1, (b.h as u32) & !1);
+    (Target::Window { hwnd, size }, crate::win::IRect::new(b.x, b.y, size.0 as i32, size.1 as i32))
+}
+
+/// Capture target for `r` (absolute px, even size) on `monitor`.
+pub fn monitor_target(r: crate::win::IRect, monitor: &crate::win::Monitor) -> Target {
+    let crop = ((r.x - monitor.rect.x) as u32, (r.y - monitor.rect.y) as u32, r.w as u32, r.h as u32);
+    Target::Monitor { hmon: super::hmonitor_at(r.x + r.w / 2, r.y + r.h / 2), crop }
+}
+
 pub struct Gpu {
     pub device: ID3D11Device,
     pub context: ID3D11DeviceContext,

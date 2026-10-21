@@ -1,5 +1,10 @@
 //! Hotkey strings like "Ctrl+Shift+PrintScreen" <-> (modifiers, virtual key).
+//! Keys are Windows virtual-key codes on every platform (macOS maps them to
+//! its own key codes only when registering), so config files stay portable.
 
+#[cfg(target_os = "macos")]
+use crate::win::vk::*;
+#[cfg(windows)]
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -8,7 +13,15 @@ pub struct Combo {
     pub vk: u32,
 }
 
+#[cfg(windows)]
 const MODS: [(u32, &str); 4] = [(MOD_CONTROL, "Ctrl"), (MOD_ALT, "Alt"), (MOD_SHIFT, "Shift"), (MOD_WIN, "Win")];
+/// macOS order and names: ⌃ ⌥ ⇧ ⌘ (`Win` / `Alt` are still read, see `parse`).
+#[cfg(target_os = "macos")]
+const MODS: [(u32, &str); 4] = [(MOD_CONTROL, "Ctrl"), (MOD_ALT, "Opt"), (MOD_SHIFT, "Shift"), (MOD_WIN, "Cmd")];
+
+/// Other spellings of the modifiers (configs written on another system).
+const MOD_ALIASES: [(u32, &str); 6] =
+    [(MOD_CONTROL, "Control"), (MOD_ALT, "Alt"), (MOD_ALT, "Option"), (MOD_ALT, "Opt"), (MOD_WIN, "Win"), (MOD_WIN, "Cmd")];
 
 fn key_name(vk: u32) -> Option<String> {
     let named = match vk as u16 {
@@ -65,10 +78,10 @@ pub fn parse(s: &str) -> Option<Combo> {
     let mut mods = 0;
     let mut vk = None;
     for part in s.split('+').map(str::trim).filter(|p| !p.is_empty()) {
-        if let Some((m, _)) = MODS.iter().find(|(_, n)| n.eq_ignore_ascii_case(part)) {
+        if let Some((m, _)) = MODS.iter().chain(MOD_ALIASES.iter()).find(|(_, n)| n.eq_ignore_ascii_case(part)) {
             mods |= m;
-        } else if part.eq_ignore_ascii_case("control") {
-            mods |= MOD_CONTROL;
+        } else if part.eq_ignore_ascii_case("command") || part.eq_ignore_ascii_case("super") {
+            mods |= MOD_WIN;
         } else {
             vk = Some(key_from_name(part)?);
         }
@@ -98,6 +111,15 @@ pub fn display_parts(s: &str) -> Vec<String> {
 
 /// Polls the physical keyboard; returns a combo once a non-modifier key is down.
 /// Used by the hotkey recorder (global hotkeys are suspended meanwhile).
+#[cfg(target_os = "macos")]
+pub fn poll_pressed() -> Option<Combo> {
+    // AppKit hands the key presses of our own (focused) window to a local
+    // monitor: no keyboard-wide polling, so no input-monitoring permission.
+    let (mods, vk) = crate::win::take_key_press()?;
+    key_name(vk).map(|_| Combo { mods, vk })
+}
+
+#[cfg(windows)]
 pub fn poll_pressed() -> Option<Combo> {
     use crate::win::key_down;
     let modifier_vks = [
@@ -126,6 +148,10 @@ pub fn poll_pressed() -> Option<Combo> {
         }
     }
     None
+}
+
+pub fn is_backspace(c: Combo) -> bool {
+    c.mods == 0 && c.vk == VK_BACK as u32
 }
 
 pub fn is_escape(c: Combo) -> bool {

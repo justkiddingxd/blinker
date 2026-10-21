@@ -17,10 +17,26 @@ pub fn play_capture(cfg: &Config) {
     }
 }
 
+/// The default output. rodio asks for a ~50 ms buffer; some devices (MacBook
+/// speakers: 15..=960 frames) refuse that, then the device picks its own.
+fn open_sink() -> Option<rodio::MixerDeviceSink> {
+    let first = match rodio::DeviceSinkBuilder::open_default_sink() {
+        Ok(sink) => return Some(sink),
+        Err(e) => e,
+    };
+    match rodio::DeviceSinkBuilder::from_default_device().and_then(|b| b.with_buffer_size(rodio::cpal::BufferSize::Default).open_stream()) {
+        Ok(sink) => Some(sink),
+        Err(e) => {
+            crate::config::log::error(format!("sound: {first}; {e}"));
+            None
+        }
+    }
+}
+
 /// Fire-and-forget playback on a short-lived thread.
 pub fn play(kind: SoundKind, file: Option<PathBuf>, volume: f32) {
     std::thread::spawn(move || {
-        let Ok(mut sink) = rodio::DeviceSinkBuilder::open_default_sink() else { return };
+        let Some(mut sink) = open_sink() else { return };
         sink.log_on_drop(false);
         let player = rodio::Player::connect_new(sink.mixer());
         player.set_volume(volume.clamp(0.0, 1.0));

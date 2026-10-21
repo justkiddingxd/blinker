@@ -8,7 +8,6 @@ use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Dwm::*;
 use windows_sys::Win32::Graphics::Gdi::*;
-use windows_sys::Win32::System::ProcessStatus::*;
 use windows_sys::Win32::System::Registry::*;
 use windows_sys::Win32::System::Threading::*;
 use windows_sys::Win32::UI::HiDpi::*;
@@ -17,63 +16,13 @@ use windows_sys::Win32::UI::Controls::MARGINS;
 use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
+pub use crate::geom::{IRect, Monitor};
 pub use windows_sys::Win32::Foundation::HWND;
-
-/// Integer rectangle in physical pixels.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub struct IRect {
-    pub x: i32,
-    pub y: i32,
-    pub w: i32,
-    pub h: i32,
-}
-
-impl IRect {
-    pub const fn new(x: i32, y: i32, w: i32, h: i32) -> Self {
-        Self { x, y, w, h }
-    }
-    pub fn from_ltrb(l: i32, t: i32, r: i32, b: i32) -> Self {
-        Self::new(l, t, r - l, b - t)
-    }
-    pub fn right(&self) -> i32 {
-        self.x + self.w
-    }
-    pub fn bottom(&self) -> i32 {
-        self.y + self.h
-    }
-    pub fn is_empty(&self) -> bool {
-        self.w <= 0 || self.h <= 0
-    }
-    pub fn contains(&self, x: i32, y: i32) -> bool {
-        x >= self.x && y >= self.y && x < self.right() && y < self.bottom()
-    }
-    pub fn intersect(&self, o: &IRect) -> IRect {
-        let l = self.x.max(o.x);
-        let t = self.y.max(o.y);
-        let r = self.right().min(o.right());
-        let b = self.bottom().min(o.bottom());
-        if r <= l || b <= t {
-            IRect::default()
-        } else {
-            IRect::from_ltrb(l, t, r, b)
-        }
-    }
-    pub fn offset(&self, dx: i32, dy: i32) -> IRect {
-        IRect::new(self.x + dx, self.y + dy, self.w, self.h)
-    }
-}
 
 impl From<RECT> for IRect {
     fn from(r: RECT) -> Self {
         IRect::from_ltrb(r.left, r.top, r.right, r.bottom)
     }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct Monitor {
-    pub rect: IRect,
-    pub work: IRect,
-    pub scale: f32,
 }
 
 pub fn wide(s: &str) -> Vec<u16> {
@@ -199,6 +148,11 @@ pub fn refresh_rate(x: i32, y: i32) -> u32 {
         }
         dm.dmDisplayFrequency
     }
+}
+
+/// Pixels at the top of a monitor hidden by a camera notch: none on Windows.
+pub fn safe_top_at(_x: i32, _y: i32) -> i32 {
+    0
 }
 
 pub fn monitor_at(monitors: &[Monitor], x: i32, y: i32) -> Option<Monitor> {
@@ -392,6 +346,15 @@ pub fn open_path(path: &Path) {
     }
 }
 
+/// Opens a web address in the default browser.
+pub fn open_url(url: &str) {
+    let u = wide(url);
+    let verb = wide("open");
+    unsafe {
+        ShellExecuteW(null_mut(), verb.as_ptr(), u.as_ptr(), null(), null(), SW_SHOWNORMAL);
+    }
+}
+
 const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_VALUE: &str = "Blinker";
 
@@ -421,19 +384,6 @@ pub fn set_autostart(enable: bool) -> bool {
         };
         RegCloseKey(key);
         ok
-    }
-}
-
-/// Working set of this process in bytes.
-pub fn memory_usage() -> usize {
-    unsafe {
-        let mut c: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
-        c.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
-        if GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) != 0 {
-            c.WorkingSetSize
-        } else {
-            0
-        }
     }
 }
 

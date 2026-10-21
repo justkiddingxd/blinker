@@ -103,23 +103,34 @@ impl TgMode {
     }
 }
 
-/// ffmpeg from C:\ffmpeg\bin or PATH (looked up once).
+/// ffmpeg from C:\ffmpeg\bin or PATH (looked up once). On macOS also the
+/// Homebrew / MacPorts folders: apps started from Finder get a bare PATH.
 pub fn ffmpeg() -> Option<&'static Path> {
     static FF: OnceLock<Option<PathBuf>> = OnceLock::new();
     FF.get_or_init(|| {
-        let known = PathBuf::from(r"C:\ffmpeg\bin\ffmpeg.exe");
-        if known.is_file() {
-            return Some(known);
+        let (name, known): (&str, &[&str]) = if cfg!(windows) {
+            ("ffmpeg.exe", &[r"C:\ffmpeg\bin\ffmpeg.exe"])
+        } else {
+            ("ffmpeg", &["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/opt/local/bin/ffmpeg"])
+        };
+        if let Some(k) = known.iter().map(PathBuf::from).find(|p| p.is_file()) {
+            return Some(k);
         }
-        std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join("ffmpeg.exe")).find(|f| f.is_file()))
+        std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join(name)).find(|f| f.is_file()))
     })
     .as_deref()
 }
 
+#[cfg(windows)]
 fn quiet(cmd: &mut Command) -> &mut Command {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     cmd.creation_flags(CREATE_NO_WINDOW)
+}
+
+#[cfg(not(windows))]
+fn quiet(cmd: &mut Command) -> &mut Command {
+    cmd
 }
 
 /// Whether ffmpeg was built with this encoder (cached).

@@ -3,13 +3,16 @@
 #[macro_use]
 mod i18n;
 mod beauty;
+#[cfg_attr(target_os = "macos", path = "mac/capture.rs")]
 mod capture;
 mod chrome;
 mod config;
 mod demo;
 mod editor;
+mod geom;
 mod home;
 mod hotkey;
+#[cfg_attr(target_os = "macos", path = "mac/media.rs")]
 mod media;
 mod record;
 mod reencode;
@@ -18,14 +21,21 @@ mod output;
 mod overlay;
 mod pin;
 mod runtime;
+#[cfg_attr(target_os = "macos", path = "mac/shell.rs")]
 mod shell;
+mod sk;
 mod sound;
 mod theme;
 mod toast;
+#[cfg(windows)]
 mod traymenu;
 mod ui;
+mod update;
 mod upload;
 mod vedit;
+/// Platform layer: Win32 on Windows; on macOS the same API over AppKit,
+/// CoreGraphics and ScreenCaptureKit (`src/mac`).
+#[cfg_attr(target_os = "macos", path = "mac/mod.rs")]
 mod win;
 
 use editor::EditorState;
@@ -79,10 +89,20 @@ fn main() {
         return;
     }
 
-    let Some(_instance) = win::acquire_instance() else {
+    // after an update the old instance is still on its way out: wait for it
+    let mut instance = win::acquire_instance();
+    if has("--relaunch") {
+        let t = std::time::Instant::now();
+        while instance.is_none() && t.elapsed() < std::time::Duration::from_secs(15) {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            instance = win::acquire_instance();
+        }
+    }
+    let Some(_instance) = instance else {
         win::signal_existing_instance();
         return;
     };
+    update::clean_up();
     let cfg = config::load();
     if cfg.autostart {
         // Keep the Run entry pointing at the current executable.
@@ -97,10 +117,13 @@ fn main() {
         shared.push(Command::OpenHome(HomeTab::Capture));
     }
 
-    controller(&shared);
+    let restart = controller(&shared);
 
     output::wait_pending();
     shell.shutdown();
+    if restart {
+        update::relaunch();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -181,21 +204,22 @@ fn sync_replay(shared: &Shared, replay: &mut Option<record::replay::Replay>) {
     }
 }
 
-fn controller(shared: &Arc<Shared>) {
+/// Runs until "quit"; true when the app should start again (after an update).
+fn controller(shared: &Arc<Shared>) -> bool {
     let mut recording: Option<record::Recording> = None;
     let mut replay: Option<record::replay::Replay> = None;
     sync_replay(shared, &mut replay);
     loop {
         let cmd_now = shared.wait();
         match cmd_now.clone() {
-            Command::Quit => {
+            Command::Quit | Command::Restart => {
                 if let Some(rec) = recording.take() {
                     let _ = rec.stop();
                 }
                 if let Some(r) = replay.take() {
                     r.stop();
                 }
-                break;
+                return cmd_now == Command::Restart;
             }
             Command::Reconfigure => sync_replay(shared, &mut replay),
             Command::RecordPause => {

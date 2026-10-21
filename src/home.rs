@@ -9,7 +9,7 @@ use crate::runtime::{self, HomeTab, Shared};
 use crate::theme::{self, *};
 use crate::ui::{self, Notice};
 use crate::win;
-use eframe::egui::{self, Align2, CursorIcon, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use eframe::egui::{self, CursorIcon, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -54,7 +54,8 @@ pub fn run(shared: &Arc<Shared>, tab: HomeTab) {
             request,
             upload_test: None,
             cfg: shared2.config(),
-            disk_bytes: folder_size(&shared2.config().save_dir),
+            update: crate::update::watch(&cc.egui_ctx),
+            install: None,
             shared: shared2,
             tab,
             recording: None,
@@ -123,24 +124,6 @@ pub fn tab_from_arg(arg: &str) -> HomeTab {
 }
 
 /// Size of everything under `dir` (date / pics / videos subfolders included).
-fn folder_size(dir: &std::path::Path) -> u64 {
-    std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| match e.metadata() {
-            Ok(m) if m.is_dir() => folder_size(&e.path()),
-            Ok(m) => m.len(),
-            Err(_) => 0,
-        })
-        .sum()
-}
-
-fn human_size(b: u64) -> String {
-    let kb = b as f64 / 1024.0;
-    if kb < 1000.0 { lf!("{kb:.0} кб", "{kb:.0} kb") } else { lf!("{:.1} мб", "{:.1} mb", kb / 1024.0).replace('.', ",") }
-}
-
 /// A binding being recorded: which action, and which slot (None = new one).
 #[derive(Clone, Copy, PartialEq)]
 struct Recording {
@@ -165,7 +148,10 @@ struct HomeApp {
     failed: std::collections::HashSet<String>,
     failed_at: f64,
     notice: Option<Notice>,
-    disk_bytes: u64,
+    /// A newer version on GitHub, once known.
+    update: Arc<Mutex<Option<String>>>,
+    /// An update being installed (after "update blinker").
+    install: Option<Arc<crate::update::Install>>,
     content_rect: Rect,
     /// Page currently on screen and when it started appearing.
     shown: Option<HomeTab>,
@@ -229,10 +215,65 @@ impl HomeApp {
                     let rect = Rect::from_min_size(pos2(r.left(), y), r.size());
                     ui.painter().set(plate, egui::Shape::rect_filled(rect, 3, ACTIVE));
                 }
-                let mb = win::memory_usage() as f64 / 1024.0 / 1024.0;
-                let text = lf!("озу {mb:.0} мб\nна диске {}", "ram {mb:.0} mb\non disk {}", human_size(self.disk_bytes));
-                ui.painter().text(pos2(r.left() + 8.0, r.bottom()), Align2::LEFT_BOTTOM, text, mono(10.0), FAINT);
+                self.nav_footer(ui);
             });
+    }
+
+    /// Bottom of the sections: the version, a link to GitHub and, when a
+    /// newer release is out, the way to it.
+    fn nav_footer(&mut self, ui: &mut egui::Ui) {
+        let newer = self.update.lock().unwrap().clone();
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+            ui.spacing_mut().item_spacing.y = 8.0;
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.add_space(8.0);
+                let version = ui.painter().layout_no_wrap(format!("blinker {}", crate::update::current()), mono(10.5), FAINT);
+                let (rect, _) = ui.allocate_exact_size(version.size(), Sense::hover());
+                ui.painter().galley(rect.min, version, FAINT);
+                let g = ui.painter().layout_no_wrap("github".into(), mono(10.5), egui::Color32::PLACEHOLDER);
+                let (rect, resp) = ui.allocate_exact_size(g.size(), Sense::click());
+                let col = if resp.hovered() { TEXT } else { DIM };
+                ui.painter().galley(rect.min, g, col);
+                if resp.hovered() {
+                    ui.painter().hline(rect.x_range(), rect.bottom() + 0.5, Stroke::new(1.0, col));
+                }
+                if resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(crate::update::REPO_URL).clicked() {
+                    win::open_url(crate::update::REPO_URL);
+                }
+            });
+            use crate::update::Stage;
+            let stage = self.install.as_ref().map(|j| j.stage());
+            let note = |ui: &mut egui::Ui, text: String, color: egui::Color32| {
+                ui.add(egui::Label::new(egui::RichText::new(text).font(mono(10.5)).color(color)).wrap());
+            };
+            match (stage, newer) {
+                (Some(Stage::Downloading(done, total)), _) => {
+                    let f = if total > 0 { (done as f32 / total as f32).clamp(0.0, 1.0) } else { 0.0 };
+                    let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width() - 8.0, 3.0), Sense::hover());
+                    let bar = bar.translate(vec2(8.0, 0.0));
+                    ui.painter().rect_filled(bar, 1.5, LINE);
+                    ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * f, bar.height())), 1.5, ACCENT);
+                    note(ui, lf!("  загрузка {:.0}%", "  downloading {:.0}%", f * 100.0), DIM);
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
+                }
+                (Some(Stage::Installing), _) => note(ui, format!("  {}", l("установка…", "installing…")), DIM),
+                (Some(Stage::Restarting), _) => note(ui, format!("  {}", l("перезапуск…", "restarting…")), DIM),
+                (Some(Stage::Failed(e)), _) => {
+                    if ui::button_h(ui, l("скачать с сайта", "get it from the site"), ui::Kind::Ghost, 26.0).clicked() {
+                        win::open_url(crate::update::SITE_URL);
+                    }
+                    note(ui, format!("  {e}"), DANGER);
+                }
+                (None, Some(v)) => {
+                    let tip = lf!("вышла версия {v}: скачать и перезапустить", "version {v} is out: download it and restart");
+                    if ui::button_h(ui, l("обновить blinker", "update blinker"), ui::Kind::Accent, 28.0).on_hover_text(tip).clicked() {
+                        self.install = Some(crate::update::install(ui.ctx()));
+                    }
+                }
+                (None, None) => {}
+            }
+        });
     }
 
     fn content(&mut self, ui: &mut egui::Ui) {
@@ -745,7 +786,7 @@ impl HomeApp {
         ui.add_space(14.0);
         let note = if self.recording.is_some() {
             t("нажми сочетание. esc отменяет, backspace удаляет это сочетание.")
-        } else if self.cfg.hotkey_region.iter().any(|b| b == "PrintScreen") {
+        } else if cfg!(windows) && self.cfg.hotkey_region.iter().any(|b| b == "PrintScreen") {
             t("prtsc не работает? в параметрах windows выключи «клавиша print screen открывает ножницы»")
         } else {
             ""
@@ -762,7 +803,8 @@ impl HomeApp {
             // the language names stay in their own language
             ui::setting_row(ui, l("язык интерфейса", "interface language"), "", |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                for (code, label) in [("en", "english"), ("ru", "русский"), ("", l("как в windows", "system"))] {
+                let system = if cfg!(target_os = "macos") { l("как в системе", "system") } else { l("как в windows", "system") };
+                for (code, label) in [("en", "english"), ("ru", "русский"), ("", system)] {
                     if ui::filter(ui, label, self.cfg.lang == code).clicked() {
                         self.cfg.lang = code.to_string();
                         crate::i18n::apply(code);
@@ -771,7 +813,8 @@ impl HomeApp {
             });
         });
         ui::group(ui, l("запуск", "startup"), |ui| {
-            ui::setting_row(ui, t("запуск вместе с windows"), "", |ui| {
+            let title = if cfg!(target_os = "macos") { t("открывать при входе в систему") } else { t("запуск вместе с windows") };
+            ui::setting_row(ui, title, "", |ui| {
                 ui::toggle(ui, &mut self.cfg.autostart);
             });
         });
@@ -833,9 +876,6 @@ impl HomeApp {
         if hotkeys_changed && self.recording.is_none() {
             self.shared.reload_hotkeys();
         }
-        if before.save_dir != self.cfg.save_dir {
-            self.disk_bytes = folder_size(&self.cfg.save_dir);
-        }
     }
 
     fn poll_recorder(&mut self, ctx: &egui::Context) {
@@ -846,7 +886,7 @@ impl HomeApp {
             return;
         }
         let Some(c) = hotkey::poll_pressed() else { return };
-        let backspace = c.mods == 0 && c.vk == windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_BACK as u32;
+        let backspace = hotkey::is_backspace(c);
         if hotkey::is_escape(c) {
             // cancel
         } else if backspace {
@@ -1007,7 +1047,6 @@ impl eframe::App for HomeApp {
             if self.hidden.swap(false, Ordering::SeqCst) {
                 self.frame_no = 0;
                 self.shown = None;
-                self.disk_bytes = folder_size(&self.cfg.save_dir);
             } else if let Some(h) = self.hwnd {
                 win::force_foreground(h);
             }

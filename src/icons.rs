@@ -3,6 +3,8 @@
 use eframe::egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// some icons are only drawn by the Windows tray menu
+#[cfg_attr(not(windows), allow(dead_code))]
 pub enum Icon {
     Redact,
     TextBox,

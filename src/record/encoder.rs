@@ -11,6 +11,10 @@ pub const AUDIO_CHANNELS: u32 = 2;
 /// 100 ns units per second (Media Foundation time base).
 pub const HNS: i64 = 10_000_000;
 
+/// How far ahead of the video the sound is fed when a file is written
+/// offline: the sink writer stalls when one stream runs far ahead.
+pub const AUDIO_LEAD: i64 = 0;
+
 /// H.265 / AV1 are kept for comparison (`codec_bench`): on screen content
 /// they were not smaller than H.264 at the same look, and H.264 plays everywhere.
 #[allow(dead_code)]
@@ -261,6 +265,11 @@ impl Encoder {
             buf.SetCurrentLength(bytes as u32)?;
             self.write(idx, &buf, t, frames * HNS / AUDIO_RATE as i64)
         }
+    }
+
+    /// No more sound will come (the macOS writer stops waiting for it).
+    pub fn end_audio(&self) -> Result<()> {
+        Ok(())
     }
 
     pub fn finish(&self) -> Result<()> {

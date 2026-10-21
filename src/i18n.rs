@@ -28,6 +28,12 @@ pub fn apply(lang: &str) {
 /// Russian unless nothing on the system points to a Russian speaker: the UI
 /// language, the regional format or any installed keyboard layout being
 /// Russian, Ukrainian, Belarusian or Kazakh.
+#[cfg(target_os = "macos")]
+pub fn system_is_russian() -> bool {
+    crate::win::system_is_russian()
+}
+
+#[cfg(windows)]
 pub fn system_is_russian() -> bool {
     let ru = |lang: u32| matches!(lang & 0x3FF, 0x19 | 0x22 | 0x23 | 0x3F);
     unsafe {
@@ -52,6 +58,16 @@ fn table() -> &'static HashMap<&'static str, &'static str> {
 /// UI text: the Russian original, or its English version.
 pub fn t(ru: &'static str) -> &'static str {
     if en() { table().get(ru).copied().unwrap_or(ru) } else { ru }
+}
+
+/// Shortcut hints: the editors' ⌘ shortcuts are written "ctrl" in the texts;
+/// on macOS they read "cmd".
+pub fn kb(text: &str) -> std::borrow::Cow<'_, str> {
+    if cfg!(target_os = "macos") && text.contains("ctrl") {
+        std::borrow::Cow::Owned(text.replace("ctrl", "cmd"))
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
 }
 
 /// Inline pair for text without a dictionary entry.

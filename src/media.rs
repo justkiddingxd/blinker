@@ -4,7 +4,11 @@ use std::path::Path;
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED, CoInitializeEx};
-use windows::core::{GUID, Interface, PCWSTR, Result};
+use windows::core::{GUID, Interface, PCWSTR};
+pub use windows::core::Result;
+
+/// Error of the media layer (the macOS build has its own with the same `message()`).
+pub type Error = windows::core::Error;
 
 static MAIN_THREAD: std::sync::OnceLock<std::thread::ThreadId> = std::sync::OnceLock::new();
 

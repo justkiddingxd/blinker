@@ -11,10 +11,15 @@ use eframe::egui;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+#[cfg(windows)]
 use windows_sys::Win32::UI::WindowsAndMessaging::WM_APP;
+#[cfg(not(windows))]
+const WM_APP: u32 = 0x8000;
 
 pub const WM_RELOAD_HOTKEYS: u32 = WM_APP + 1;
 pub const WM_SUSPEND_HOTKEYS: u32 = WM_APP + 2;
+/// From the settings after an update was installed: quit and start again.
+pub const WM_RESTART: u32 = WM_APP + 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum HomeTab {
@@ -47,6 +52,8 @@ pub enum Command {
     OpenHome(HomeTab),
     OpenFolder,
     Quit,
+    /// Quit and start the (just updated) app again.
+    Restart,
 }
 
 impl Command {
@@ -97,18 +104,32 @@ impl Shared {
         }
         drop(q);
         self.cv.notify_all();
+        #[cfg(target_os = "macos")]
+        crate::win::wake_main_loop();
         if let Some(ctx) = self.ctx.lock().unwrap().as_ref() {
             ctx.request_repaint();
         }
     }
 
     pub fn wait(&self) -> Command {
-        let mut q = self.queue.lock().unwrap();
+        // macOS: the tray icon and the global hotkeys live on the main thread,
+        // so between windows the controller keeps the AppKit event queue moving.
+        #[cfg(target_os = "macos")]
         loop {
-            if let Some(c) = q.pop_front() {
+            if let Some(c) = self.queue.lock().unwrap().pop_front() {
                 return c;
             }
-            q = self.cv.wait(q).unwrap();
+            crate::win::run_idle();
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let mut q = self.queue.lock().unwrap();
+            loop {
+                if let Some(c) = q.pop_front() {
+                    return c;
+                }
+                q = self.cv.wait(q).unwrap();
+            }
         }
     }
 
@@ -178,8 +199,12 @@ pub fn run_window<A: eframe::App + 'static>(
         run_and_return: true,
         centered,
         persist_window: false,
+        #[cfg(target_os = "macos")]
+        event_loop_builder: Some(Box::new(crate::win::configure_event_loop)),
         ..Default::default()
     };
+    #[cfg(target_os = "macos")]
+    let focus = crate::win::FocusGuard::take();
     let shared2 = shared.clone();
     let result = eframe::run_native(
         "Blinker",
@@ -191,6 +216,8 @@ pub fn run_window<A: eframe::App + 'static>(
         }),
     );
     *shared.ctx.lock().unwrap() = None;
+    #[cfg(target_os = "macos")]
+    drop(focus);
     crate::win::trim_memory();
     if let Err(e) = result {
         log::error(format!("window failed: {e}"));

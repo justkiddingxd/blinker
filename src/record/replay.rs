@@ -4,8 +4,12 @@
 //! the last N seconds without re-encoding the video and encodes the sound.
 
 use super::audio::{AudioCapture, Source};
-use super::encoder::{AUDIO_CHANNELS, AUDIO_RATE, Encoder, HNS, VideoSpec, audio_pcm_type};
-use super::video::{Capture, Gpu, Pacer, Target};
+#[cfg(windows)]
+use super::encoder::audio_pcm_type;
+#[cfg(windows)]
+use super::encoder::AUDIO_CHANNELS;
+use super::encoder::{AUDIO_RATE, Encoder, HNS, VideoSpec};
+use super::video::{Capture, Frame, Gpu, Pacer};
 use super::{AudioSink, Clock, Finished, VideoOut};
 use crate::config::{Config, log};
 use crate::win::{IRect, Monitor};
@@ -15,7 +19,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
+#[cfg(windows)]
 use windows::Win32::Media::MediaFoundation::*;
 
 /// Length of one video segment.
@@ -65,7 +69,7 @@ impl Segmenter {
         }
     }
 
-    pub fn write_video(&self, tex: &ID3D11Texture2D, t: i64, dur: i64) {
+    pub fn write_video(&self, tex: &Frame, t: i64, dur: i64) {
         let mut cur = self.cur.lock().unwrap();
         if cur.as_ref().is_some_and(|c| t - c.start >= SEG) {
             self.close_current(&mut cur);
@@ -263,8 +267,8 @@ impl Replay {
             .or_else(|| crate::win::monitors().into_iter().next())
             .ok_or(crate::i18n::t("нет монитора"))?;
         let (w, h) = ((monitor.rect.w as u32) & !1, (monitor.rect.h as u32) & !1);
-        let target = Target::Monitor { hmon: super::hmonitor_at(monitor.rect.x + 1, monitor.rect.y + 1), crop: (0, 0, w, h) };
-        let gpu = Arc::new(Gpu::new().map_err(|e| format!("Direct3D: {e}"))?);
+        let target = super::video::monitor_target(IRect::new(monitor.rect.x, monitor.rect.y, w as i32, h as i32), &monitor);
+        let gpu = Arc::new(Gpu::new().map_err(|e| format!("{}: {e}", super::video::GPU_API))?);
         let spec = super::video_spec(cfg, w, h, 1, &monitor);
         let secs = cfg.replay_secs.clamp(10, 600);
         let seg = Arc::new(Segmenter {
@@ -376,6 +380,18 @@ impl Replay {
 /// Glues `segs` (path, start on the replay clock) into `dst`, starting at the
 /// first keyframe at or after `from`; the sound comes from the PCM rings.
 /// Returns the duration.
+#[cfg(target_os = "macos")]
+fn remux(segs: &[(PathBuf, i64)], dst: &Path, from: i64, to: i64, rings: &PcmRings, tracks: usize) -> crate::media::Result<i64> {
+    // The video is copied as is; the sound covers the same stretch.
+    let (base, len) = super::encoder::scan_segments(segs, from, to)?;
+    let f0 = base * AUDIO_RATE as i64 / HNS;
+    let f1 = (base + len) * AUDIO_RATE as i64 / HNS;
+    let pcm: Vec<Vec<i16>> = (0..tracks).map(|t| rings.read(t, f0, f1)).collect();
+    super::encoder::remux_segments(segs, dst, base, base + len, &pcm)?;
+    Ok(len)
+}
+
+#[cfg(windows)]
 fn remux(segs: &[(PathBuf, i64)], dst: &Path, from: i64, to: i64, rings: &PcmRings, tracks: usize) -> windows::core::Result<i64> {
     crate::media::startup();
     unsafe {

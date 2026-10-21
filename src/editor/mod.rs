@@ -458,16 +458,16 @@ impl EditorApp {
                         crate::chrome::window_buttons(ui, true);
                         ui.spacing_mut().item_spacing.x = 4.0;
                         sep(ui);
-                        if ui::button(ui, crate::i18n::t("копировать"), ui::Kind::Accent).on_hover_text("ctrl+c").clicked() {
+                        if ui::button(ui, crate::i18n::t("копировать"), ui::Kind::Accent).on_hover_text(crate::i18n::kb("ctrl+c")).clicked() {
                             self.copy(&ctx);
                         }
-                        if ui::button(ui, crate::i18n::t("сохранить"), ui::Kind::Ghost).on_hover_text("ctrl+s").clicked() {
+                        if ui::button(ui, crate::i18n::t("сохранить"), ui::Kind::Ghost).on_hover_text(crate::i18n::kb("ctrl+s")).clicked() {
                             self.save(&ctx);
                         }
                         let more = ui::icon_button(ui, Icon::Settings, crate::i18n::t("ещё"), 30.0, false, ui::Kind::Ghost);
                         egui::Popup::menu(&more).show(|ui| {
                             ui.set_min_width(210.0);
-                            if menu_item(ui, Icon::Save, crate::i18n::t("сохранить как…"), "ctrl+shift+s") {
+                            if menu_item(ui, Icon::Save, crate::i18n::t("сохранить как…"), &crate::i18n::kb("ctrl+shift+s")) {
                                 self.save_as(&ctx);
                                 ui.close();
                             }
@@ -503,7 +503,7 @@ impl EditorApp {
                         }
                         let can_undo = !self.st.undo.is_empty();
                         ui.add_enabled_ui(can_undo, |ui| {
-                            if ui::button(ui, crate::i18n::t("отменить"), ui::Kind::Ghost).on_hover_text("ctrl+z").clicked() {
+                            if ui::button(ui, crate::i18n::t("отменить"), ui::Kind::Ghost).on_hover_text(crate::i18n::kb("ctrl+z")).clicked() {
                                 self.commit_text();
                                 self.st.undo();
                             }
@@ -745,7 +745,7 @@ impl EditorApp {
                     ui.label(dim(format!("{} × {}", shown.width() as i32, shown.height() as i32)));
                     let pct = format!("{:.0}%", self.zoom * ppp * 100.0);
                     let z = ui.add(egui::Label::new(dim(pct)).sense(Sense::click()));
-                    if z.on_hover_text(crate::i18n::t("клик: 100%  ·  ctrl+0: вписать")).clicked() {
+                    if z.on_hover_text(crate::i18n::kb(crate::i18n::t("клик: 100%  ·  ctrl+0: вписать"))).clicked() {
                         let c = self.canvas.center();
                         self.zoom_at(1.0 / (self.zoom * ppp), c, ppp);
                     }

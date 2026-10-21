@@ -4,7 +4,7 @@
 use crate::config::{HotkeyAction, TrayAction};
 use crate::hotkey;
 use crate::icons::Icon;
-use crate::runtime::{Command, HomeTab, Shared, WM_RELOAD_HOTKEYS, WM_SUSPEND_HOTKEYS};
+use crate::runtime::{Command, HomeTab, Shared, WM_RELOAD_HOTKEYS, WM_RESTART, WM_SUSPEND_HOTKEYS};
 use crate::theme;
 use crate::traymenu::{self, Item};
 use crate::win;
@@ -115,6 +115,8 @@ enum TrayEvent {
     /// Sent by the settings process.
     ReloadHotkeys,
     SuspendHotkeys,
+    /// Sent by the settings after installing an update.
+    Restart,
 }
 
 thread_local! {
@@ -129,6 +131,10 @@ unsafe extern "system" fn tray_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
             WM_RBUTTONUP | WM_CONTEXTMENU => EVENTS.with(|e| e.borrow_mut().push(TrayEvent::Right)),
             _ => {}
         }
+        return 0;
+    }
+    if msg == WM_RESTART {
+        EVENTS.with(|e| e.borrow_mut().push(TrayEvent::Restart));
         return 0;
     }
     if msg == WM_RELOAD_HOTKEYS || msg == WM_SUSPEND_HOTKEYS {
@@ -356,6 +362,7 @@ fn run(shared: Arc<Shared>) {
                     shared.push(Command::Reconfigure);
                 }
                 WM_SUSPEND_HOTKEYS => hotkeys.unregister(),
+                WM_RESTART => shared.push(Command::Restart),
                 _ => unsafe {
                     TranslateMessage(&msg);
                     DispatchMessageW(&msg);
@@ -372,6 +379,7 @@ fn run(shared: Arc<Shared>) {
                     shared.push(Command::Reconfigure);
                 }
                 TrayEvent::SuspendHotkeys => hotkeys.unregister(),
+                TrayEvent::Restart => shared.push(Command::Restart),
                 TrayEvent::Right => tray_action(&shared, shared.config().tray_right_click),
                 TrayEvent::Recreate => {
                     if let Some(t) = &tray {

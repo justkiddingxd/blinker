@@ -71,6 +71,15 @@ fn run_with(shared: &Arc<Shared>, snap: Snapshot, record: bool, gif: bool, demo:
         .with_active(demo.is_none())
         .with_position([target.x as f32 / primary_scale, target.y as f32 / primary_scale])
         .with_inner_size([target.w as f32 / primary_scale, target.h as f32 / primary_scale]);
+    // macOS: one more window for every other display (Windows: one window spans all)
+    #[cfg(target_os = "macos")]
+    let (snap, others) = {
+        let mut snap = snap;
+        let others = std::mem::take(&mut snap.others);
+        (snap, others)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let others: Vec<Snapshot> = Vec::new();
     let shared2 = shared.clone();
     runtime::run_window(shared, viewport, false, move |cc| {
         let hwnd = win::hwnd_of(cc);
@@ -80,20 +89,52 @@ fn run_with(shared: &Arc<Shared>, snap: Snapshot, record: bool, gif: bool, demo:
             // screen: no blank/white window on any monitor.
             win::cloak(h, true);
             win::set_window_rect(h, target, true);
+            // macOS: above the menu bar, the Dock and full-screen apps
+            #[cfg(target_os = "macos")]
+            win::make_overlay(h);
         }
         if demo.is_some() {
             // frames are saved 1:1 with the made-up desktop
             cc.egui_ctx.set_pixels_per_point(1.0);
         }
-        let tex = TiledTexture::new(&cc.egui_ctx, "snapshot", &snap.image, TextureOptions::NEAREST);
-        let shared2_color = shared2.config().editor_color;
+        let mut list = vec![OverlayApp::new(&cc.egui_ctx, &shared2, snap, target, hwnd, record, gif, demo, out2.clone(), None)];
+        for (i, s) in others.into_iter().enumerate() {
+            let t = IRect::new(s.origin.0, s.origin.1, s.image.width() as i32, s.image.height() as i32);
+            let title = format!("blinker overlay {}", i + 1);
+            list.push(OverlayApp::new(&cc.egui_ctx, &shared2, s, t, None, record, gif, None, out2.clone(), Some(title)));
+        }
+        Overlays { list, engaged: None, active: 0 }
+    });
+    out.borrow_mut().take()
+}
+
+impl OverlayApp {
+    /// The overlay of one snapshot. `title`: an extra display's window, made
+    /// by egui as a viewport (found by this title, then set up like the first).
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        ctx: &egui::Context,
+        shared: &Arc<Shared>,
+        snap: Snapshot,
+        target: IRect,
+        hwnd: Option<win::HWND>,
+        record: bool,
+        gif: bool,
+        demo: Option<crate::demo::Player>,
+        out: Rc<RefCell<Option<Output>>>,
+        title: Option<String>,
+    ) -> Self {
+        let name = format!("snapshot-{}", title.as_deref().unwrap_or("main"));
+        let tex = TiledTexture::new(ctx, &name, &snap.image, TextureOptions::NEAREST);
+        let c = shared.config().editor_color;
+        let primary = title.is_none();
         OverlayApp {
-            cfg: shared2.config(),
-            shared: shared2,
+            cfg: shared.config(),
+            shared: shared.clone(),
             snap,
             tex,
             loupe: None,
-            revealed: hwnd.is_none() || demo.is_some(),
+            revealed: (hwnd.is_none() && primary) || demo.is_some(),
             stable: 0,
             shown_frame: 0,
             hwnd,
@@ -102,7 +143,7 @@ fn run_with(shared: &Arc<Shared>, snap: Snapshot, record: bool, gif: bool, demo:
             sel: None,
             drag: Drag::None,
             phase: Phase::Selecting,
-            out: out2,
+            out,
             toolbar_rect: None,
             notice: None,
             last_pointer: None,
@@ -116,10 +157,7 @@ fn run_with(shared: &Arc<Shared>, snap: Snapshot, record: bool, gif: bool, demo:
             tool: Tool::Region,
             shapes: Vec::new(),
             next_id: 1,
-            color: {
-                let c = shared2_color;
-                eframe::egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
-            },
+            color: eframe::egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]),
             typing: None,
             prims: PrimPainter::default(),
             top_rect: None,
@@ -133,9 +171,112 @@ fn run_with(shared: &Arc<Shared>, snap: Snapshot, record: bool, gif: bool, demo:
             hover_shape: None,
             picked: None,
             demo,
+            primary,
+            active: primary,
+            title,
+            yield_focus: false,
         }
-    });
-    out.borrow_mut().take()
+    }
+
+    /// Something started here: a selection, a drag, a drawing or text.
+    fn engaged(&self) -> bool {
+        self.sel.is_some() || !matches!(self.drag, Drag::None) || !self.shapes.is_empty() || self.typing.is_some()
+    }
+
+    /// Back to a plain dimmed display (the work moved to another one).
+    fn reset(&mut self) {
+        self.sel = None;
+        self.drag = Drag::None;
+        self.shapes.clear();
+        self.typing = None;
+        self.clicked_window = None;
+        self.hover_shape = None;
+        self.picked = None;
+        self.toolbar_rect = None;
+        if self.phase == Phase::Adjusting {
+            self.phase = Phase::Selecting;
+        }
+    }
+}
+
+/// The capture overlay: one window per display on macOS (a single window
+/// over all monitors on Windows). The display where the work happens is
+/// "active": it has the tool panels; starting a selection on another one
+/// moves the work there.
+struct Overlays {
+    /// The first is the main window (the display under the pointer).
+    list: Vec<OverlayApp>,
+    engaged: Option<usize>,
+    active: usize,
+}
+
+impl Overlays {
+    fn coordinate(&mut self) {
+        let (cx, cy) = win::cursor_pos();
+        let under = self.list.iter().position(|o| o.target.contains(cx, cy));
+        let engaged: Vec<usize> = (0..self.list.len()).filter(|&i| self.list[i].engaged()).collect();
+        // the newest engagement wins: the older one goes back to plain
+        let winner = if engaged.len() > 1 { engaged.iter().copied().find(|&i| Some(i) != self.engaged).or(self.engaged) } else { engaged.first().copied() };
+        for &i in &engaged {
+            if Some(i) != winner {
+                self.list[i].reset();
+            }
+        }
+        if winner.is_some() && winner != self.engaged
+            && let Some(h) = winner.and_then(|i| self.list[i].hwnd)
+        {
+            // keys (Enter, Ctrl+C...) go to where the selection is
+            win::force_foreground(h);
+        }
+        self.engaged = winner;
+        self.list[0].yield_focus = winner.is_some_and(|w| w != 0);
+        let active = winner.or(under).unwrap_or(0);
+        if active != self.active {
+            let (tool, color) = (self.list[self.active].tool, self.list[self.active].color);
+            let o = &mut self.list[active];
+            o.tool = tool;
+            o.color = color;
+            self.active = active;
+        }
+        for (i, o) in self.list.iter_mut().enumerate() {
+            o.active = i == active;
+            // no loupe or window highlight left behind where the pointer isn't
+            if Some(i) != under && matches!(o.drag, Drag::None) {
+                o.last_pointer = None;
+            }
+        }
+    }
+}
+
+impl eframe::App for Overlays {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.list[0].raw_input_hook(ctx, raw);
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        if self.list.len() > 1 {
+            self.coordinate();
+        }
+        let (main, rest) = self.list.split_first_mut().expect("one overlay");
+        main.frame(&ctx);
+        for (i, o) in rest.iter_mut().enumerate() {
+            #[cfg(target_os = "macos")]
+            let (x, y, w, h, _) = win::rect_to_pt(o.target);
+            #[cfg(not(target_os = "macos"))]
+            let (x, y, w, h) = (o.target.x as f64, o.target.y as f64, o.target.w as f64, o.target.h as f64);
+            let builder = egui::ViewportBuilder::default()
+                .with_title(o.title.clone().unwrap_or_default())
+                .with_decorations(false)
+                .with_resizable(false)
+                .with_taskbar(false)
+                .with_always_on_top()
+                .with_visible(o.hwnd.is_some())
+                .with_position([x as f32, y as f32])
+                .with_inner_size([w as f32, h as f32]);
+            ctx.show_viewport_immediate(egui::ViewportId::from_hash_of(("blinker-overlay", i)), builder, |vctx, _| o.frame(vctx));
+        }
+    }
 }
 
 /// Tools of the top bar: region selection plus annotations drawn before capturing.
@@ -143,6 +284,7 @@ fn run_with(shared: &Arc<Shared>, snap: Snapshot, record: bool, gif: bool, demo:
 enum Tool {
     Region,
     Arrow,
+    Rect,
     Pen,
     Highlight,
     Steps,
@@ -152,16 +294,18 @@ enum Tool {
     Text,
 }
 
-const TOOLS: [(Tool, Icon, &str); 9] = [
-    (Tool::Region, Icon::Region, "выделение области  1"),
-    (Tool::Arrow, Icon::Arrow, "стрелка  2 · с shift — дугой"),
-    (Tool::Pen, Icon::Pen, "карандаш  3"),
-    (Tool::Highlight, Icon::Marker, "маркер  4"),
-    (Tool::Steps, Icon::Counter, "шаги  5"),
-    (Tool::Blur, Icon::Blur, "размытие  6"),
-    (Tool::Redact, Icon::Redact, "закрасить чёрным  7"),
-    (Tool::TextBox, Icon::TextBox, "текст с фоном  8"),
-    (Tool::Text, Icon::Text, "текст  9"),
+/// Tools in toolbar order, with their keys (the rectangle came later: 0).
+const TOOLS: [(Tool, Icon, &str, Key); 10] = [
+    (Tool::Region, Icon::Region, "выделение области  1", Key::Num1),
+    (Tool::Arrow, Icon::Arrow, "стрелка  2 · с shift — дугой", Key::Num2),
+    (Tool::Rect, Icon::Rect, "прямоугольник  0", Key::Num0),
+    (Tool::Pen, Icon::Pen, "карандаш  3", Key::Num3),
+    (Tool::Highlight, Icon::Marker, "маркер  4", Key::Num4),
+    (Tool::Steps, Icon::Counter, "шаги  5", Key::Num5),
+    (Tool::Blur, Icon::Blur, "размытие  6", Key::Num6),
+    (Tool::Redact, Icon::Redact, "закрасить чёрным  7", Key::Num7),
+    (Tool::TextBox, Icon::TextBox, "текст с фоном  8", Key::Num8),
+    (Tool::Text, Icon::Text, "текст  9", Key::Num9),
 ];
 
 /// Text being typed on the overlay (image px position).
@@ -272,6 +416,14 @@ struct OverlayApp {
     picked: Option<u64>,
     /// Scripted README run.
     demo: Option<crate::demo::Player>,
+    /// The main window (the others don't take the keyboard focus or commands).
+    primary: bool,
+    /// The display where the work is: it shows the tool panels.
+    active: bool,
+    /// Extra display windows: the title their egui viewport was made with.
+    title: Option<String>,
+    /// The work is on another display: the main window leaves the focus there.
+    yield_focus: bool,
 }
 
 /// Loupe magnification steps (points per screen pixel); 0 = hidden.
@@ -439,6 +591,9 @@ impl OverlayApp {
         // If Windows didn't give us focus, read Esc / Enter straight from the keyboard.
         let (mut esc, mut enter) = (false, false);
         if !input.viewport().focused.unwrap_or(true) {
+            #[cfg(target_os = "macos")]
+            use crate::win::vk::{VK_ESCAPE, VK_RETURN};
+            #[cfg(windows)]
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_RETURN};
             let now_down = [win::key_down(VK_ESCAPE as u32), win::key_down(VK_RETURN as u32)];
             esc = now_down[0] && !self.keys_down[0];
@@ -484,22 +639,9 @@ impl OverlayApp {
                 self.picked = None;
             }
         }
-        for (i, k) in [
-            Key::Num1,
-            Key::Num2,
-            Key::Num3,
-            Key::Num4,
-            Key::Num5,
-            Key::Num6,
-            Key::Num7,
-            Key::Num8,
-            Key::Num9,
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        for (tool, _, _, k) in TOOLS {
             if !cmd && !self.record && input.key_pressed(k) {
-                self.tool = TOOLS[i].0;
+                self.tool = tool;
             }
         }
         if input.key_pressed(Key::Escape) || esc {
@@ -613,7 +755,7 @@ impl OverlayApp {
             ctx.set_cursor_icon(CursorIcon::Move);
             return;
         }
-        self.hover_shape = if matches!(self.drag, Drag::None) && !over_toolbar && !input.modifiers.ctrl {
+        self.hover_shape = if matches!(self.drag, Drag::None) && !over_toolbar && !input.modifiers.command {
             self.shape_at(p, ppp)
         } else {
             None
@@ -628,7 +770,7 @@ impl OverlayApp {
         }
 
         // Annotation tools draw anywhere (Ctrl still moves the selection).
-        if self.tool != Tool::Region && !input.modifiers.ctrl {
+        if self.tool != Tool::Region && !input.modifiers.command {
             self.draw_input(&input, p, ppp, over_toolbar);
             ctx.set_cursor_icon(if over_toolbar {
                 CursorIcon::Default
@@ -641,7 +783,7 @@ impl OverlayApp {
         }
 
         if input.pointer.primary_pressed() && !over_toolbar {
-            let ctrl = input.modifiers.ctrl;
+            let ctrl = input.modifiers.command;
             self.drag = match (self.phase, self.handle_at(p, ppp), self.sel) {
                 // Ctrl + drag anywhere moves the existing selection.
                 (Phase::Adjusting, _, Some(s)) if ctrl => Drag::Moving { grab: s.min - p },
@@ -659,7 +801,7 @@ impl OverlayApp {
                     self.sel = Some(self.clamp_rect(Rect::from_two_pos(start, p)));
                 }
                 Drag::Creating { mut start, last } => {
-                    if input.modifiers.ctrl {
+                    if input.modifiers.command {
                         // Holding Ctrl: drag the rectangle around instead of resizing it.
                         let img = self.img_rect();
                         let moved = start + (p - last);
@@ -734,8 +876,8 @@ impl OverlayApp {
         } else {
             match self.drag {
                 Drag::Moving { .. } => CursorIcon::Move,
-                Drag::Creating { .. } if input.modifiers.ctrl => CursorIcon::Move,
-                Drag::None if self.phase == Phase::Adjusting && input.modifiers.ctrl && self.sel.is_some() => {
+                Drag::Creating { .. } if input.modifiers.command => CursorIcon::Move,
+                Drag::None if self.phase == Phase::Adjusting && input.modifiers.command && self.sel.is_some() => {
                     CursorIcon::Move
                 }
                 Drag::Resizing { handle, .. } => handle.cursor(),
@@ -897,14 +1039,23 @@ impl OverlayApp {
         }
     }
 
+    /// Points at the top of snapshot monitor `m` that a notch covers (MacBooks;
+    /// 0 elsewhere): bars and labels stay below it.
+    fn notch(&self, m: IRect, ppp: f32) -> f32 {
+        win::safe_top_at(self.snap.origin.0 + m.x + m.w / 2, self.snap.origin.1 + m.y) as f32 / ppp
+    }
+
     /// Dark rounded pill with the size above the frame's top-left corner.
     fn paint_size_label(&self, ctx: &egui::Context, r: Rect, s: Rect, alpha: f32) {
         let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("label")));
         let text = format!("{} × {}", s.width() as i32, s.height() as i32);
         let galley = painter.layout_no_wrap(text, font_medium(12.5), Color32::PLACEHOLDER);
         let size = galley.size() + vec2(18.0, 10.0);
+        let ppp = ctx.pixels_per_point();
+        let mon = self.snap.monitor_at((r.center().x * ppp) as i32, (r.center().y * ppp) as i32).rect;
+        let top = mon.y as f32 / ppp + self.notch(mon, ppp);
         let mut pos = pos2(r.left(), r.top() - 10.0 - size.y);
-        if pos.y < 4.0 {
+        if pos.y < top + 4.0 {
             pos = r.left_top() + vec2(10.0, 10.0);
         }
         let rect = Rect::from_min_size(pos, size);
@@ -1007,10 +1158,10 @@ impl OverlayApp {
         }
         let r = Rect::from_min_max(pos2(s.min.x / ppp, s.min.y / ppp), pos2(s.max.x / ppp, s.max.y / ppp));
         let c = s.center();
-        let mon = self.snap.monitor_at(c.x as i32, c.y as i32).rect;
+        let m = self.snap.monitor_at(c.x as i32, c.y as i32).rect;
         let mon = Rect::from_min_max(
-            pos2(mon.x as f32 / ppp, mon.y as f32 / ppp),
-            pos2(mon.right() as f32 / ppp, mon.bottom() as f32 / ppp),
+            pos2(m.x as f32 / ppp, m.y as f32 / ppp + self.notch(m, ppp)),
+            pos2(m.right() as f32 / ppp, m.bottom() as f32 / ppp),
         );
         let size = self.toolbar_rect.map(|t| t.size()).unwrap_or(vec2(44.0, 214.0));
         let tools_right = !self.record && self.cfg.tools_pos == crate::config::ToolsPos::Right;
@@ -1057,7 +1208,7 @@ impl OverlayApp {
                             if ui::icon_button(ui, Icon::Copy, crate::i18n::t("копировать  enter"), 36.0, false, ui::Kind::Accent).clicked() {
                                 act = Some(Action::Copy);
                             }
-                            if ui::icon_button(ui, Icon::Save, crate::i18n::t("сохранить  ctrl s"), 36.0, false, ui::Kind::Ghost).clicked() {
+                            if ui::icon_button(ui, Icon::Save, &crate::i18n::kb(crate::i18n::t("сохранить  ctrl s")), 36.0, false, ui::Kind::Ghost).clicked() {
                                 act = Some(Action::Save);
                             }
                             if ui::icon_button(ui, Icon::Edit, crate::i18n::t("править  e"), 36.0, false, ui::Kind::Ghost).clicked() {
@@ -1099,7 +1250,7 @@ fn irect_to_rect(r: IRect) -> Rect {
     Rect::from_min_size(pos2(r.x as f32, r.y as f32), vec2(r.w as f32, r.h as f32))
 }
 
-impl eframe::App for OverlayApp {
+impl OverlayApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         if let Some(d) = &mut self.demo {
             let view = crate::demo::View {
@@ -1111,8 +1262,21 @@ impl eframe::App for OverlayApp {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
+    /// One frame of this display's window.
+    fn frame(&mut self, ctx: &egui::Context) {
+        let ctx = ctx.clone();
+        // an extra display's window: set up once egui has made it
+        #[cfg(target_os = "macos")]
+        if self.hwnd.is_none()
+            && let Some(h) = self.title.as_deref().and_then(win::find_window)
+        {
+            win::disable_transitions(h);
+            win::cloak(h, true);
+            win::set_window_rect(h, self.target, true);
+            win::make_overlay(h);
+            self.hwnd = Some(h);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        }
         self.frame_no += 1;
         let now = ctx.input(|i| i.time);
         if self.t0 < 0.0 {
@@ -1121,9 +1285,10 @@ impl eframe::App for OverlayApp {
             let (cx, cy) = win::cursor_pos();
             let m = self.snap.monitor_at(cx - self.snap.origin.0, cy - self.snap.origin.1).rect;
             let ppp0 = ctx.pixels_per_point();
-            self.bar_mon = Some(Rect::from_min_size(
-                pos2(m.x as f32 / ppp0, m.y as f32 / ppp0),
-                vec2(m.w as f32 / ppp0, m.h as f32 / ppp0),
+            let notch = self.notch(m, ppp0);
+            self.bar_mon = Some(Rect::from_min_max(
+                pos2(m.x as f32 / ppp0, m.y as f32 / ppp0 + notch),
+                pos2(m.right() as f32 / ppp0, m.bottom() as f32 / ppp0),
             ));
         }
         // The window becomes visible after its first frame: start the clock then,
@@ -1147,25 +1312,31 @@ impl eframe::App for OverlayApp {
                     win::cloak(h, false);
                     self.revealed = true;
                     self.shown_frame = self.frame_no;
-                    win::force_foreground(h);
+                    if self.primary {
+                        win::force_foreground(h);
+                    }
                 }
                 ctx.request_repaint();
-            } else if matches!(self.frame_no - self.shown_frame, 4 | 12 | 28) && !win::is_foreground(h) {
+            } else if self.primary && !self.yield_focus && matches!(self.frame_no - self.shown_frame, 4 | 12 | 28) && !win::is_foreground(h) {
                 win::force_foreground(h);
             }
         }
         // Hotkeys pressed while selecting are ignored; quitting closes us.
-        self.shared.take_where(|c| c.is_capture() || *c == Command::Record);
-        if self.shared.peek() == Some(Command::Quit) {
-            *self.out.borrow_mut() = None;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            return;
+        if self.primary {
+            self.shared.take_where(|c| c.is_capture() || *c == Command::Record);
+            if matches!(self.shared.peek(), Some(Command::Quit | Command::Restart)) {
+                *self.out.borrow_mut() = None;
+                close_all(&ctx);
+                return;
+            }
         }
 
         let ppp = ctx.pixels_per_point();
         self.handle_input(&ctx, ppp, now);
         self.paint(&ctx, ppp, now);
-        self.tools_bar(&ctx);
+        if self.active {
+            self.tools_bar(&ctx);
+        }
         self.last_ppp = ppp;
         let adjusting = self.phase == Phase::Adjusting;
         if adjusting && !self.was_adjusting {
@@ -1180,18 +1351,23 @@ impl eframe::App for OverlayApp {
         if let Phase::Closing { at } = self.phase
             && now - at >= CLOSE
         {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            close_all(&ctx);
         }
         if let Phase::Finishing { at } = self.phase
             && now - at >= FLASH
         {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            close_all(&ctx);
         }
         if let Some(d) = &self.demo {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(d.shot_request()));
             ctx.request_repaint();
         }
     }
+}
+
+/// Closes the overlay: the main window, and with it every display's window.
+fn close_all(ctx: &egui::Context) {
+    ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
 }
 
 /// Viewfinder frame: dashed hairline plus solid corner brackets.
@@ -1266,9 +1442,10 @@ impl OverlayApp {
                     let id = self.push_shape(Kind::Pen { pts: vec![p] }, w);
                     self.drag = Drag::Draw { id, start: p };
                 }
-                Tool::Highlight | Tool::Blur | Tool::Redact => {
+                Tool::Rect | Tool::Highlight | Tool::Blur | Tool::Redact => {
                     let r = Rect::from_two_pos(p, p);
                     let kind = match self.tool {
+                        Tool::Rect => Kind::Rect { r },
                         Tool::Highlight => Kind::Highlight { r },
                         Tool::Blur => Kind::Pixelate { r },
                         _ => Kind::Redact { r },
@@ -1302,7 +1479,7 @@ impl OverlayApp {
                                 pts.push(p);
                             }
                         }
-                        Kind::Highlight { r } | Kind::Pixelate { r } | Kind::Redact { r } => {
+                        Kind::Rect { r } | Kind::Highlight { r } | Kind::Pixelate { r } | Kind::Redact { r } => {
                             *r = Rect::from_two_pos(start, p).intersect(img)
                         }
                         _ => {}
@@ -1316,7 +1493,7 @@ impl OverlayApp {
             let min = 3.0 * ppp;
             let keep = self.shapes.iter().find(|s| s.id == id).is_some_and(|s| match &s.kind {
                 Kind::Arrow { a, b } | Kind::Curve { a, b, .. } => (*a - *b).length() > min,
-                Kind::Highlight { r } | Kind::Pixelate { r } | Kind::Redact { r } => r.width() > min && r.height() > min,
+                Kind::Rect { r } | Kind::Highlight { r } | Kind::Pixelate { r } | Kind::Redact { r } => r.width() > min && r.height() > min,
                 _ => true,
             });
             if !keep {
@@ -1357,7 +1534,7 @@ impl OverlayApp {
             Some(r) => {
                 let c = self.snap.monitor_at((r.center().x * ppp) as i32, (r.center().y * ppp) as i32).rect;
                 let m = Rect::from_min_max(
-                    pos2(c.x as f32 / ppp, c.y as f32 / ppp),
+                    pos2(c.x as f32 / ppp, c.y as f32 / ppp + self.notch(c, ppp)),
                     pos2(c.right() as f32 / ppp, c.bottom() as f32 / ppp),
                 )
                 .shrink(8.0);
@@ -1419,7 +1596,7 @@ impl OverlayApp {
                                 self.record_bar(ui);
                                 return;
                             }
-                            for (tool, icon, tip) in TOOLS {
+                            for (tool, icon, tip, _) in TOOLS {
                                 if ui::icon_button(ui, icon, crate::i18n::t(tip), 36.0, self.tool == tool, ui::Kind::Ghost).clicked() {
                                     self.commit_text();
                                     self.tool = tool;
@@ -1438,7 +1615,7 @@ impl OverlayApp {
                             }
                             bar_sep(ui);
                             ui.add_enabled_ui(!self.shapes.is_empty(), |ui| {
-                                if ui::icon_button(ui, Icon::Undo, crate::i18n::t("отменить  ctrl z"), 36.0, false, ui::Kind::Ghost).clicked() {
+                                if ui::icon_button(ui, Icon::Undo, &crate::i18n::kb(crate::i18n::t("отменить  ctrl z")), 36.0, false, ui::Kind::Ghost).clicked() {
                                     self.shapes.pop();
                                 }
                             });
@@ -1452,7 +1629,7 @@ impl OverlayApp {
     fn tools_column(&mut self, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-            for (tool, icon, tip) in TOOLS {
+            for (tool, icon, tip, _) in TOOLS {
                 if ui::icon_button(ui, icon, crate::i18n::t(tip), 36.0, self.tool == tool, ui::Kind::Ghost).clicked() {
                     self.commit_text();
                     self.tool = tool;
@@ -1476,7 +1653,7 @@ impl OverlayApp {
             }
             bar_sep_h(ui);
             ui.add_enabled_ui(!self.shapes.is_empty(), |ui| {
-                if ui::icon_button(ui, Icon::Undo, crate::i18n::t("отменить  ctrl z"), 36.0, false, ui::Kind::Ghost).clicked() {
+                if ui::icon_button(ui, Icon::Undo, &crate::i18n::kb(crate::i18n::t("отменить  ctrl z")), 36.0, false, ui::Kind::Ghost).clicked() {
                     self.shapes.pop();
                 }
             });
@@ -1524,7 +1701,7 @@ impl OverlayApp {
             self.shared.update_config(|c| c.rec_show_clicks = !clicks);
         }
         let keys = self.cfg.rec_show_keys;
-        let tip = if keys { crate::i18n::t("сочетания клавиш видны в записи") } else { crate::i18n::t("показывать сочетания клавиш (ctrl + c…)") };
+        let tip = if keys { crate::i18n::t("сочетания клавиш видны в записи") } else { &crate::i18n::kb(crate::i18n::t("показывать сочетания клавиш (ctrl + c…)")) };
         if ui::icon_button(ui, Icon::Keys, tip, 36.0, keys, ui::Kind::Ghost).clicked() {
             self.cfg.rec_show_keys = !keys;
             self.shared.update_config(|c| c.rec_show_keys = !keys);

@@ -1,12 +1,19 @@
-//! Screen recording: Windows Graphics Capture → Media Foundation MP4 with
-//! separate desktop-audio and microphone tracks; pause, single-window
-//! recording, click / shortcut effects, and an always-on instant replay.
+//! Screen recording: Windows Graphics Capture → Media Foundation MP4 (macOS:
+//! ScreenCaptureKit → AVAssetWriter) with separate desktop-audio and
+//! microphone tracks; pause, single-window recording, click / shortcut
+//! effects, and an always-on instant replay.
 
+#[cfg_attr(target_os = "macos", path = "../mac/record/audio.rs")]
 pub mod audio;
+#[cfg_attr(target_os = "macos", path = "../mac/record/encoder.rs")]
 pub mod encoder;
+#[cfg_attr(target_os = "macos", path = "../mac/record/fx.rs")]
 pub mod fx;
+#[cfg_attr(target_os = "macos", path = "../mac/record/hud.rs")]
 pub mod hud;
+mod pill;
 pub mod replay;
+#[cfg_attr(target_os = "macos", path = "../mac/record/video.rs")]
 pub mod video;
 
 use crate::config::{Config, log};
@@ -17,8 +24,7 @@ use image::RgbaImage;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use video::{Capture, Gpu, Pacer, Target};
-use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
+use video::{Capture, Frame, Gpu, Pacer};
 
 /// Recording clock in 100 ns: QPC minus the start and all paused stretches.
 pub struct Clock {
@@ -91,7 +97,7 @@ pub enum VideoOut {
 unsafe impl Send for VideoOut {}
 
 impl VideoOut {
-    fn write_video(&self, tex: &ID3D11Texture2D, t: i64, dur: i64) {
+    fn write_video(&self, tex: &Frame, t: i64, dur: i64) {
         match self {
             VideoOut::File(e) => {
                 let _ = e.write_texture(tex, t, dur);
@@ -101,7 +107,7 @@ impl VideoOut {
     }
 
     /// Housekeeping between frames (replay: drop old segments).
-    fn maintain(&self, now: i64, _last: Option<&ID3D11Texture2D>) {
+    fn maintain(&self, now: i64, _last: Option<&Frame>) {
         if let VideoOut::Replay(s) = self {
             s.maintain(now);
         }
@@ -161,6 +167,7 @@ pub fn new_path(cfg: &Config, prefix: &str) -> PathBuf {
     path
 }
 
+#[cfg(windows)]
 pub fn hmonitor_at(x: i32, y: i32) -> windows::Win32::Graphics::Gdi::HMONITOR {
     use windows::Win32::Foundation::POINT;
     use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromPoint};
@@ -245,17 +252,14 @@ pub fn start(
     let monitor = sel.monitor;
     let (target, r, origin) = match sel.window {
         Some(h) => {
-            let hwnd = windows::Win32::Foundation::HWND(h as _);
-            let b = crate::win::frame_bounds(h as _);
-            let size = ((b.w as u32) & !1, (b.h as u32) & !1);
-            (Target::Window { hwnd, size }, IRect::new(b.x, b.y, size.0 as i32, size.1 as i32), (b.x, b.y))
+            let (target, b) = video::window_target(h);
+            (target, b, (b.x, b.y))
         }
         None => {
             let r = sel.rect.intersect(&monitor.rect);
             let (w, h) = ((r.w as u32) & !1, (r.h as u32) & !1);
             let r = IRect::new(r.x, r.y, w as i32, h as i32);
-            let crop = ((r.x - monitor.rect.x) as u32, (r.y - monitor.rect.y) as u32, w, h);
-            (Target::Monitor { hmon: hmonitor_at(r.x + r.w / 2, r.y + r.h / 2), crop }, r, (r.x, r.y))
+            (video::monitor_target(r, &monitor), r, (r.x, r.y))
         }
     };
     let (w, h) = target.size();
@@ -264,7 +268,7 @@ pub fn start(
     }
     // A GIF has no sound and is written to a temporary MP4 first.
     let tracks = if gif { Vec::new() } else { audio_sources(cfg.rec_desktop_audio, cfg.rec_mic) };
-    let gpu = Arc::new(Gpu::new().map_err(|e| format!("Direct3D: {e}"))?);
+    let gpu = Arc::new(Gpu::new().map_err(|e| format!("{}: {e}", video::GPU_API))?);
     let path = if gif {
         let dir = crate::config::cache_dir().join("gif");
         let _ = std::fs::create_dir_all(&dir);
@@ -401,7 +405,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod window_test {
     /// Records a window (`BLINKER_TEST_WINDOW` = HWND, decimal) for 1.5 s.
     #[test]

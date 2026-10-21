@@ -353,14 +353,14 @@ impl Default for Config {
             magnifier: true,
             tools_pos: ToolsPos::Screen,
             instant_mode: false,
-            hotkey_region: vec!["PrintScreen".into()],
-            hotkey_screen: vec!["Ctrl+PrintScreen".into()],
+            hotkey_region: default_keys(&["PrintScreen"], &["Shift+Cmd+2"]),
+            hotkey_screen: default_keys(&["Ctrl+PrintScreen"], &["Shift+Cmd+1"]),
             hotkey_window: Vec::new(),
-            hotkey_last: vec!["Shift+PrintScreen".into()],
-            hotkey_record: vec!["Ctrl+Shift+PrintScreen".into()],
+            hotkey_last: default_keys(&["Shift+PrintScreen"], &["Opt+Shift+Cmd+2"]),
+            hotkey_record: default_keys(&["Ctrl+Shift+PrintScreen"], &["Shift+Cmd+7"]),
             hotkey_record_gif: Vec::new(),
-            hotkey_pause: vec!["Ctrl+Alt+P".into()],
-            hotkey_replay: vec!["Ctrl+Alt+PrintScreen".into()],
+            hotkey_pause: default_keys(&["Ctrl+Alt+P"], &["Ctrl+Opt+P"]),
+            hotkey_replay: default_keys(&["Ctrl+Alt+PrintScreen"], &["Opt+Shift+Cmd+7"]),
             autostart: false,
             editor_color: [0xE3, 0xB3, 0x41, 255],
             editor_width: 4.0,
@@ -372,9 +372,11 @@ impl Default for Config {
             sound_enabled: false,
             sound_kind: SoundKind::Shutter,
             sound_file: None,
-            sound_volume: 0.5,
-            tray_click: TrayAction::Region,
-            tray_right_click: TrayAction::Menu,
+            // a Mac's speakers are loud: a quieter shutter there
+            sound_volume: if cfg!(target_os = "macos") { 0.2 } else { 0.5 },
+            // a Mac opens a menu bar icon's menu on a click
+            tray_click: if cfg!(target_os = "macos") { TrayAction::Menu } else { TrayAction::Region },
+            tray_right_click: if cfg!(target_os = "macos") { TrayAction::Region } else { TrayAction::Menu },
             rec_fps: 60,
             rec_codec: VideoCodec::H264,
             rec_quality: RecQuality::Balanced,
@@ -519,6 +521,13 @@ impl Config {
     }
 }
 
+/// Default bindings: Windows keyboards have PrtSc; on a Mac ⇧⌘3…⌘5 belong to
+/// the system, so blinker takes the free digits next to them.
+fn default_keys(windows: &[&str], mac: &[&str]) -> Vec<String> {
+    let keys = if cfg!(target_os = "macos") { mac } else { windows };
+    keys.iter().map(|k| k.to_string()).collect()
+}
+
 fn default_save_dir() -> PathBuf {
     dirs::picture_dir()
         .or_else(dirs::home_dir)
@@ -620,5 +629,15 @@ pub fn save(cfg: &Config) {
 pub mod log {
     pub fn error(msg: impl AsRef<str>) {
         eprintln!("[blinker] {}", msg.as_ref());
+        // an app started from Finder has no terminal: ~/Library/Logs/Blinker
+        #[cfg(target_os = "macos")]
+        info(msg);
+    }
+
+    /// A line in the macOS log file.
+    #[cfg(target_os = "macos")]
+    pub fn info(msg: impl AsRef<str>) {
+        let line = crate::win::ffi::cstr(msg.as_ref());
+        unsafe { crate::win::ffi::bk_log(line.as_ptr()) };
     }
 }

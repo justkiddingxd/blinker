@@ -14,13 +14,16 @@
 //! 4xx / 5xx  {"error": "message"}  (or any text)
 //! ```
 //!
-//! HTTP goes through WinHTTP (system TLS and proxy settings, no extra crates).
+//! HTTP goes through WinHTTP on Windows and NSURLSession on macOS (system TLS
+//! and proxy settings, no extra crates).
 
 use crate::config::Config;
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+#[cfg(windows)]
 use windows_sys::Win32::Networking::WinHttp::*;
 
 pub struct Job {
@@ -94,6 +97,7 @@ pub fn test(cfg: &Config) -> Result<String, String> {
     post(cfg.upload_url.trim(), cfg.upload_token.trim(), "blinker-test.png", "image/png", &png, &AtomicU32::new(0))
 }
 
+#[cfg(windows)]
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -110,7 +114,9 @@ fn percent(s: &str) -> String {
         .collect()
 }
 
+#[cfg(windows)]
 struct Handle(*mut core::ffi::c_void);
+#[cfg(windows)]
 impl Drop for Handle {
     fn drop(&mut self) {
         if !self.0.is_null() {
@@ -119,6 +125,7 @@ impl Drop for Handle {
     }
 }
 
+#[cfg(windows)]
 fn last_error(what: &str) -> String {
     let code = unsafe { windows_sys::Win32::Foundation::GetLastError() };
     let hint = match code {
@@ -135,6 +142,48 @@ fn post(url: &str, token: &str, name: &str, ctype: &str, body: &[u8], progress: 
     if url.is_empty() {
         return Err(crate::i18n::t("не указан адрес сервера").into());
     }
+    let mut headers = vec![("Content-Type", ctype.to_string()), ("X-Filename", percent(name))];
+    if !token.is_empty() {
+        headers.push(("Authorization", format!("Bearer {token}")));
+    }
+    let (status, text) = send("POST", url, &headers, body, progress)?;
+    if !(200..300).contains(&status) {
+        let msg = json_string(&text, "error").unwrap_or_else(|| text.chars().take(160).collect());
+        return Err(match status {
+            401 | 403 => crate::i18n::t("сервер не принял токен").to_string(),
+            413 => crate::i18n::t("файл слишком большой для сервера").to_string(),
+            _ => lf!("сервер ответил {status}: {}", "the server answered {status}: {}", msg.trim()),
+        });
+    }
+    json_string(&text, "url").ok_or_else(|| crate::i18n::t("в ответе сервера нет поля \"url\"").to_string())
+}
+
+/// A GET with `headers`: (status, response text). Also used for the update check.
+pub fn get(url: &str, headers: &[(&str, String)]) -> Result<(u32, String), String> {
+    send("GET", url, headers, &[], &AtomicU32::new(0))
+}
+
+/// Sends `body` with `headers`: (status, response text).
+#[cfg(target_os = "macos")]
+fn send(method: &str, url: &str, headers: &[(&str, String)], body: &[u8], progress: &AtomicU32) -> Result<(u32, String), String> {
+    let (status, text, err) = crate::win::http_request(method, url, headers, body, progress);
+    match err {
+        None => Ok((status, text)),
+        Some(code) => Err(match code {
+            -1003 | -1006 => crate::i18n::t("сервер не найден").to_string(),
+            -1004 | -1005 | -1009 => crate::i18n::t("нет соединения с сервером").to_string(),
+            -1001 => crate::i18n::t("сервер не ответил вовремя").to_string(),
+            -1202..=-1200 | -1206..=-1203 => crate::i18n::t("проблема с сертификатом https").to_string(),
+            -1000 | -1002 => crate::i18n::t("неверный адрес сервера (нужно https://…)").to_string(),
+            _ if text.is_empty() => lf!("отправка: ошибка {code}", "sending: error {code}"),
+            _ => text,
+        }),
+    }
+}
+
+/// Sends `body` with `headers`: (status, response text).
+#[cfg(windows)]
+fn send(method: &str, url: &str, extra_headers: &[(&str, String)], body: &[u8], progress: &AtomicU32) -> Result<(u32, String), String> {
     unsafe {
         let wurl = wide(url);
         let mut host = vec![0u16; 256];
@@ -169,15 +218,12 @@ fn post(url: &str, token: &str, name: &str, ctype: &str, body: &[u8], progress: 
         if conn.0.is_null() {
             return Err(last_error(crate::i18n::t("соединение")));
         }
-        let (verb, wobj) = (wide("POST"), wide(if object.is_empty() { "/" } else { &object }));
+        let (verb, wobj) = (wide(method), wide(if object.is_empty() { "/" } else { &object }));
         let req = Handle(WinHttpOpenRequest(conn.0, verb.as_ptr(), wobj.as_ptr(), null(), null(), null(), if secure { WINHTTP_FLAG_SECURE } else { 0 }));
         if req.0.is_null() {
             return Err(last_error(crate::i18n::t("запрос")));
         }
-        let mut headers = format!("Content-Type: {ctype}\r\nX-Filename: {}\r\n", percent(name));
-        if !token.is_empty() {
-            headers += &format!("Authorization: Bearer {token}\r\n");
-        }
+        let headers: String = extra_headers.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect();
         let wh = wide(&headers);
         if WinHttpSendRequest(req.0, wh.as_ptr(), u32::MAX, null(), 0, body.len() as u32, 0) == 0 {
             return Err(last_error(crate::i18n::t("отправка")));
@@ -216,16 +262,7 @@ fn post(url: &str, token: &str, name: &str, ctype: &str, body: &[u8], progress: 
                 break;
             }
         }
-        let text = String::from_utf8_lossy(&resp).into_owned();
-        if !(200..300).contains(&status) {
-            let msg = json_string(&text, "error").unwrap_or_else(|| text.chars().take(160).collect());
-            return Err(match status {
-                401 | 403 => crate::i18n::t("сервер не принял токен").to_string(),
-                413 => crate::i18n::t("файл слишком большой для сервера").to_string(),
-                _ => lf!("сервер ответил {status}: {}", "the server answered {status}: {}", msg.trim()),
-            });
-        }
-        json_string(&text, "url").ok_or_else(|| crate::i18n::t("в ответе сервера нет поля \"url\"").to_string())
+        Ok((status, String::from_utf8_lossy(&resp).into_owned()))
     }
 }
 

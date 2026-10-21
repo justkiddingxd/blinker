@@ -1,0 +1,99 @@
+# A tag like v0.2.0 builds blinker for Windows and macOS and puts the files in
+# the GitHub release of that tag (made if missing):
+#
+#   blinker.exe          Windows
+#   Blinker.dmg          macOS: opens to Blinker.app and Applications
+#   Blinker-macos.zip    macOS: the same app, for the built-in updater
+#
+# The Mac app is signed with the certificate from scripts/macos-signing.sh,
+# so users keep the Screen Recording permission across updates. Repository
+# secrets:
+#   BLINKER_P12_BASE64    base64 of blinker-signing.p12   (base64 -i blinker-signing.p12 | pbcopy)
+#   BLINKER_P12_PASSWORD  its password
+# Without them the app is signed ad hoc (a warning on the run).
+#
+# "Run workflow" by hand builds the files without releasing them.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Version matches the tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          if [ "v$v" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Cargo.toml says $v, the tag is $GITHUB_REF_NAME"
+            exit 1
+          fi
+      - name: Build
+        run: cargo build --release --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: target/release/blinker.exe
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Signing certificate
+        env:
+          BLINKER_P12_BASE64: ${{ secrets.BLINKER_P12_BASE64 }}
+          BLINKER_P12_PASSWORD: ${{ secrets.BLINKER_P12_PASSWORD }}
+        run: |
+          if [ -z "$BLINKER_P12_BASE64" ]; then
+            echo "::warning::no BLINKER_P12_BASE64 secret: the app is signed ad hoc and users allow screen recording again after every update"
+            exit 0
+          fi
+          printf '%s' "$BLINKER_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/blinker-signing.p12"
+          scripts/macos-signing.sh import "$RUNNER_TEMP/blinker-signing.p12"
+          rm -f "$RUNNER_TEMP/blinker-signing.p12"
+      - name: Build
+        run: UNIVERSAL=1 scripts/macos-app.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: |
+            target/release/Blinker.dmg
+            target/release/Blinker-macos.zip
+          if-no-files-found: error
+
+  release:
+    needs: [windows, macos]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la dist
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --title "blinker ${GITHUB_REF_NAME#v}" --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber

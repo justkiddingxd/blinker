@@ -36,6 +36,8 @@ pub fn run(dir: PathBuf, lang: &str, record: bool) {
         origin: (vs.right() + 400, vs.y),
         windows: Vec::new(),
         monitors: vec![Monitor { rect: full, work: full, scale: 1.0 }],
+        #[cfg(target_os = "macos")]
+        others: Vec::new(),
     };
     let player = Player::new(dir.clone(), 30, if record { record_script() } else { script() });
     let count = player.out.clone();
@@ -92,7 +94,7 @@ fn recording(dir: &std::path::Path, first: usize, reveal0: f32, monitor: Monitor
         let mut pm = sk::Pixmap::new(W, H).unwrap();
         hud::draw_frame(&mut pm, (l, t), (r - l, b - t), 1.0);
         let hover = ((p - stop).length() < 12.0).then_some(hud::Btn::Stop);
-        let look = hud::PillLook { secs: tm as u64, paused: false, blink: (tm % 1.0) as f32, hover };
+        let look = hud::PillLook { secs: tm as u64, paused: false, clock: tm as f32, hover };
         image::imageops::overlay(&mut img, &crate::theme::pixmap_to_image(&pm), 0, 0);
         if let Some(pill) = hud::draw_pill(&look, 1.0) {
             image::imageops::overlay(&mut img, &crate::theme::pixmap_to_image(&pill), pill_at.0 as i64, pill_at.1 as i64);

@@ -385,7 +385,7 @@ impl VideoApp {
                         sep(ui);
                         let busy = self.job.is_some() || self.tg.is_some();
                         ui.add_enabled_ui(!busy, |ui| {
-                            if ui::button(ui, crate::i18n::t("сохранить mp4"), ui::Kind::Accent).on_hover_text("ctrl+s").clicked() {
+                            if ui::button(ui, crate::i18n::t("сохранить mp4"), ui::Kind::Accent).on_hover_text(crate::i18n::kb("ctrl+s")).clicked() {
                                 self.export(&ctx, ExportKind::Mp4);
                             }
                             let tg = ui::button(ui, crate::i18n::t("для telegram"), ui::Kind::Ghost);

@@ -86,7 +86,7 @@ pub fn start(ctx: &eframe::egui::Context, src: PathBuf, dst: PathBuf, info: Medi
     job
 }
 
-fn err(e: windows::core::Error) -> String {
+fn err(e: crate::media::Error) -> String {
     e.message().to_string()
 }
 
@@ -145,7 +145,10 @@ pub fn mp4(src: &Path, dst: &Path, info: &MediaInfo, opt: &Options, progress: &A
     let audio_until = |k: &mut usize, until: i64| -> Result<(), String> {
         loop {
             let t = (*k * chunk / 2) as i64 * HNS / AUDIO_RATE as i64;
-            if t > until || out_tracks.first().is_none_or(|p| *k * chunk >= p.len()) {
+            if out_tracks.first().is_none_or(|p| *k * chunk >= p.len()) {
+                return enc.end_audio().map_err(err);
+            }
+            if t > until {
                 return Ok(());
             }
             for (i, pcm) in out_tracks.iter().enumerate() {
@@ -161,7 +164,7 @@ pub fn mp4(src: &Path, dst: &Path, info: &MediaInfo, opt: &Options, progress: &A
     reader.seek(from).map_err(err)?;
     let mut bgra = Vec::new();
     let mut write = |ts: i64, dur: i64, img: &image::RgbaImage, k: &mut usize| -> Result<(), String> {
-        audio_until(k, ts)?;
+        audio_until(k, ts + crate::record::encoder::AUDIO_LEAD)?;
         bgra.clear();
         bgra.extend(img.as_raw().chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], 255]));
         enc.write_bgra(&bgra, ts, dur).map_err(err)
@@ -200,7 +203,7 @@ pub fn mp4(src: &Path, dst: &Path, info: &MediaInfo, opt: &Options, progress: &A
 }
 
 /// `total` interleaved samples of a track starting exactly at `from`.
-fn read_range(src: &Path, stream: u32, from: i64, total: usize) -> windows::core::Result<Vec<i16>> {
+fn read_range(src: &Path, stream: u32, from: i64, total: usize) -> crate::media::Result<Vec<i16>> {
     let r = AudioReader::open(src, stream)?;
     r.seek(from)?;
     let mut out: Vec<i16> = Vec::with_capacity(total);

@@ -75,16 +75,12 @@ fn button(ui: &mut Ui, h: f32, glyph: Glyph, danger: bool) -> egui::Response {
     resp
 }
 
-/// Lets the user resize the undecorated window by its edges. Call once per frame.
-pub fn resize_edges(ctx: &egui::Context) {
-    if ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
-        return;
-    }
-    let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else { return };
+/// The edge under `pos` (window coordinates), if any.
+fn edge_at(ctx: &egui::Context, pos: egui::Pos2) -> Option<ResizeDirection> {
     let r = ctx.content_rect();
     const E: f32 = 5.0;
     let (l, t, rr, b) = (pos.x - r.left() < E, pos.y - r.top() < E, r.right() - pos.x < E, r.bottom() - pos.y < E);
-    let dir = match (l, t, rr, b) {
+    Some(match (l, t, rr, b) {
         (true, true, _, _) => ResizeDirection::NorthWest,
         (_, true, true, _) => ResizeDirection::NorthEast,
         (true, _, _, true) => ResizeDirection::SouthWest,
@@ -93,15 +89,86 @@ pub fn resize_edges(ctx: &egui::Context) {
         (_, _, true, _) => ResizeDirection::East,
         (_, true, _, _) => ResizeDirection::North,
         (_, _, _, true) => ResizeDirection::South,
-        _ => return,
-    };
-    let icon = match dir {
+        _ => return None,
+    })
+}
+
+fn resize_cursor(dir: ResizeDirection) -> CursorIcon {
+    match dir {
         ResizeDirection::North | ResizeDirection::South => CursorIcon::ResizeVertical,
         ResizeDirection::East | ResizeDirection::West => CursorIcon::ResizeHorizontal,
         ResizeDirection::NorthWest | ResizeDirection::SouthEast => CursorIcon::ResizeNwSe,
         ResizeDirection::NorthEast | ResizeDirection::SouthWest => CursorIcon::ResizeNeSw,
-    };
-    ctx.set_cursor_icon(icon);
+    }
+}
+
+/// Lets the user resize the undecorated window by its edges. Call once per frame.
+///
+/// macOS can't hand an edge drag to the system (winit has no
+/// `drag_resize_window` there), so the window follows the pointer itself.
+#[cfg(target_os = "macos")]
+pub fn resize_edges(ctx: &egui::Context) {
+    #[derive(Clone, Copy)]
+    struct Drag {
+        dir: ResizeDirection,
+        /// Pointer at the start, in screen points.
+        start: egui::Pos2,
+        /// Window at the start, in screen points.
+        rect: Rect,
+    }
+    let id = egui::Id::unique("chrome-resize");
+    let (outer, maximized) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().maximized.unwrap_or(false)));
+    let Some(outer) = outer else { return };
+    if maximized {
+        return;
+    }
+    let (pos, pressed, down) = ctx.input(|i| (i.pointer.latest_pos(), i.pointer.primary_pressed(), i.pointer.primary_down()));
+    if let Some(d) = ctx.data(|m| m.get_temp::<Drag>(id)) {
+        if !down {
+            ctx.data_mut(|m| m.remove::<Drag>(id));
+            return;
+        }
+        ctx.set_cursor_icon(resize_cursor(d.dir));
+        let Some(p) = pos else { return };
+        let delta = outer.min + p.to_vec2() - d.start;
+        let mut r = d.rect;
+        let min = vec2(560.0, 380.0);
+        use ResizeDirection::*;
+        if matches!(d.dir, West | NorthWest | SouthWest) {
+            r.min.x = (r.min.x + delta.x).min(r.max.x - min.x);
+        }
+        if matches!(d.dir, East | NorthEast | SouthEast) {
+            r.max.x = (r.max.x + delta.x).max(r.min.x + min.x);
+        }
+        if matches!(d.dir, North | NorthWest | NorthEast) {
+            r.min.y = (r.min.y + delta.y).min(r.max.y - min.y);
+        }
+        if matches!(d.dir, South | SouthWest | SouthEast) {
+            r.max.y = (r.max.y + delta.y).max(r.min.y + min.y);
+        }
+        if r != outer {
+            ctx.send_viewport_cmd(ViewportCommand::OuterPosition(r.min));
+            ctx.send_viewport_cmd(ViewportCommand::InnerSize(r.size()));
+        }
+        return;
+    }
+    let Some(p) = ctx.input(|i| i.pointer.hover_pos()) else { return };
+    let Some(dir) = edge_at(ctx, p) else { return };
+    ctx.set_cursor_icon(resize_cursor(dir));
+    if pressed {
+        ctx.data_mut(|m| m.insert_temp(id, Drag { dir, start: outer.min + p.to_vec2(), rect: outer }));
+    }
+}
+
+/// Lets the user resize the undecorated window by its edges. Call once per frame.
+#[cfg(not(target_os = "macos"))]
+pub fn resize_edges(ctx: &egui::Context) {
+    if ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
+        return;
+    }
+    let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else { return };
+    let Some(dir) = edge_at(ctx, pos) else { return };
+    ctx.set_cursor_icon(resize_cursor(dir));
     if ctx.input(|i| i.pointer.primary_pressed()) {
         ctx.send_viewport_cmd(ViewportCommand::BeginResize(dir));
     }
@@ -109,7 +176,8 @@ pub fn resize_edges(ctx: &egui::Context) {
 
 /// 1px frame around the whole window (undecorated windows have none).
 pub fn frame_border(ctx: &egui::Context) {
-    if ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
+    // macOS draws its own hairline around the (rounded) window.
+    if cfg!(target_os = "macos") || ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
         return;
     }
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("chrome-border")));
