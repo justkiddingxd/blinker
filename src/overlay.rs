@@ -1530,7 +1530,9 @@ impl OverlayApp {
         let ppp = ctx.pixels_per_point();
         let size = self.top_rect.map(|r| r.size()).unwrap_or(vec2(540.0, 52.0));
         // Next to the selection once there is one (the screen top until then).
-        let mode = if self.record { crate::config::ToolsPos::Screen } else { self.cfg.tools_pos };
+        // In instant mode the selection is copied the moment it's made: the
+        // panel stays at the top instead of setting off after it.
+        let mode = if self.record || self.cfg.instant_mode { crate::config::ToolsPos::Screen } else { self.cfg.tools_pos };
         let area = self
             .sel
             .filter(|_| mode != crate::config::ToolsPos::Screen && self.phase != Phase::Selecting)
@@ -1576,7 +1578,7 @@ impl OverlayApp {
         let cur = self.bar_pos.unwrap_or(target);
         let k = 1.0 - (-dt * 16.0).exp();
         let next = cur + (target - cur) * k;
-        let next = if (next - target).length() < 0.5 { target } else { next };
+        let next = if (next - target).length() < 0.5 || self.cfg.instant_mode { target } else { next };
         if next != target {
             ctx.request_repaint();
         }

@@ -328,6 +328,12 @@ pub struct Config {
     pub sound_volume: f32,
     pub tray_click: TrayAction,
     pub tray_right_click: TrayAction,
+    /// Set: a single left click waits a moment to see whether a second comes.
+    pub tray_double_click: TrayAction,
+    /// Install new versions by itself (in the background, then restart).
+    pub auto_update: bool,
+    /// The version whose "what's new" was seen; another one shows it again.
+    pub seen_version: String,
     /// Frames per second; 0 = the monitor's refresh rate.
     pub rec_fps: u32,
     pub rec_codec: VideoCodec,
@@ -409,6 +415,9 @@ impl Default for Config {
             // a Mac opens a menu bar icon's menu on a click
             tray_click: if cfg!(target_os = "macos") { TrayAction::Menu } else { TrayAction::Region },
             tray_right_click: if cfg!(target_os = "macos") { TrayAction::Region } else { TrayAction::Menu },
+            tray_double_click: TrayAction::Nothing,
+            auto_update: false,
+            seen_version: String::new(),
             rec_fps: 60,
             rec_codec: VideoCodec::H264,
             rec_quality: RecQuality::Balanced,
@@ -611,11 +620,15 @@ pub fn load_failed_hotkeys() -> std::collections::HashSet<String> {
 
 pub fn load() -> Config {
     migrate_dirs();
-    let mut cfg: Config = std::fs::read_to_string(config_path())
-        .ok()
-        .and_then(|s| toml::from_str(&s).ok())
-        .unwrap_or_default();
-    if migrate_save_dir(&mut cfg) {
+    let text = std::fs::read_to_string(config_path()).ok();
+    let fresh = text.is_none();
+    let mut cfg: Config = text.and_then(|s| toml::from_str(&s).ok()).unwrap_or_default();
+    // a new install has nothing new to tell; an update from a version
+    // without this field does
+    if fresh {
+        cfg.seen_version = env!("CARGO_PKG_VERSION").to_string();
+    }
+    if migrate_save_dir(&mut cfg) || fresh {
         save(&cfg);
     }
     crate::i18n::apply(&cfg.lang);

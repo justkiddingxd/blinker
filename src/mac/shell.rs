@@ -102,6 +102,8 @@ fn command_of(a: HotkeyAction) -> Command {
 fn register(shared: &Shared) {
     unregister();
     let cfg = shared.config();
+    // the icon waits for a second click only when one means something
+    unsafe { ffi::bk_tray_set_double((cfg.tray_double_click != TrayAction::Nothing) as i32) };
     let mut failed = std::collections::HashSet::new();
     let mut ids = HOTKEYS.lock().unwrap();
     let mut next = 1u32;
@@ -166,10 +168,15 @@ pub fn tray_state_changed(shared: &Shared) {
     unsafe { ffi::bk_tray_set_image(icon.as_raw().as_ptr(), icon.width() as i32, icon.height() as i32, template, tip.as_ptr()) };
 }
 
-extern "C" fn on_tray(right: i32) {
+extern "C" fn on_tray(right: i32, clicks: i32) {
     let Some(s) = shared() else { return };
     let cfg = s.config();
-    tray_action(s, if right != 0 { cfg.tray_right_click } else { cfg.tray_click });
+    let action = match (right != 0, clicks >= 2) {
+        (true, _) => cfg.tray_right_click,
+        (false, true) => cfg.tray_double_click,
+        (false, false) => cfg.tray_click,
+    };
+    tray_action(s, action);
 }
 
 /// What a click on the icon does (each button has its own setting).

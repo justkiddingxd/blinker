@@ -121,6 +121,7 @@ fn main() {
     }
     let shared = Shared::new(cfg);
     let shell = shell::spawn(shared.clone());
+    update::auto(shared.clone());
 
     // the first start next to ShareX: settings open where it is brought over
     let sharex = !shared.config().sharex_offered && sharex::detect().is_some();

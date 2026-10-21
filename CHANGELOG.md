@@ -24,6 +24,12 @@ Each version's section becomes its release notes on GitHub (`.github/workflows/r
 - Меню в трее с крупными плитками: область, экран, окно, видео, gif.
 - Панель инструментов при скриншоте крупнее и уже: цвета свёрнуты в один кружок.
 - На маке родные кнопки окна; окна больше не растягиваются и не разворачиваются на весь экран; текст в интерфейсе не выделяется.
+- В мгновенном режиме панель инструментов стоит на месте и не уезжает за областью.
+
+**Система**
+- Автообновление: галка в разделе «система» (по умолчанию выключена). Новая версия ставится в фоне, blinker перезапускается, но не во время записи.
+- После обновления настройки один раз показывают «что нового».
+- Двойной клик по значку в трее — своё действие.
 
 ---
 
@@ -47,6 +53,12 @@ Each version's section becomes its release notes on GitHub (`.github/workflows/r
 - The tray menu has big tiles: region, screen, window, video, gif.
 - The capture toolbar is bigger and narrower: the colors fold into one swatch.
 - Native window buttons on the Mac; windows keep their size and don't go full screen; interface text can't be selected.
+- In instant mode the capture toolbar stays put instead of following the selection.
+
+**System**
+- Auto update: a switch in "system" (off by default). A new version is put in place in the background and blinker restarts, never during a recording.
+- After an update the settings show "what's new" once.
+- A double click on the tray icon has its own action.
 
 ## 0.2.0
 

@@ -72,6 +72,7 @@ pub fn run(shared: &Arc<Shared>, tab: HomeTab) {
             replay_min,
             upload_mode: None,
             sharex: None,
+            notes: None,
             shown: None,
             page_at: 0.0,
         }
@@ -170,6 +171,8 @@ struct HomeApp {
     upload_mode: Option<UploadMode>,
     /// ShareX settings on this computer (looked up once).
     sharex: Option<Option<crate::sharex::Source>>,
+    /// This version's notes, read once.
+    notes: Option<Vec<(bool, String)>>,
     /// Page currently on screen and when it started appearing.
     shown: Option<HomeTab>,
     page_at: f64,
@@ -188,15 +191,17 @@ impl HomeApp {
                 ui.painter().vline(r.right() + 10.5, r.y_range().expand(12.0), Stroke::new(1.0, LINE_SOFT));
                 let top = Rect::from_min_size(pos2(r.left() - 10.0, r.top()), vec2(NAV_W, TITLE_BAR_H));
                 chrome::drag_region(ui, top);
-                ui.allocate_ui_with_layout(vec2(r.width(), TITLE_BAR_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    if cfg!(target_os = "macos") {
-                        ui.add_space(chrome::MAC_BUTTONS_W - 10.0);
-                    } else {
-                        ui.add_space(6.0);
-                        chrome::mark(ui);
-                        ui.label(egui::RichText::new("blinker").font(font_semibold(13.5)).color(TEXT));
-                    }
+                // the name: in the title strip on Windows, under the window
+                // buttons on a Mac
+                if cfg!(target_os = "macos") {
+                    ui.add_space(TITLE_BAR_H - 4.0);
+                }
+                let h = if cfg!(target_os = "macos") { 30.0 } else { TITLE_BAR_H };
+                ui.allocate_ui_with_layout(vec2(r.width(), h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 7.0;
+                    ui.add_space(8.0);
+                    brand_mark(ui, 20.0);
+                    ui.label(egui::RichText::new("blinker").font(font_semibold(15.0)).color(TEXT));
                 });
                 ui.spacing_mut().item_spacing.y = 2.0;
                 let plate = ui.painter().add(egui::Shape::Noop);
@@ -206,7 +211,6 @@ impl HomeApp {
                         l("снимки", "screenshots"),
                         &[
                             (HomeTab::Capture, Icon::Region, t("захват")),
-                            (HomeTab::Storage, Icon::Save, t("сохранение")),
                             (HomeTab::Notify, Icon::Bell, t("уведомление")),
                             (HomeTab::Sound, Icon::Sound, t("звук")),
                         ],
@@ -218,6 +222,7 @@ impl HomeApp {
                     (
                         l("общее", "general"),
                         &[
+                            (HomeTab::Storage, Icon::Save, t("сохранение")),
                             (HomeTab::Upload, Icon::Upload, t("загрузка")),
                             (HomeTab::Hotkeys, Icon::Keys, t("горячие клавиши")),
                             (HomeTab::System, Icon::Settings, t("система")),
@@ -991,10 +996,19 @@ impl HomeApp {
             ui::setting_row(ui, title, "", |ui| {
                 ui::toggle(ui, &mut self.cfg.autostart);
             });
+            ui::setting_row(
+                ui,
+                l("обновляться самому", "update by itself"),
+                l("новая версия ставится в фоне, blinker перезапускается (не во время записи)", "a new version is put in place in the background and blinker restarts (never while recording)"),
+                |ui| {
+                    ui::toggle(ui, &mut self.cfg.auto_update);
+                },
+            );
         });
         ui::group(ui, l("значок в трее", "tray icon"), |ui| {
             for (title, id, value) in [
                 (l("левый клик", "left click"), "tray-left", &mut self.cfg.tray_click),
+                (l("двойной клик", "double click"), "tray-double", &mut self.cfg.tray_double_click),
                 (l("правый клик", "right click"), "tray-right", &mut self.cfg.tray_right_click),
             ] {
                 ui::setting_row(ui, title, "", |ui| {
@@ -1031,6 +1045,79 @@ impl HomeApp {
             .font(mono(11.0))
             .color(FAINT),
         );
+    }
+
+    /// After an update: what the new version brings, once, over the settings.
+    fn whats_new(&mut self, ctx: &egui::Context) {
+        let version = crate::update::current();
+        if self.cfg.seen_version == version {
+            return;
+        }
+        let notes = self.notes.get_or_insert_with(whats_new).clone();
+        let mut close = notes.is_empty();
+        if !close {
+            let screen = ctx.content_rect();
+            egui::Area::new(egui::Id::unique("whats-new-shade")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+                let (r, resp) = ui.allocate_exact_size(screen.size(), Sense::click());
+                ui.painter().rect_filled(r, 0, egui::Color32::from_black_alpha(150));
+                let _ = resp;
+            });
+            let w = 500f32.min(screen.width() - 60.0);
+            let h = 440f32.min(screen.height() - 60.0);
+            let card = Rect::from_center_size(screen.center(), vec2(w, h));
+            egui::Area::new(egui::Id::unique("whats-new")).order(egui::Order::Tooltip).fixed_pos(card.min).show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .stroke(Stroke::new(1.0, LINE_HI))
+                    .corner_radius(14)
+                    .inner_margin(egui::Margin { left: 24, right: 24, top: 22, bottom: 18 })
+                    .show(ui, |ui| {
+                        ui.set_width(w - 48.0);
+                        ui.set_height(h - 40.0);
+                        ui.horizontal(|ui| {
+                            brand_mark(ui, 26.0);
+                            ui.add_space(4.0);
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 0.0;
+                                ui.label(egui::RichText::new(l("что нового", "what's new")).font(font_semibold(19.0)).color(TEXT));
+                                ui.label(egui::RichText::new(format!("blinker {version}")).font(mono(11.5)).color(FAINT));
+                            });
+                        });
+                        ui.add_space(12.0);
+                        let button_h = 34.0 + 14.0;
+                        egui::ScrollArea::vertical().max_height(ui.available_height() - button_h).auto_shrink([false, true]).show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 6.0;
+                            for (heading, text) in &notes {
+                                if *heading {
+                                    ui.add_space(8.0);
+                                    ui.label(egui::RichText::new(text).font(font_medium(13.5)).color(TEXT));
+                                } else {
+                                    ui.horizontal_top(|ui| {
+                                        ui.spacing_mut().item_spacing.x = 8.0;
+                                        let (dot, _) = ui.allocate_exact_size(vec2(6.0, 18.0), Sense::hover());
+                                        ui.painter().circle_filled(pos2(dot.center().x, dot.top() + 9.0), 2.0, FAINT);
+                                        ui.add(egui::Label::new(egui::RichText::new(text).font(font(13.0)).color(TEXT2)).wrap());
+                                    });
+                                }
+                            }
+                        });
+                        ui.add_space(14.0);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui::button_h(ui, l("понятно", "got it"), ui::Kind::Accent, 34.0).clicked() {
+                                close = true;
+                            }
+                        });
+                    });
+            });
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter)) {
+                close = true;
+            }
+        }
+        if close {
+            self.cfg.seen_version = version.to_string();
+            let v = version.to_string();
+            self.shared.update_config(|c| c.seen_version = v);
+        }
     }
 
     fn start_recording(&mut self, r: Recording) {
@@ -1126,6 +1213,54 @@ impl UploadMode {
             UploadMode::ShareX => l("загрузчик из sharex (.sxcu)", "an uploader from sharex (.sxcu)"),
         }
     }
+}
+
+/// The logo tile (sparkle on graphite) of `size` points.
+fn brand_mark(ui: &mut egui::Ui, size: f32) {
+    let (r, _) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
+    let px = (size * ui.ctx().pixels_per_point()).round() as u32;
+    let key = egui::Id::unique(("brand-logo", px));
+    let tex = ui.data(|d| d.get_temp::<egui::TextureHandle>(key)).unwrap_or_else(|| {
+        let t = ui.ctx().load_texture("brand-logo", theme::color_image(&theme::logo(px)), egui::TextureOptions::LINEAR);
+        ui.data_mut(|d| d.insert_temp(key, t.clone()));
+        t
+    });
+    ui.painter().image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
+}
+
+/// The release notes of this version, from CHANGELOG.md (built in): the
+/// Russian half or the English one, as (is a heading, text) lines.
+fn whats_new() -> Vec<(bool, String)> {
+    const LOG: &str = include_str!("../CHANGELOG.md");
+    let head = format!("## {}", crate::update::current());
+    let Some(start) = LOG.lines().position(|l| l.trim() == head) else { return Vec::new() };
+    let section: Vec<&str> = LOG.lines().skip(start + 1).take_while(|l| !l.starts_with("## ")).collect();
+    let halves: Vec<&[&str]> = section.split(|l| l.trim() == "---").collect();
+    let ru = crate::i18n::l("ru", "en") == "ru";
+    let half = if ru || halves.len() < 2 { halves[0] } else { halves[1] };
+    half.iter()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .map(|l| {
+            let heading = l.starts_with("**") && l.ends_with("**");
+            (heading, plain(l.trim_start_matches("- ")))
+        })
+        .collect()
+}
+
+/// Markdown down to text: no `**`, no backticks, [links](…) as their words.
+fn plain(s: &str) -> String {
+    let mut out = String::new();
+    let mut rest = s;
+    while let Some(i) = rest.find('[') {
+        let Some(j) = rest[i..].find("](") else { break };
+        let Some(k) = rest[i + j..].find(')') else { break };
+        out.push_str(&rest[..i]);
+        out.push_str(&rest[i + 1..i + j]);
+        rest = &rest[i + j + k + 1..];
+    }
+    out.push_str(rest);
+    out.replace("**", "").replace('`', "")
 }
 
 fn replay_minutes(secs: u32) -> String {
@@ -1305,6 +1440,7 @@ impl eframe::App for HomeApp {
         self.nav(ui);
         self.content(ui);
         chrome::frame_border(&ctx);
+        self.whats_new(&ctx);
         if let Some(n) = &self.notice
             && !n.show(&ctx, self.content_rect)
         {

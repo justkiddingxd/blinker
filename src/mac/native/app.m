@@ -533,8 +533,18 @@ int bk_notify_check(int token) {
 // ---------------------------------------------------------------------------
 // Tray icon (status item) and its menu
 
-typedef void (*bk_tray_cb)(int right);
+/// `clicks`: 1, or 2 for a double click (only told apart when asked to).
+typedef void (*bk_tray_cb)(int right, int clicks);
 typedef void (*bk_menu_cb)(int id);
+
+/// Left clicks are told apart from double clicks (set from the settings).
+static int g_tray_double;
+/// Counts left clicks: a pending single click is dropped when another comes.
+static unsigned g_tray_clicks;
+
+void bk_tray_set_double(int on) {
+    g_tray_double = on;
+}
 
 typedef struct {
     int id;          // 0 = separator
@@ -558,7 +568,21 @@ typedef struct {
     NSEvent *e = NSApp.currentEvent;
     int right = e.type == NSEventTypeRightMouseUp || e.type == NSEventTypeRightMouseDown ||
                 (e.modifierFlags & NSEventModifierFlagControl) != 0;
-    if (self.tray) self.tray(right);
+    if (!self.tray) return;
+    if (right || !g_tray_double) {
+        self.tray(right, 1);
+        return;
+    }
+    // a double click wanted: the single one waits for the double-click time
+    unsigned gen = ++g_tray_clicks;
+    if (e.clickCount >= 2) {
+        self.tray(0, 2);
+        return;
+    }
+    bk_tray_cb cb = self.tray;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(NSEvent.doubleClickInterval * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (gen == g_tray_clicks) cb(0, 1);
+    });
 }
 - (void)picked:(NSMenuItem *)item {
     if (self.menu) self.menu((int)item.tag);

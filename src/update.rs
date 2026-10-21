@@ -172,20 +172,58 @@ fn set(job: &Install, ctx: &egui::Context, stage: Stage) {
 }
 
 fn run_install(job: &Install, ctx: &egui::Context) -> Result<(), String> {
-    let release = fetch_release()?;
+    install_files(fetch_release()?, |stage| set(job, ctx, stage))
+}
+
+/// Downloads `release` and puts it in place of this app (not restarted yet).
+fn install_files(release: Release, stage: impl Fn(Stage)) -> Result<(), String> {
     if !is_newer(&release.tag) {
         return Err(crate::i18n::l("это уже последняя версия", "this is already the latest version").into());
     }
     let (url, size) = release.asset.ok_or_else(|| lf!("в релизе нет файла {ASSET}", "the release has no {ASSET}"))?;
     let file = download_path()?;
     let _ = std::fs::remove_file(&file);
-    download(&url, &file, size, |done| set(job, ctx, Stage::Downloading(done, size)))?;
-    set(job, ctx, Stage::Installing);
+    download(&url, &file, size, |done| stage(Stage::Downloading(done, size)))?;
+    stage(Stage::Installing);
     let r = put_in_place(&file);
     if r.is_err() {
         let _ = std::fs::remove_file(&file);
     }
     r
+}
+
+/// In the tray process, with `auto_update` on: a look for a new version a
+/// minute after the start and every 6 hours; one that is found is put in
+/// place in the background and blinker restarts (never during a recording).
+pub fn auto(shared: std::sync::Arc<crate::runtime::Shared>) {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(60));
+        loop {
+            if shared.config().auto_update {
+                match fetch_release() {
+                    Ok(release) => {
+                        remember(&release.tag);
+                        if is_newer(&release.tag) {
+                            while shared.recording.load(std::sync::atomic::Ordering::SeqCst) {
+                                std::thread::sleep(Duration::from_secs(30));
+                            }
+                            let tag = release.tag.clone();
+                            match install_files(release, |_| {}) {
+                                Ok(()) => {
+                                    crate::config::log::error(format!("auto update: {tag} installed, restarting"));
+                                    shared.push(crate::runtime::Command::Restart);
+                                    return;
+                                }
+                                Err(e) => crate::config::log::error(format!("auto update: {e}")),
+                            }
+                        }
+                    }
+                    Err(e) => crate::config::log::error(format!("update check: {e}")),
+                }
+            }
+            std::thread::sleep(EVERY);
+        }
+    });
 }
 
 /// `curl` ships with macOS and Windows 10+: follows GitHub's redirects, uses

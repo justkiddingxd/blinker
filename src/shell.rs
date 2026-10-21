@@ -110,6 +110,7 @@ impl Hotkeys {
 #[derive(Clone, Copy)]
 enum TrayEvent {
     Left,
+    Double,
     Right,
     Recreate,
     /// Sent by the settings process.
@@ -119,7 +120,12 @@ enum TrayEvent {
     Restart,
 }
 
+const CLICK_TIMER: usize = 1;
+
 thread_local! {
+    /// A double click has an action of its own.
+    static DOUBLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static AFTER_DOUBLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static EVENTS: RefCell<Vec<TrayEvent>> = const { RefCell::new(Vec::new()) };
     static TASKBAR_CREATED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
@@ -127,10 +133,28 @@ thread_local! {
 unsafe extern "system" fn tray_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if msg == WM_TRAY {
         match lp as u32 {
+            // with a double-click action, a single click waits to see
+            // whether a second one comes (the timer below)
+            WM_LBUTTONUP if DOUBLE.with(|d| d.get()) => {
+                if !AFTER_DOUBLE.with(|a| a.replace(false)) {
+                    unsafe { SetTimer(hwnd, CLICK_TIMER, GetDoubleClickTime(), None) };
+                }
+            }
             WM_LBUTTONUP => EVENTS.with(|e| e.borrow_mut().push(TrayEvent::Left)),
+            WM_LBUTTONDBLCLK if DOUBLE.with(|d| d.get()) => {
+                unsafe { KillTimer(hwnd, CLICK_TIMER) };
+                // the button-up of the second click follows: not a click of its own
+                AFTER_DOUBLE.with(|a| a.set(true));
+                EVENTS.with(|e| e.borrow_mut().push(TrayEvent::Double));
+            }
             WM_RBUTTONUP | WM_CONTEXTMENU => EVENTS.with(|e| e.borrow_mut().push(TrayEvent::Right)),
             _ => {}
         }
+        return 0;
+    }
+    if msg == WM_TIMER && wp == CLICK_TIMER {
+        unsafe { KillTimer(hwnd, CLICK_TIMER) };
+        EVENTS.with(|e| e.borrow_mut().push(TrayEvent::Left));
         return 0;
     }
     if msg == WM_RESTART {
@@ -410,10 +434,12 @@ fn run(shared: Arc<Shared>) {
             }
         }
 
+        DOUBLE.with(|d| d.set(shared.config().tray_double_click != TrayAction::Nothing));
         let events: Vec<TrayEvent> = EVENTS.with(|e| std::mem::take(&mut *e.borrow_mut()));
         for ev in events {
             match ev {
                 TrayEvent::Left => tray_action(&shared, shared.config().tray_click),
+                TrayEvent::Double => tray_action(&shared, shared.config().tray_double_click),
                 TrayEvent::ReloadHotkeys => {
                     hotkeys.register(&shared);
                     shared.push(Command::Reconfigure);
