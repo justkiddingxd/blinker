@@ -144,7 +144,7 @@ X-Filename: <file name, percent-encoded UTF-8>
 | `record/` | recording: Windows Graphics Capture, WASAPI, Media Foundation, the HUD |
 | `vedit/` · `media.rs` | video editor, MP4/GIF export, reading files |
 | `demo.rs` | `--demo <dir> [en\|ru] [record]`: plays the animations above off-screen and saves their frames |
-| `site/` | [blinker.cool](https://blinker.cool): downloads and the Mac guide (static, `CNAME` for GitHub Pages) |
+| `site/` | [blinker.cool](https://blinker.cool): downloads and the Mac guide (static; `scripts/deploy-site.sh root@SERVER` puts it on the server) |
 | `mac/` | the macOS build: the same platform API over AppKit, ScreenCaptureKit, AVFoundation and Carbon hotkeys (`mac/native/*.m`, built by `build.rs`) |
 
 ## License

@@ -144,7 +144,7 @@ X-Filename: <имя файла, percent-encoded UTF-8>
 | `record/` | запись: Windows Graphics Capture, WASAPI, Media Foundation, плашка |
 | `vedit/` · `media.rs` | редактор видео, экспорт MP4/GIF, чтение файлов |
 | `demo.rs` | `--demo <папка> [en\|ru] [record]`: проигрывает анимации сверху вне экрана и сохраняет кадры |
-| `site/` | [blinker.cool](https://blinker.cool): скачивание и гайд для мака (статика, `CNAME` для GitHub Pages) |
+| `site/` | [blinker.cool](https://blinker.cool): скачивание и гайд для мака (статика; на сервер её кладёт `scripts/deploy-site.sh root@SERVER`) |
 | `mac/` | сборка для macOS: тот же платформенный слой поверх AppKit, ScreenCaptureKit, AVFoundation и хоткеев Carbon (`mac/native/*.m`, собирает `build.rs`) |
 
 ## Лицензия
