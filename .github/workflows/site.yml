@@ -1,0 +1,41 @@
+# Every push to main that changes site/ puts it on blinker.cool.
+#
+# The server lets this key do one thing: rsync into /var/www/blinker.cool/site
+# (user blinker-deploy, rrsync -wo in its authorized_keys). Repository secrets:
+#   SITE_SSH_KEY      the private key
+#   SITE_HOST         the server's address
+#   SITE_KNOWN_HOSTS  its host keys (ssh-keyscan SERVER)
+
+name: site
+
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", ".github/workflows/site.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: site
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy
+        env:
+          SITE_SSH_KEY: ${{ secrets.SITE_SSH_KEY }}
+          SITE_HOST: ${{ secrets.SITE_HOST }}
+          SITE_KNOWN_HOSTS: ${{ secrets.SITE_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SITE_SSH_KEY" > ~/.ssh/site
+          chmod 600 ~/.ssh/site
+          printf '%s\n' "$SITE_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          rsync -rltz --delete --exclude .DS_Store \
+            -e "ssh -i $HOME/.ssh/site -o IdentitiesOnly=yes -o BatchMode=yes" \
+            site/ "blinker-deploy@$SITE_HOST:/"
+          rm -f ~/.ssh/site
+      - name: Check
+        run: curl -fsS -o /dev/null -w "blinker.cool %{http_code}\n" https://blinker.cool/
