@@ -74,6 +74,9 @@ pub fn run_replay(dir: PathBuf, lang: &str) {
     let len = 8.6;
     let pointer = [(0.0, pos2(420.0, 430.0)), (1.2, pos2(520.0, 400.0)), (3.4, pos2(700.0, 352.0)), (len, pos2(700.0, 352.0))];
     let clip = scene(1.0);
+    // the replay's default keys on this system ("Ctrl Alt PrtSc", "Opt Shift Cmd 7")
+    let combo = Config::default().hotkey_replay.first().cloned().unwrap_or_default();
+    let keys: Vec<&str> = combo.split('+').map(|k| if k == "PrintScreen" { "PrtSc" } else { k }).collect();
     let n = (len * FPS) as usize;
     for i in 0..n {
         let tm = i as f64 / FPS;
@@ -83,7 +86,7 @@ pub fn run_replay(dir: PathBuf, lang: &str) {
         let p = k[0].1 + (k[1].1 - k[0].1) * ease(((tm - k[0].0) / (k[1].0 - k[0].0)) as f32);
         if (keys_at..keys_at + 1.1).contains(&tm) {
             let down = tm < keys_at + 0.45;
-            keycaps(&mut img, &["Ctrl", "Alt", "PrtSc"], down);
+            keycaps(&mut img, &keys, down);
         }
         if tm >= card_at {
             let slide = ease(((tm - card_at) / 0.35) as f32);
