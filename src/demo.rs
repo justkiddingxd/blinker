@@ -87,7 +87,7 @@ pub fn run_replay(dir: PathBuf, lang: &str) {
         }
         if tm >= card_at {
             let slide = ease(((tm - card_at) / 0.35) as f32);
-            clip_card(&mut img, &clip, (1.0 - slide) * 340.0);
+            clip_card(&mut img, &clip, (1.0 - slide) * 340.0, (tm - card_at) as f32);
         }
         save(&dir, 30 + i, &img, Some((p, Cursor::Arrow)));
     }
@@ -120,8 +120,9 @@ fn keycaps(img: &mut image::RgbaImage, keys: &[&str], down: bool) {
 
 /// The card of the saved replay in the bottom right corner (as the real one
 /// looks): a preview with a play button and the length, the red mark of the
-/// replay and a caption. `dx` moves it right, off the screen.
-fn clip_card(img: &mut image::RgbaImage, clip: &image::RgbaImage, dx: f32) {
+/// replay and a caption, "Clipped!" popping up over it `shown` seconds in.
+/// `dx` moves it right, off the screen.
+fn clip_card(img: &mut image::RgbaImage, clip: &image::RgbaImage, dx: f32, shown: f32) {
     let (pad, caption) = (8.0, 50.0);
     let iw = 284.0;
     let ih = (iw * clip.height() as f32 / clip.width() as f32).round();
@@ -166,6 +167,37 @@ fn clip_card(img: &mut image::RgbaImage, clip: &image::RgbaImage, dx: f32) {
     image::imageops::overlay(img, &mark, (x + 14.0) as i64, (cap + 3.0) as i64);
     text(img, &med, 13.5, x + 38.0, cap + 15.0, [0xE6, 0xE4, 0xDE], crate::i18n::l("повтор сохранён", "replay saved"));
     text(img, &reg, 12.0, x + 38.0, cap + 32.0, [0x8C, 0x8A, 0x84], crate::i18n::l("последние 30 секунд · mp4", "the last 30 seconds · mp4"));
+    clipped_badge(img, x + w / 2.0, y - 20.0, shown);
+}
+
+/// The "Clipped!" pill of a saved replay (as `toast` draws it): pops in
+/// with a little overshoot.
+fn clipped_badge(img: &mut image::RgbaImage, cx: f32, cy: f32, shown: f32) {
+    let t = (shown - 0.08) / 0.45;
+    if t <= 0.0 {
+        return;
+    }
+    let tc = t.clamp(0.0, 1.0);
+    let pop = 1.0 + 2.70158 * (tc - 1.0).powi(3) + 1.70158 * (tc - 1.0).powi(2);
+    let k = 0.7 + 0.3 * pop;
+    let semi = FontRef::try_from_slice(FONT_SEMI).unwrap();
+    let label = "Clipped!";
+    let sf = semi.as_scaled(PxScale::from(14.0 * k));
+    let tw: f32 = label.chars().map(|c| sf.h_advance(sf.glyph_id(c))).sum();
+    let (w, h) = ((tw / k + 44.0) * k, 30.0 * k);
+    let cy = cy + (1.0 - pop.min(1.0)) * 8.0;
+    let (x, y) = (cx - w / 2.0, cy - h / 2.0);
+    let a = (255.0 * tc) as u8;
+    let mut pm = sk::Pixmap::new(W, H).unwrap();
+    rrect(&mut pm, x, y + 2.0, w, h, h / 2.0, rgba(0, (60.0 * tc) as u8));
+    rrect(&mut pm, x, y, w, h, h / 2.0, rgba(0xD8D5CD, a));
+    image::imageops::overlay(img, &crate::theme::pixmap_to_image(&pm), 0, 0);
+    let s = (13.0 * k).round() as u32;
+    let mark = crate::theme::mark_image_in(s, crate::theme::ON_ACCENT);
+    image::imageops::overlay(img, &mark, (x + 18.0 * k - s as f32 / 2.0) as i64, (cy - s as f32 / 2.0) as i64);
+    if tc > 0.3 {
+        text(img, &semi, 14.0 * k, x + 32.0 * k, cy + 5.0 * k, [0x16, 0x16, 0x15], label);
+    }
 }
 
 /// The area being recorded (the cards and the chart).
@@ -504,6 +536,7 @@ fn draw_cursor(img: &mut image::RgbaImage, p: Pos2, c: Cursor) {
 
 const FONT: &[u8] = include_bytes!("../assets/fonts/FiraSans-Regular.ttf");
 const FONT_MED: &[u8] = include_bytes!("../assets/fonts/FiraSans-Medium.ttf");
+const FONT_SEMI: &[u8] = include_bytes!("../assets/fonts/FiraSans-SemiBold.ttf");
 
 fn rgba(hex: u32, a: u8) -> sk::Color {
     sk::Color::from_rgba8((hex >> 16) as u8, (hex >> 8) as u8, hex as u8, a)
