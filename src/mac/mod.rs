@@ -555,6 +555,16 @@ pub fn message_box(title: &str, text: &str) {
     unsafe { ffi::bk_message_box(t.as_ptr(), m.as_ptr()) };
 }
 
+/// Windows only: the NVIDIA overlay doesn't run on a Mac.
+pub fn nvidia_overlay() -> bool {
+    false
+}
+
+/// Windows only for now: the menu item isn't offered on a Mac.
+pub fn trash(_path: &Path) -> bool {
+    false
+}
+
 pub fn reveal_in_explorer(path: &Path) {
     let p = ffi::cpath(path);
     unsafe { ffi::bk_reveal(p.as_ptr()) };

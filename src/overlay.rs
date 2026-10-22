@@ -172,6 +172,7 @@ impl OverlayApp {
             gif,
             draw_path: Vec::new(),
             clicked_window: None,
+            whole_window: false,
             bar_pos: None,
             hover_shape: None,
             picked: None,
@@ -450,6 +451,8 @@ struct OverlayApp {
     draw_path: Vec<Pos2>,
     /// Window picked by a click: (its rect in image px, handle).
     clicked_window: Option<(Rect, isize)>,
+    /// Alt is held: a click takes the whole window, not the part under it.
+    whole_window: bool,
     /// Animated position of the tools panel (points).
     bar_pos: Option<Pos2>,
     /// Annotation under the pointer (grab to move, Delete to remove).
@@ -517,7 +520,9 @@ impl OverlayApp {
         self.snap.windows.iter().find(|w| w.rect.contains(x, y)).map(|w| (irect_to_rect(w.rect), w.hwnd))
     }
 
-    /// Window or monitor under the pointer (image px).
+    /// Window or monitor under the pointer (image px): the part of the
+    /// window under it (a browser's page…) unless Alt is held or it's for
+    /// a recording (a window is recorded whole).
     fn hover_target(&self, p: Pos2) -> Rect {
         let (x, y) = (p.x as i32, p.y as i32);
         let r = self
@@ -525,7 +530,19 @@ impl OverlayApp {
             .windows
             .iter()
             .find(|w| w.rect.contains(x, y))
-            .map(|w| w.rect)
+            .map(|w| {
+                // recording a maximized window is recording the screen: the
+                // whole display (taskbar included), not the window alone
+                if self.record {
+                    let m = self.snap.monitor_at(w.rect.x + w.rect.w / 2, w.rect.y + w.rect.h / 2);
+                    let covered = w.rect.intersect(&m.work);
+                    if covered.w as i64 * covered.h as i64 * 100 >= m.work.w as i64 * m.work.h as i64 * 95 {
+                        return m.rect;
+                    }
+                }
+                let part = (!self.record && !self.whole_window).then(|| w.parts.iter().find(|r| r.contains(x, y))).flatten();
+                part.copied().unwrap_or(w.rect)
+            })
             .unwrap_or_else(|| self.snap.monitor_at(x, y).rect);
         irect_to_rect(r)
     }
@@ -602,6 +619,10 @@ impl OverlayApp {
             return;
         }
         let input = ctx.input(|i| i.clone());
+        if self.whole_window != input.modifiers.alt {
+            self.whole_window = input.modifiers.alt;
+            ctx.request_repaint();
+        }
         let pointer_pt = input.pointer.hover_pos().or(self.last_pointer);
         if let Some(p) = input.pointer.hover_pos() {
             self.last_pointer = Some(p);
@@ -1500,7 +1521,8 @@ impl OverlayApp {
                 l("выдели, что снять", "select what to capture"),
                 vec![
                     (l("тяни", "drag").into(), l("область", "an area")),
-                    (l("клик", "click").into(), l("окно под курсором", "the window under the cursor")),
+                    (l("клик", "click").into(), l("окно или его часть", "a window or a part of it")),
+                    ("alt + клик".into(), l("окно целиком", "the whole window")),
                     (l("пробел", "space").into(), l("весь экран", "the whole screen")),
                     ("esc".into(), l("отмена", "cancel")),
                 ],
@@ -2068,6 +2090,17 @@ impl OverlayApp {
         let (r, resp) = ui.allocate_exact_size(vec2(28.0, bar_btn()), egui::Sense::hover());
         resp.on_hover_text(crate::i18n::t("тяни область, кликни окно или нажми пробел для всего экрана"));
         ui.painter().circle_filled(pos2(r.left() + 14.0, r.center().y), 4.5, DANGER);
+        // the whole display this bar is on, in one click (or Space)
+        if ui::icon_button_sized(ui, Icon::Screen, crate::i18n::l("весь экран  пробел", "the whole screen  space"), bar_btn(), bar_icon(), false, ui::Kind::Ghost).clicked()
+            && let Some(m) = self.bar_mon
+        {
+            let ppp = ui.ctx().pixels_per_point();
+            let c = m.center();
+            self.sel = Some(irect_to_rect(self.snap.monitor_at((c.x * ppp) as i32, (c.y * ppp) as i32).rect));
+            self.clicked_window = None;
+            self.phase = Phase::Adjusting;
+        }
+        bar_sep(ui);
         if ui::filter(ui, crate::i18n::t("видео"), !self.gif).clicked() {
             self.gif = false;
         }

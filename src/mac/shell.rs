@@ -229,11 +229,15 @@ fn show_menu(shared: &Shared) {
             item(12, -1, l("пауза", "pause"), "pause.circle", key(HotkeyAction::Pause)),
         ]
     } else {
+        // depth -2: a heading over the tiles that follow it
         vec![
+            item(0, -2, l("скриншот", "screenshot"), "", None),
             item(1, -1, t("область"), "rectangle.dashed", key(HotkeyAction::Region)),
             item(2, -1, l("экран", "screen"), "display", key(HotkeyAction::Screen)),
             item(3, -1, l("окно", "window"), "macwindow", key(HotkeyAction::Window)),
-            item(9, -1, t("видео"), "record.circle", key(HotkeyAction::Record)),
+            item(0, -2, l("видео", "video"), "", None),
+            item(9, -1, t("область"), "record.circle", key(HotkeyAction::Record)),
+            item(15, -1, l("экран", "screen"), "display", None),
             item(13, -1, "gif", "photo.stack", key(HotkeyAction::RecordGif)),
         ]
     };
@@ -280,6 +284,7 @@ extern "C" fn on_menu(id: i32) {
         10 => Command::ReplaySave,
         12 => Command::RecordPause,
         13 => Command::RecordGif,
+        15 => Command::RecordScreen,
         14 => Command::OpenHistory,
         _ => return,
     };

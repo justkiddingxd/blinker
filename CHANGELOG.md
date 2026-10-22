@@ -2,6 +2,66 @@
 
 Each version's section becomes its release notes on GitHub (`.github/workflows/release.yml` takes the part under `## <version>`).
 
+## 0.4.0
+
+**Снимки и запись**
+- Клик выделяет часть окна: например, саму страницу в браузере без вкладок и адресной строки. Alt + клик берёт окно целиком. Пока на Windows.
+- В записи клик по развёрнутому окну берёт весь экран, а не одно окно. В панели записи кнопка «весь экран» (то же, что пробел).
+- Пока пишется весь экран, вокруг него нет рамки: из-за неё Windows считал запись полноэкранной программой, и панель задач с треем не поднималась при наведении. Плашка записи в этом случае стоит в углу, прямо над треем.
+- Место плашки записи выбирается в «запись → плашка записи», отдельно для области и для всего экрана: на маленьких экранах с примером, кликом по месту. По умолчанию она под областью, а при записи всего экрана у трея.
+- Если панель задач скрывается сама и выезжает поверх плашки, плашка плавно поднимается над ней и опускается обратно. Только если под плашкой правда кнопки, трей или часы: короткая «плавающая» панель плашку не трогает.
+- В меню трея снимки и видео разделены, а у видео есть «экран»: запись всего экрана сразу, без выделения.
+
+**История**
+- Клик открывает снимок или видео в обычной программе, правый клик показывает справа от курсора небольшое меню со всеми действиями: править в blinker, копировать, загрузить, переименовать, показать в папке, в корзину.
+- Карточку можно перетащить как файл: в чат, в папку, в браузер.
+- Зажатое колёсико мыши прокручивает список.
+- Вкладка «видео и gif».
+- В загрузках крупное превью, клик по нему открывает файл; ссылка открывается кнопкой со значком ссылки.
+
+**Discord**
+- Отдельные галки: показывать игру и показывать статистику за день.
+- Статистика считает снимки и клипы, как только они сделаны, а не файлы в папке: скопированное без сохранения тоже идёт в счёт.
+- Строка под названием: «Screenshots & Clipping», подсказка на логотипе: «hewwo everynyan ;3».
+
+**Прочее**
+- С оверлеем NVIDIA настройки один раз объясняют, откуда «Press Alt+Z to open NVIDIA Overlay» и как её выключить; пошаговый гайд остаётся в «система → nvidia». Из программы её не убрать: NVIDIA считает игрой всё, что не вписала в свой список сама.
+- Windows: настройки и история снова рисуются через OpenGL. Через DirectX оверлей NVIDIA принимал blinker за игру и каждый раз показывал «Press Alt+Z». Заодно blinker.exe стал на 4,5 мб легче.
+- «Сжать для telegram» убрано: замеры на реальных записях показали, что файлы от него только росли (в 1,3–2,3 раза). blinker пишет только изменившиеся кадры, и записи уже лёгкие. Вместе с ним ушёл раздел ffmpeg в настройках.
+- Новый значок play на видео в уведомлении и в истории.
+- Путь к настройкам внизу раздела «система» открывает их папку.
+- Переключатели, стоящие рядом (например, «видео / gif» и частота кадров в панели записи), больше не делят одну подложку.
+
+---
+
+**Capture and recording**
+- A click takes a part of a window: a browser's page without its tabs and address bar, say. Alt + click takes the whole window. Windows for now.
+- Recording, a click on a maximized window takes the whole screen, not the window alone. The record bar has a "whole screen" button (the same as Space).
+- While a whole display is recorded there is no frame around it: Windows took it for a full-screen app, and the taskbar with the tray wouldn't come up on hover. The recording pill sits in the corner then, right above the tray.
+- Choose where the recording pill sits in "recording → recording pill", for an area and for the whole screen apart: on small screens with an example, a click on the spot. By default it's under the area, and by the tray when the whole screen is recorded.
+- A taskbar that hides itself and slides up over the pill: the pill glides above it and back down. Only when its buttons, tray or clock are really under the pill: a short "floating" taskbar leaves it be.
+- The tray menu keeps screenshots and video apart, and video has "screen": the whole screen recorded at once, no selecting.
+
+**History**
+- A click opens a shot or a video in its usual app; a right click shows a small menu to the right of the pointer with every action: edit in blinker, copy, upload, rename, show in the folder, move to the bin.
+- Drag a card out as a file: into a chat, a folder, a browser.
+- Hold the mouse wheel down to drag the list.
+- The "videos & gifs" tab.
+- Uploads get a proper preview, a click on it opens the file; the link opens from a link button.
+
+**Discord**
+- Separate switches: show the game, show today's numbers.
+- The numbers count shots and clips as they are made, not the files in the folder: copied-only shots count too.
+- The line under the name: "Screenshots & Clipping", the logo's tooltip: "hewwo everynyan ;3".
+
+**Other**
+- With the NVIDIA overlay installed, the settings tell once where "Press Alt+Z to open NVIDIA Overlay" comes from and how to turn it off; the steps stay in "system → nvidia". An app can't quiet it: NVIDIA takes for a game anything it didn't put on its own list.
+- Windows: the settings and the history draw with OpenGL again. Drawn with DirectX, they made the NVIDIA overlay take blinker for a game and say "Press Alt+Z" every time. blinker.exe is 4.5 mb lighter for it.
+- "Compress for telegram" is gone: measured on real recordings, it only made files bigger (1.3–2.3 times). blinker writes only the frames that change, its recordings are light already. The ffmpeg section of the settings went with it.
+- A new play mark on videos in the card and the history.
+- The settings path at the bottom of "system" opens their folder.
+- Choices side by side ("video / gif" and the frame rate in the record bar) no longer share one plate.
+
 ## 0.3.4
 
 **Мак: Liquid Glass везде (macOS 26)**

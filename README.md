@@ -123,8 +123,6 @@ Settings live in `%APPDATA%\Blinker\config.toml`.
 
 On a Mac, `scripts/macos-app.sh` builds `target/release/Blinker.app`, `Blinker.dmg` and a zip of it (`UNIVERSAL=1` for Apple silicon + Intel). The dmg window is laid out by [dmgbuild](https://github.com/dmgbuild/dmgbuild), which the script installs into `target/dmgbuild`; its background is drawn by `scripts/dmg-background.swift`. Run `scripts/macos-signing.sh` once before: it makes a signing certificate in its own keychain, and every build signed with it keeps the Screen Recording permission (signed ad hoc, each build has to be allowed again). Back up the `.p12` it prints, since a new certificate means every user allows recording again. The same flags work on the binary inside, `Blinker.app/Contents/MacOS/blinker`. Settings live in `~/Library/Application Support/Blinker/config.toml`, captures go to `~/Pictures/Blinker`. The capture overlay is a window on every display (each Mac display has its own space); a selection stays within one display.
 
-**Optional:** with [ffmpeg](https://ffmpeg.org) on `PATH` (or from Homebrew on a Mac), blinker uses it to re-encode videos for Telegram with a tuned NVENC / x264 recipe. Without it the built-in encoder does the job: Media Foundation on Windows, VideoToolbox on a Mac.
-
 ## Upload server protocol
 
 Uploads go to [post.blinker.cool](https://post.blinker.cool) unless you set your own server. The server behind it is in [`server/`](server/README.md): `docker compose up` runs your own. Any server that speaks this works:

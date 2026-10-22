@@ -379,6 +379,27 @@ pub fn post_thread_message(thread_id: u32, msg: u32) {
 // ---------------------------------------------------------------------------
 // Shell helpers
 
+/// The NVIDIA overlay is installed (the NVIDIA App or GeForce Experience):
+/// its capture hook is in System32.
+pub fn nvidia_overlay() -> bool {
+    let sys = std::env::var_os("SystemRoot").map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"));
+    sys.join("System32").join("nvspcap64.dll").is_file()
+}
+
+/// Moves a file to the Recycle Bin (it can be brought back from there).
+pub fn trash(path: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::{FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, SHFILEOPSTRUCTW, SHFileOperationW};
+    // a list of paths, each ended by a zero, the list by another
+    let mut from: Vec<u16> = path.as_os_str().encode_wide().collect();
+    from.extend([0, 0]);
+    let mut op: SHFILEOPSTRUCTW = unsafe { std::mem::zeroed() };
+    op.wFunc = FO_DELETE;
+    op.pFrom = from.as_ptr();
+    op.fFlags = (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT) as u16;
+    unsafe { SHFileOperationW(&mut op) == 0 && op.fAnyOperationsAborted == 0 }
+}
+
 pub fn reveal_in_explorer(path: &Path) {
     use std::os::windows::process::CommandExt;
     let _ = std::process::Command::new("explorer.exe")

@@ -68,32 +68,36 @@ fn recv(p: &mut Pipe) -> std::io::Result<(u32, serde_json::Value)> {
 }
 
 /// Screenshots and clips saved today: (shots, clips).
-fn today_counts(cfg: &crate::config::Config) -> (usize, usize) {
-    let today = chrono::Local::now().date_naive();
-    let dirs: Vec<std::path::PathBuf> = if cfg.sort_by_date {
-        let d = cfg.save_dir.join(today.format("%Y-%m-%d").to_string());
-        vec![d.join("pics"), d.join("videos")]
-    } else {
-        vec![cfg.save_dir.clone()]
-    };
-    let (mut shots, mut clips) = (0, 0);
-    for dir in dirs {
-        let Ok(list) = std::fs::read_dir(&dir) else { continue };
-        for e in list.flatten() {
-            let path = e.path();
-            let Some(ext) = path.extension().map(|x| x.to_string_lossy().to_lowercase()) else { continue };
-            let modified = e.metadata().ok().and_then(|m| m.modified().ok()).map(|t| chrono::DateTime::<chrono::Local>::from(t).date_naive());
-            if modified != Some(today) {
-                continue;
-            }
-            match ext.as_str() {
-                "png" | "jpg" | "jpeg" | "webp" => shots += 1,
-                "mp4" | "gif" | "mp3" | "m4a" | "wav" => clips += 1,
-                _ => {}
-            }
-        }
+/// Today's screenshots and clips, counted as they are made (saved to disk
+/// or only copied): `day shots clips` in the cache folder, so a restart
+/// keeps them.
+fn counts_file() -> std::path::PathBuf {
+    crate::config::cache_dir().join("today.txt")
+}
+
+fn today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+fn today_counts() -> (usize, usize) {
+    let text = std::fs::read_to_string(counts_file()).unwrap_or_default();
+    let mut f = text.split_whitespace();
+    match (f.next(), f.next().and_then(|n| n.parse().ok()), f.next().and_then(|n| n.parse().ok())) {
+        (Some(day), Some(shots), Some(clips)) if day == today() => (shots, clips),
+        _ => (0, 0),
     }
-    (shots, clips)
+}
+
+/// One more screenshot (`clip` false) or clip (a recording, a GIF, a replay).
+pub fn count(clip: bool) {
+    let (mut shots, mut clips) = today_counts();
+    if clip {
+        clips += 1;
+    } else {
+        shots += 1;
+    }
+    let _ = std::fs::create_dir_all(crate::config::cache_dir());
+    let _ = std::fs::write(counts_file(), format!("{} {shots} {clips}", today()));
 }
 
 fn plural(n: usize, one: &str, many: &str) -> String {
@@ -107,13 +111,13 @@ fn activity(shared: &crate::runtime::Shared) -> serde_json::Value {
     let mut a = serde_json::json!({
         "assets": {
             "large_image": "https://blinker.cool/assets/logo.png",
-            "large_text": "blinker · screenshots and screen recording",
+            "large_text": "hewwo everynyan ;3",
         },
         "buttons": [{ "label": "blinker.cool", "url": "https://blinker.cool" }],
     });
     let note = shared.recording_note.lock().unwrap().clone();
     // a game in front (or running): "Clipping Dota 2"
-    let game = crate::games::running();
+    let game = shared.config().discord_game.then(crate::games::running).flatten();
     match note {
         Some((start, what)) => {
             a["details"] = game.as_ref().map_or("Recording the screen".to_string(), |g| format!("Recording {}", g.name)).into();
@@ -124,10 +128,10 @@ fn activity(shared: &crate::runtime::Shared) -> serde_json::Value {
         }
         None => {
             let cfg = shared.config();
-            let (shots, clips) = today_counts(&cfg);
-            let tagline = "Lightweight and cool screenrecorder & screenshotter";
+            let (shots, clips) = today_counts();
+            let tagline = "Screenshots & Clipping";
             let replay = shared.replay_live.load(std::sync::atomic::Ordering::SeqCst);
-            let stats = (shots + clips > 0)
+            let stats = (cfg.discord_stats && shots + clips > 0)
                 .then(|| format!("{} · {} today", plural(shots, "screenshot", "screenshots"), plural(clips, "clip", "clips")));
             match (replay, stats) {
                 (true, Some(s)) => {

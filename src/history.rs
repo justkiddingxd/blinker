@@ -238,6 +238,7 @@ pub fn run(shared: &Arc<Shared>, tab: Tab) {
             notice: None,
             content: Rect::NOTHING,
             renaming: None,
+            menu: None,
         }
     });
 }
@@ -264,6 +265,9 @@ struct HistoryApp {
     /// A file being renamed: its path, the name typed so far, and whether the
     /// field still has to take focus.
     renaming: Option<(PathBuf, String, bool)>,
+    /// The right-click menu: its file, where it opened (the pointer) and its
+    /// size last frame.
+    menu: Option<(Item, egui::Pos2, Vec2)>,
 }
 
 fn human_size(b: u64) -> String {
@@ -321,6 +325,45 @@ fn bad_name(name: &str) -> bool {
     name.chars().any(|c| matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control())
         || name.ends_with('.')
         || name.ends_with(' ')
+}
+
+/// A small picture to drag along with a file.
+fn drag_picture(path: &Path) -> Vec<u8> {
+    let mut png = Vec::new();
+    if let Some(img) = thumb(path) {
+        let w = 160.min(img.width());
+        let h = (w * img.height() / img.width().max(1)).clamp(1, 160);
+        let small = image::imageops::thumbnail(&img, w, h);
+        let _ = image::ImageEncoder::write_image(
+            image::codecs::png::PngEncoder::new(&mut png),
+            small.as_raw(),
+            small.width(),
+            small.height(),
+            image::ExtendedColorType::Rgba8,
+        );
+    }
+    png
+}
+
+/// Width of the right-click menu.
+const MENU_W: f32 = 252.0;
+
+/// A row of a right-click menu; true when clicked.
+fn menu_row(ui: &mut egui::Ui, icon: Icon, label: &str) -> bool {
+    let (r, resp) = ui.allocate_exact_size(vec2(MENU_W - 10.0, 30.0), Sense::click());
+    let p = ui.painter();
+    if resp.hovered() {
+        p.rect_filled(r, 6, HOVER);
+    }
+    let icon_r = Rect::from_center_size(pos2(r.left() + 18.0, r.center().y), Vec2::splat(16.0));
+    icons::paint(p, icon_r, icon, 14.0, if resp.hovered() { TEXT } else { DIM });
+    p.text(pos2(r.left() + 36.0, r.center().y), Align2::LEFT_CENTER, label, font(13.0), TEXT);
+    resp.on_hover_cursor(CursorIcon::PointingHand).clicked()
+}
+
+fn menu_sep(ui: &mut egui::Ui) {
+    let (r, _) = ui.allocate_exact_size(vec2(MENU_W - 10.0, 9.0), Sense::hover());
+    ui.painter().hline(r.shrink2(vec2(8.0, 0.0)).x_range(), r.center().y, Stroke::new(1.0, LINE));
 }
 
 impl HistoryApp {
@@ -413,7 +456,7 @@ impl HistoryApp {
                     let (shots, videos, ups) = (count(Kind::Image), count(Kind::Video), self.uploads.len());
                     for (tab, label) in [
                         (Tab::Shots, lf!("снимки {shots}", "shots {shots}")),
-                        (Tab::Videos, lf!("видео {videos}", "videos {videos}")),
+                        (Tab::Videos, lf!("видео и gif {videos}", "videos & gifs {videos}")),
                         (Tab::Uploads, lf!("загрузки {ups}", "uploads {ups}")),
                     ] {
                         if ui::filter(ui, &label, self.tab == tab).clicked() {
@@ -437,7 +480,7 @@ impl HistoryApp {
             });
     }
 
-    fn grid(&mut self, ui: &mut egui::Ui, kinds: &[Kind]) {
+    fn grid(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame, kinds: &[Kind]) {
         let items: Vec<Item> = self.items.iter().filter(|i| kinds.contains(&i.kind)).cloned().collect();
         if items.is_empty() {
             empty(ui, l("здесь пока пусто", "nothing here yet"), l("снимки и записи из папки blinker появятся тут", "screenshots and recordings from the blinker folder show up here"));
@@ -462,16 +505,18 @@ impl HistoryApp {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 14.0;
                 for it in &row {
-                    self.card(ui, it, card_w);
+                    self.card(ui, frame, it, card_w);
                 }
             });
             ui.add_space(14.0);
         }
     }
 
-    fn card(&mut self, ui: &mut egui::Ui, it: &Item, w: f32) {
+    /// A file: a click opens it in its usual app, a right click shows every
+    /// action, a drag takes the file out (into a chat, a folder…).
+    fn card(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame, it: &Item, w: f32) {
         let h = THUMB_H * w / CARD_W;
-        let (rect, resp) = ui.allocate_exact_size(vec2(w, h + 44.0), Sense::click());
+        let (rect, resp) = ui.allocate_exact_size(vec2(w, h + 44.0), Sense::click_and_drag());
         if !ui.is_rect_visible(rect) {
             return;
         }
@@ -494,9 +539,7 @@ impl HistoryApp {
         }
         p.rect_stroke(thumb, 10, Stroke::new(1.0, Color32::from_white_alpha(14)), StrokeKind::Inside);
         if it.kind == Kind::Video {
-            let c = thumb.center();
-            p.circle_filled(c, 16.0, Color32::from_rgba_unmultiplied(18, 18, 17, 200));
-            icons::paint(&p, Rect::from_center_size(c + vec2(1.5, 0.0), Vec2::splat(16.0)), Icon::Play, 12.0, TEXT);
+            ui::play_badge(&p, thumb.center(), 17.0, 1.0);
         }
         let name = it.path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
         let ext = it.path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
@@ -543,53 +586,109 @@ impl HistoryApp {
             }
         }
 
-        let hovered = resp.hovered() || ui.rect_contains_pointer(thumb);
-        let mut clicked_button = false;
-        if hovered && !self.jobs.contains_key(&it.path) {
-            p.rect_filled(thumb, 10, Color32::from_black_alpha(90));
-            let mut actions = vec![(Icon::Edit, l("открыть", "open")), (Icon::Copy, l("копировать", "copy"))];
-            if crate::upload::configured(&self.cfg) {
-                actions.push((Icon::Upload, l("загрузить и скопировать ссылку", "upload and copy the link")));
-            }
-            actions.push((Icon::Folder, l("показать в папке", "show in the folder")));
-            let size = 30.0;
-            let total = actions.len() as f32 * size + (actions.len() - 1) as f32 * 4.0 + 8.0;
-            let bar = Rect::from_center_size(pos2(thumb.center().x, thumb.bottom() - 26.0), vec2(total, size + 8.0));
-            p.rect_filled(bar, 11, Color32::from_rgba_unmultiplied(18, 18, 17, 235));
-            let mut x = bar.left() + 4.0;
-            for (icon, tip) in actions {
-                let r = Rect::from_min_size(pos2(x, bar.top() + 4.0), Vec2::splat(size));
-                let b = ui.interact(r, ui.scope_id().with((&it.path, tip)), Sense::click());
-                if b.hovered() {
-                    p.rect_filled(r, 8, ACCENT);
-                }
-                icons::paint(&p, r, icon, 14.0, if b.hovered() { ON_ACCENT } else { TEXT });
-                if b.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(tip).clicked() {
-                    clicked_button = true;
-                    match icon {
-                        Icon::Edit => open(it),
-                        Icon::Copy => {
-                            let ok = match it.kind {
-                                Kind::Image => image::open(&it.path).map(|i| crate::output::copy_image(&i.to_rgba8())).unwrap_or(false),
-                                _ => crate::output::copy_file(&it.path),
-                            };
-                            self.notice = Some(Notice::new(ui.ctx(), if ok { l("скопировано", "copied") } else { l("не скопировалось", "couldn't copy") }));
-                        }
-                        Icon::Upload => {
-                            let job = crate::upload::start(&self.cfg, it.path.clone(), None);
-                            self.jobs.insert(it.path.clone(), job);
-                        }
-                        Icon::Folder => win::reveal_in_explorer(&it.path),
-                        _ => {}
-                    }
-                }
-                x += size + 4.0;
-            }
+        let menu_here = self.menu.as_ref().is_some_and(|(m, ..)| m.path == it.path);
+        if (resp.hovered() || menu_here) && !self.jobs.contains_key(&it.path) {
+            p.rect_filled(thumb, 10, Color32::from_white_alpha(10));
+            p.rect_stroke(thumb, 10, Stroke::new(1.0, Color32::from_white_alpha(40)), StrokeKind::Inside);
+        }
+        if resp.drag_started() {
+            let png = drag_picture(&it.path);
+            let _ = drag::start_drag(frame, drag::DragItem::Files(vec![it.path.clone()]), drag::Image::Raw(png), |_, _| {}, drag::Options::default());
+            return;
         }
         let on_name = ui.rect_contains_pointer(name_r);
-        if !clicked_button && !renaming && !on_name && resp.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+        let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
+        if !renaming && !on_name && resp.clicked() {
+            win::open_path(&it.path);
+        }
+        if resp.secondary_clicked()
+            && let Some(at) = resp.interact_pointer_pos()
+        {
+            self.menu = Some((it.clone(), at, vec2(MENU_W, 0.0)));
+        }
+    }
+
+    /// The right-click menu, to the right of where it was opened (to the
+    /// left when there's no room), as narrow as its rows.
+    fn menu(&mut self, ctx: &egui::Context) {
+        let Some((it, at, size)) = self.menu.clone() else { return };
+        let win = ctx.content_rect().shrink(6.0);
+        let x = if at.x + 4.0 + size.x <= win.right() { at.x + 4.0 } else { at.x - 4.0 - size.x };
+        let y = (at.y - 6.0).min(win.bottom() - size.y).max(win.top());
+        let resp = egui::Area::new(egui::Id::unique("history-menu"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos2(x.max(win.left()), y))
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .stroke(Stroke::new(1.0, LINE))
+                    .corner_radius(10)
+                    .inner_margin(egui::Margin::same(5))
+                    .shadow(egui::epaint::Shadow { offset: [0, 6], blur: 20, spread: 0, color: Color32::from_black_alpha(90) })
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.set_width(MENU_W - 10.0);
+                        self.card_menu(ui, &it)
+                    })
+                    .inner
+            });
+        let rect = resp.response.rect;
+        let picked = resp.inner;
+        // a click anywhere else, or Esc, closes it
+        let away = ctx.input(|i| (i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !rect.contains(p))) || i.key_pressed(egui::Key::Escape));
+        if picked || away {
+            self.menu = None;
+        } else if let Some(m) = &mut self.menu {
+            m.2 = rect.size();
+        }
+    }
+
+    /// Everything a file allows, in its right-click menu; true once one is picked.
+    fn card_menu(&mut self, ui: &mut egui::Ui, it: &Item) -> bool {
+        let ctx = ui.ctx().clone();
+        let mut picked = false;
+        let mut row = |ui: &mut egui::Ui, icon: Icon, label: &str| {
+            let r = menu_row(ui, icon, label);
+            picked |= r;
+            r
+        };
+        let open_icon = if it.kind == Kind::Image { Icon::Region } else { Icon::Play };
+        if row(ui, open_icon, l("открыть", "open")) {
+            win::open_path(&it.path);
+        }
+        let edit = if it.kind == Kind::Image { l("править в blinker", "edit in blinker") } else { l("обрезать в blinker", "trim in blinker") };
+        if it.kind != Kind::Other && row(ui, Icon::Edit, edit) {
             open(it);
         }
+        menu_sep(ui);
+        let copy = if it.kind == Kind::Image { l("копировать картинку", "copy the picture") } else { l("копировать файл", "copy the file") };
+        if row(ui, Icon::Copy, copy) {
+            let ok = match it.kind {
+                Kind::Image => image::open(&it.path).map(|i| crate::output::copy_image(&i.to_rgba8())).unwrap_or(false),
+                _ => crate::output::copy_file(&it.path),
+            };
+            self.notice = Some(Notice::new(&ctx, if ok { l("скопировано", "copied") } else { l("не скопировалось", "couldn't copy") }));
+        }
+        if crate::upload::configured(&self.cfg) && row(ui, Icon::Upload, l("загрузить и скопировать ссылку", "upload and copy the link")) {
+            let job = crate::upload::start(&self.cfg, it.path.clone(), None);
+            self.jobs.insert(it.path.clone(), job);
+        }
+        menu_sep(ui);
+        if row(ui, Icon::Text, l("переименовать", "rename")) {
+            self.start_rename(&it.path);
+        }
+        if row(ui, Icon::Folder, l("показать в папке", "show in the folder")) {
+            win::reveal_in_explorer(&it.path);
+        }
+        if cfg!(windows) && row(ui, Icon::Trash, l("в корзину", "move to the bin")) {
+            if win::trash(&it.path) {
+                self.items.retain(|i| i.path != it.path);
+                self.notice = Some(Notice::new(&ctx, l("в корзине: оттуда можно вернуть", "in the bin: it can be restored from there")));
+            } else {
+                self.notice = Some(Notice::new(&ctx, l("не удалилось", "couldn't delete")));
+            }
+        }
+        picked
     }
 
     /// The name field of the file being renamed: Enter or a click elsewhere
@@ -647,41 +746,82 @@ impl HistoryApp {
         );
     }
 
+    /// One upload: its picture (a click opens the file), the name, the link
+    /// and how long it lives, then the link's buttons.
     fn upload_row(&mut self, ui: &mut egui::Ui, u: &Uploaded) {
         let name = u.path.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let at = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(u.at);
         let desc = format!("{} · {} · {}", day_title(at) + " " + &clock(at), human_size(u.size), left(u.expires));
-        let tex = u.path.exists().then(|| self.texture(ui.ctx(), &u.path)).flatten();
+        let here = u.path.exists();
+        let tex = here.then(|| self.texture(ui.ctx(), &u.path)).flatten();
+        let video = kind_of(&u.path) == Some(Kind::Video);
         let mut action = None;
         let state = self.deleting.get(&u.url).map(|s| s.lock().unwrap().clone());
-        ui::setting_row(ui, &name, &format!("{}\n{desc}", u.url), |ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            match &state {
-                Some(None) => {
-                    ui.label(egui::RichText::new(l("удаляю…", "deleting…")).font(font(12.5)).color(DIM));
+
+        let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 84.0), Sense::hover());
+        let p = ui.painter().clone();
+        // the picture
+        let pic = Rect::from_min_size(row.min + vec2(12.0, 10.0), vec2(112.0, 64.0));
+        p.rect_filled(pic, 8, CANVAS);
+        match &tex {
+            Some(t) => {
+                let uv = ui::cover_uv(pic.size(), t.size_vec2());
+                p.add(egui::epaint::RectShape::filled(pic, egui::CornerRadius::same(8), Color32::WHITE).with_texture(t.id(), uv));
+            }
+            None => icons::paint(&p, pic, if video { Icon::Video } else { Icon::Region }, 20.0, FAINT),
+        }
+        p.rect_stroke(pic, 8, Stroke::new(1.0, Color32::from_white_alpha(14)), StrokeKind::Inside);
+        if video && tex.is_some() {
+            ui::play_badge(&p, pic.center(), 13.0, 1.0);
+        }
+        // the name and the picture open the file (while it's on this computer)
+        let text_left = pic.right() + 14.0;
+        let open_r = Rect::from_min_max(pic.min, pos2(row.right() - 210.0, pic.bottom()));
+        let open = ui.interact(open_r, ui.scope_id().with((&u.url, "open")), Sense::click());
+        if here && open.hovered() {
+            p.rect_stroke(pic, 8, Stroke::new(1.0, Color32::from_white_alpha(60)), StrokeKind::Inside);
+        }
+        let tip = if here { l("открыть файл", "open the file") } else { l("файла больше нет на этом компьютере", "the file is no longer on this computer") };
+        if open.on_hover_cursor(if here { CursorIcon::PointingHand } else { CursorIcon::Default }).on_hover_text(tip).clicked() && here {
+            win::open_path(&u.path);
+        }
+        let width = (row.right() - 214.0 - text_left).max(60.0);
+        let line = |y: f32, text: &str, f: egui::FontId, c: Color32| {
+            let g = p.layout(text.to_owned(), f, c, f32::INFINITY);
+            p.with_clip_rect(Rect::from_min_size(pos2(text_left, y - 10.0), vec2(width, 20.0))).galley(pos2(text_left, y - g.size().y / 2.0), g, c);
+        };
+        line(pic.top() + 12.0, &name, font_medium(13.0), TEXT);
+        line(pic.top() + 32.0, &u.url, mono(11.5), DIM);
+        line(pic.top() + 51.0, &desc, font(11.5), FAINT);
+
+        // the link's buttons
+        let mut buttons = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(Rect::from_min_max(pos2(row.right() - 210.0, row.top()), pos2(row.right() - 10.0, row.bottom())))
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        );
+        let bui = &mut buttons;
+        bui.spacing_mut().item_spacing.x = 4.0;
+        match &state {
+            Some(None) => {
+                bui.label(egui::RichText::new(l("удаляю…", "deleting…")).font(font(12.5)).color(DIM));
+            }
+            _ => {
+                let confirm = self.confirm.as_deref() == Some(u.url.as_str());
+                let (label, kind) = if confirm { (l("точно удалить?", "really delete?"), ui::Kind::Accent) } else { (l("удалить", "delete"), ui::Kind::Ghost) };
+                let tip = if u.delete_url.is_some() { l("удалить файл с сервера", "delete the file from the server") } else { l("этот сервер не дал ссылку на удаление: уберётся только из списка", "this server gave no delete link: it only leaves the list") };
+                if ui::button(bui, label, kind).on_hover_text(tip).clicked() {
+                    action = Some(if confirm { 2 } else { 1 });
                 }
-                _ => {
-                    let confirm = self.confirm.as_deref() == Some(u.url.as_str());
-                    let (label, kind) = if confirm { (l("точно удалить?", "really delete?"), ui::Kind::Accent) } else { (l("удалить", "delete"), ui::Kind::Ghost) };
-                    let tip = if u.delete_url.is_some() { l("удалить файл с сервера", "delete the file from the server") } else { l("этот сервер не дал ссылку на удаление: уберётся только из списка", "this server gave no delete link: it only leaves the list") };
-                    if ui::button(ui, label, kind).on_hover_text(tip).clicked() {
-                        action = Some(if confirm { 2 } else { 1 });
-                    }
-                    if ui::icon_button(ui, Icon::Send, l("открыть в браузере", "open in the browser"), 30.0, false, ui::Kind::Ghost).clicked() {
-                        win::open_url(&u.url);
-                    }
-                    if ui::icon_button(ui, Icon::Copy, l("копировать ссылку", "copy the link"), 30.0, false, ui::Kind::Ghost).clicked() {
-                        crate::output::copy_text(&u.url);
-                        self.notice = Some(Notice::new(ui.ctx(), l("ссылка скопирована", "link copied")));
-                    }
-                    if let Some(t) = &tex {
-                        let (r, _) = ui.allocate_exact_size(vec2(54.0, 34.0), Sense::hover());
-                        let uv = ui::cover_uv(r.size(), t.size_vec2());
-                        ui.painter().add(egui::epaint::RectShape::filled(r, egui::CornerRadius::same(5), Color32::WHITE).with_texture(t.id(), uv));
-                    }
+                if ui::icon_button(bui, Icon::Link, l("открыть ссылку в браузере", "open the link in the browser"), 30.0, false, ui::Kind::Ghost).clicked() {
+                    win::open_url(&u.url);
+                }
+                if ui::icon_button(bui, Icon::Copy, l("копировать ссылку", "copy the link"), 30.0, false, ui::Kind::Ghost).clicked() {
+                    crate::output::copy_text(&u.url);
+                    self.notice = Some(Notice::new(bui.ctx(), l("ссылка скопирована", "link copied")));
                 }
             }
-        });
+        }
         match action {
             Some(1) => self.confirm = Some(u.url.clone()),
             Some(_) => {
@@ -724,7 +864,7 @@ impl eframe::App for HistoryApp {
         if theme::glass() { [0.0; 4] } else { BG.to_normalized_gamma_f32() }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         if self.show.swap(false, Ordering::SeqCst) {
             if let Ok(t) = std::fs::read_to_string(request_file()) {
@@ -744,17 +884,24 @@ impl eframe::App for HistoryApp {
         egui::CentralPanel::no_frame().frame(egui::Frame::new().fill(fill)).show(ui, |ui| {
             self.content = ui.max_rect();
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                // the middle button held down drags the list
+                if ui.input(|i| i.pointer.middle_down()) && ui.rect_contains_pointer(ui.clip_rect()) {
+                    let d = ui.input(|i| i.pointer.delta());
+                    ui.scroll_with_delta(vec2(0.0, d.y));
+                    ui.ctx().set_cursor_icon(CursorIcon::AllScroll);
+                }
                 egui::Frame::new().inner_margin(egui::Margin { left: 22, right: 22, top: 14, bottom: 22 }).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = 0.0;
                     match self.tab {
-                        Tab::Shots => self.grid(ui, &[Kind::Image]),
-                        Tab::Videos => self.grid(ui, &[Kind::Video, Kind::Other]),
+                        Tab::Shots => self.grid(ui, frame, &[Kind::Image]),
+                        Tab::Videos => self.grid(ui, frame, &[Kind::Video, Kind::Other]),
                         Tab::Uploads => self.uploads_list(ui),
                     }
                 });
             });
         });
+        self.menu(&ctx);
         chrome::frame_border(&ctx);
         if let Some(n) = &self.notice
             && !n.show(&ctx, self.content)

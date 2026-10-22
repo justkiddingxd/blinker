@@ -173,16 +173,6 @@ pub enum VideoCodec {
     Hevc,
 }
 
-/// Re-encode preset "for Telegram" (see `reencode.rs`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TgMode {
-    Balanced,
-    Min,
-    Hq,
-    Hevc,
-}
-
 /// Canvas proportions of a "beautiful" shot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -233,6 +223,60 @@ pub enum Corner {
     TopRight,
     BottomLeft,
     BottomRight,
+}
+
+/// Where the recording pill sits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum PillPlace {
+    /// Under the recorded area; recording the whole screen, by the tray.
+    #[default]
+    Auto,
+    TopLeft,
+    Top,
+    TopRight,
+    BottomLeft,
+    Bottom,
+    BottomRight,
+}
+
+impl PillPlace {
+    pub const ALL: [PillPlace; 7] =
+        [PillPlace::Auto, PillPlace::TopLeft, PillPlace::Top, PillPlace::TopRight, PillPlace::BottomLeft, PillPlace::Bottom, PillPlace::BottomRight];
+
+    pub fn label(self) -> &'static str {
+        use crate::i18n::l;
+        match self {
+            PillPlace::Auto => l("под областью", "under the area"),
+            PillPlace::TopLeft => l("слева сверху", "top left"),
+            PillPlace::Top => l("сверху по центру", "top middle"),
+            PillPlace::TopRight => l("справа сверху", "top right"),
+            PillPlace::BottomLeft => l("слева снизу", "bottom left"),
+            PillPlace::Bottom => l("снизу по центру", "bottom middle"),
+            PillPlace::BottomRight => l("справа снизу", "bottom right"),
+        }
+    }
+
+    /// The same for a whole-screen recording, where "auto" is by the tray.
+    pub fn label_screen(self) -> &'static str {
+        match self {
+            PillPlace::Auto => crate::i18n::l("у трея", "by the tray"),
+            p => p.label(),
+        }
+    }
+
+    /// Where on the screen, as fractions (0 left/top … 1 right/bottom).
+    pub fn anchor(self) -> Option<(f32, f32)> {
+        match self {
+            PillPlace::Auto => None,
+            PillPlace::TopLeft => Some((0.0, 0.0)),
+            PillPlace::Top => Some((0.5, 0.0)),
+            PillPlace::TopRight => Some((1.0, 0.0)),
+            PillPlace::BottomLeft => Some((0.0, 1.0)),
+            PillPlace::Bottom => Some((0.5, 1.0)),
+            PillPlace::BottomRight => Some((1.0, 1.0)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -296,6 +340,8 @@ pub struct Config {
     pub tools_pos: ToolsPos,
     /// The first capture's walkthrough was shown (or skipped).
     pub tour_done: bool,
+    /// The note about the NVIDIA overlay's "Press Alt+Z" was read (or put away).
+    pub nvidia_tip_seen: bool,
     /// Releasing the mouse immediately copies the selection (no toolbar).
     pub instant_mode: bool,
     // Each action can have several key combinations.
@@ -349,6 +395,10 @@ pub struct Config {
     pub auto_update: bool,
     /// "Clipping with blinker" on the Discord profile.
     pub discord_presence: bool,
+    /// The status names the game being played ("Clipping Dota 2").
+    pub discord_game: bool,
+    /// The status shows today's numbers ("3 screenshots · 1 clip today").
+    pub discord_stats: bool,
     /// The version whose "what's new" was seen; another one shows it again.
     pub seen_version: String,
     /// Frames per second; 0 = the monitor's refresh rate.
@@ -368,6 +418,10 @@ pub struct Config {
     pub rec_show_clicks: bool,
     /// Shortcut pills (Ctrl+C...) in the video; plain typing is never shown.
     pub rec_show_keys: bool,
+    /// Where the recording pill sits recording an area or a window...
+    pub rec_pill: PillPlace,
+    /// ...and recording a whole display (auto: by the tray).
+    pub rec_pill_screen: PillPlace,
     /// Instant replay: keep the last `replay_secs` of the screen on disk.
     pub replay_enabled: bool,
     pub replay_secs: u32,
@@ -390,14 +444,9 @@ pub struct Config {
     pub sharex_offered: bool,
     /// Upload every capture right away and copy the link.
     pub upload_auto: bool,
-    pub tg_mode: TgMode,
     /// GIF recordings: max width and frame rate.
     pub gif_width: u32,
     pub gif_fps: u32,
-    /// Re-encode every finished recording for Telegram right away.
-    pub tg_auto: bool,
-    /// Where ffmpeg is (its folder or the file); empty = found by itself.
-    pub ffmpeg_dir: String,
 }
 
 impl Default for Config {
@@ -413,6 +462,7 @@ impl Default for Config {
             show_toast: true,
             magnifier: true,
             tour_done: false,
+            nvidia_tip_seen: false,
             tools_pos: ToolsPos::Screen,
             instant_mode: false,
             hotkey_region: default_keys(&["PrintScreen"], &["Shift+Cmd+2"]),
@@ -448,6 +498,8 @@ impl Default for Config {
             tray_double_click: TrayAction::Nothing,
             auto_update: false,
             discord_presence: false,
+            discord_game: true,
+            discord_stats: true,
             seen_version: String::new(),
             rec_fps: 60,
             rec_codec: VideoCodec::H264,
@@ -459,6 +511,8 @@ impl Default for Config {
             rec_open_editor: false,
             rec_show_clicks: false,
             rec_show_keys: false,
+            rec_pill: PillPlace::Auto,
+            rec_pill_screen: PillPlace::Auto,
             replay_enabled: false,
             replay_secs: 60,
             replay_reset_on_save: false,
@@ -472,11 +526,8 @@ impl Default for Config {
             post_notice_seen: false,
             sharex_offered: false,
             upload_auto: false,
-            tg_mode: TgMode::Balanced,
             gif_width: 800,
             gif_fps: 15,
-            tg_auto: false,
-            ffmpeg_dir: String::new(),
         }
     }
 }

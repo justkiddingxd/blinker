@@ -17,6 +17,9 @@ pub struct WindowInfo {
     pub hwnd: isize,
     #[allow(dead_code)]
     pub title: String,
+    /// Parts of the window worth taking alone (a browser's page, a panel),
+    /// in snapshot image coordinates, smallest first.
+    pub parts: Vec<IRect>,
 }
 
 /// A frozen copy of the whole virtual desktop plus the geometry the overlay
@@ -45,7 +48,12 @@ pub fn grab_desktop() -> Option<Snapshot> {
         .into_iter()
         .filter_map(|w| {
             let r = w.rect.intersect(&vs);
-            (!r.is_empty()).then(|| WindowInfo { rect: r.offset(-vs.x, -vs.y), hwnd: w.hwnd, title: w.title })
+            (!r.is_empty()).then(|| WindowInfo {
+                rect: r.offset(-vs.x, -vs.y),
+                hwnd: w.hwnd,
+                title: w.title,
+                parts: parts(w.hwnd as HWND, w.rect).into_iter().filter_map(|p| Some(p.intersect(&vs)).filter(|p| !p.is_empty())).map(|p| p.offset(-vs.x, -vs.y)).collect(),
+            })
         })
         .collect();
     let monitors = win::monitors()
@@ -121,6 +129,38 @@ fn enum_windows() -> Vec<RawWindow> {
     }
     let mut out = Vec::new();
     unsafe { EnumWindows(Some(cb), &mut out as *mut _ as LPARAM) };
+    out
+}
+
+/// The child windows of `hwnd` that make a part of it worth a screenshot of
+/// its own: a browser's page (Chromium and Electron draw it in a child
+/// window), an editor, a panel. Smallest first.
+fn parts(hwnd: HWND, window: IRect) -> Vec<IRect> {
+    unsafe extern "system" fn cb(child: HWND, data: LPARAM) -> windows_sys::core::BOOL {
+        let out = unsafe { &mut *(data as *mut Vec<IRect>) };
+        if out.len() < 64 && unsafe { IsWindowVisible(child) } != 0 {
+            let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+            if unsafe { GetWindowRect(child, &mut r) } != 0 {
+                out.push(r.into());
+            }
+        }
+        1
+    }
+    let mut all: Vec<IRect> = Vec::new();
+    unsafe { EnumChildWindows(hwnd, Some(cb), &mut all as *mut _ as LPARAM) };
+    let area = |r: &IRect| r.w as i64 * r.h as i64;
+    let mut out: Vec<IRect> = Vec::new();
+    for r in all {
+        let r = r.intersect(&window);
+        // big enough to mean something, clearly smaller than the window
+        if r.w < 80 || r.h < 48 || area(&r) * 100 > area(&window) * 96 {
+            continue;
+        }
+        if !out.contains(&r) {
+            out.push(r);
+        }
+    }
+    out.sort_by_key(area);
     out
 }
 

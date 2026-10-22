@@ -250,6 +250,7 @@ pub fn start(
     on_pause: impl Fn() + Send + 'static,
 ) -> Result<Recording, String> {
     let monitor = sel.monitor;
+    pill::set_place(cfg.rec_pill, cfg.rec_pill_screen);
     let (target, r, origin) = match sel.window {
         Some(h) => {
             let (target, b) = video::window_target(h);
@@ -299,7 +300,12 @@ pub fn start(
             }
         }
     }
-    let hud = hud::Hud::show(r, &monitor, sel.window.is_none(), sel.window, clock.clone(), on_stop, on_pause);
+    // no frame around a whole display: it would be a topmost window over all
+    // of it, and Windows takes that for a full-screen app (the taskbar then
+    // stays down and won't come up on hover)
+    let m = monitor.rect;
+    let whole = r.x <= m.x && r.y <= m.y && r.right() >= m.right() && r.bottom() >= m.bottom();
+    let hud = hud::Hud::show(r, &monitor, sel.window.is_none() && !whole, sel.window, clock.clone(), on_stop, on_pause);
     Ok(Recording { enc, capture, pacer, audio, end, clock, fx, path, rect: r, monitor, hud, tracks, failed, gif })
 }
 

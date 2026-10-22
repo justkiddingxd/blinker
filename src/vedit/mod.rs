@@ -139,9 +139,6 @@ struct VideoApp {
     notice: Option<Notice>,
     preview_rect: Rect,
     upload: Option<Arc<crate::upload::Job>>,
-    /// "For Telegram" re-encode in progress.
-    tg: Option<Arc<crate::reencode::Job>>,
-    tg_mode: config::TgMode,
     /// The video track is kept; off = the sound alone is saved.
     video_on: bool,
     audio_format: AudioFormat,
@@ -154,7 +151,6 @@ struct VideoApp {
     marker_focus: bool,
     /// "Upload" on an edited clip: it is saved first, then the saved file goes up.
     upload_after_save: bool,
-    ffmpeg_dl: Option<Arc<crate::ffmpeg::Download>>,
 }
 
 impl VideoApp {
@@ -213,8 +209,6 @@ impl VideoApp {
             notice: None,
             preview_rect: Rect::NOTHING,
             upload: None,
-            tg: None,
-            tg_mode: config::load().tg_mode,
             video_on: true,
             audio_format: AudioFormat::Mp3,
             markers: Vec::new(),
@@ -222,7 +216,6 @@ impl VideoApp {
             marker_drag: None,
             marker_focus: false,
             upload_after_save: false,
-            ffmpeg_dl: None,
             info,
         }
     }
@@ -399,55 +392,6 @@ impl VideoApp {
         self.marker_edit = Some(self.markers.len() - 1);
     }
 
-    fn start_tg(&mut self, ctx: &egui::Context) {
-        if self.job.is_some() || self.tg.is_some() {
-            return;
-        }
-        self.pause();
-        self.done = None;
-        let edit = crate::reencode::Edit {
-            from: self.trim.0,
-            to: self.trim.1,
-            tracks: self
-                .tracks
-                .iter()
-                .enumerate()
-                .filter(|(_, t)| !t.gain.muted && t.gain.volume > 0.0)
-                .map(|(i, t)| (i, t.gain.volume))
-                .collect(),
-            mix_down: true,
-        };
-        let c = ctx.clone();
-        self.tg = Some(crate::reencode::start(self.path.clone(), self.tg_mode, Some(edit), move || c.request_repaint()));
-        let mode = self.tg_mode;
-        self.shared.update_config(|c| c.tg_mode = mode);
-    }
-
-    fn poll_tg(&mut self, ctx: &egui::Context) {
-        let Some(job) = &self.tg else { return };
-        match job.result() {
-            None => ctx.request_repaint_after(std::time::Duration::from_millis(150)),
-            Some(Ok(path)) => {
-                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                // straight to the clipboard: paste into Telegram
-                let copied = crate::output::copy_file(&path);
-                let text = format!(
-                    "{} → {}{}",
-                    human_size(self.file_size),
-                    human_size(size),
-                    if copied { crate::i18n::t(" · файл в буфере") } else { "" }
-                );
-                let markers = self.clip_markers();
-                self.done = Some(Done { text, path, markers });
-                self.tg = None;
-            }
-            Some(Err(e)) => {
-                self.notice = Some(Notice::new(ctx, if e == crate::i18n::t("отменено") { e } else { lf!("не сжалось: {e}", "compression failed: {e}") }));
-                self.tg = None;
-            }
-        }
-    }
-
     fn poll_job(&mut self, ctx: &egui::Context) {
         let Some(job) = &self.job else { return };
         let res = job.result.lock().unwrap().take();
@@ -509,7 +453,7 @@ impl VideoApp {
                         chrome::window_buttons(ui);
                         ui.spacing_mut().item_spacing.x = 4.0;
                         sep(ui);
-                        let busy = self.job.is_some() || self.tg.is_some();
+                        let busy = self.job.is_some();
                         ui.add_enabled_ui(!busy, |ui| {
                             if !self.video_on {
                                 let label = lf!("сохранить {}", "save {}", self.audio_format.ext());
@@ -547,53 +491,6 @@ impl VideoApp {
                             }
                             self.upload_button(ui, &ctx);
                             sep(ui);
-                            let tg = ui::button(ui, crate::i18n::t("для telegram"), ui::Kind::Ghost);
-                            egui::Popup::menu(&tg).show(|ui| {
-                                ui.set_min_width(300.0);
-                                ui.spacing_mut().item_spacing.y = 6.0;
-                                caption(ui, crate::i18n::t("сжатие"));
-                                ui.horizontal(|ui| {
-                                    ui.spacing_mut().item_spacing.x = 2.0;
-                                    for m in config::TgMode::ALL {
-                                        if ui::filter(ui, m.label(), self.tg_mode == m).clicked() {
-                                            self.tg_mode = m;
-                                        }
-                                    }
-                                });
-                                ui.label(egui::RichText::new(self.tg_mode.desc()).font(font(12.0)).color(DIM));
-                                ui.label(
-                                    egui::RichText::new(crate::reencode::engine_label(self.tg_mode))
-                                        .font(mono(11.0))
-                                        .color(FAINT),
-                                );
-                                // no ffmpeg: it works, but ffmpeg does it better; one click to get it
-                                if crate::ffmpeg::find().is_none() {
-                                    match self.ffmpeg_dl.as_ref().map(|j| (j.fraction(), j.result())) {
-                                        Some((f, None)) => {
-                                            ui.label(egui::RichText::new(lf!("скачиваю ffmpeg {:.0}%", "downloading ffmpeg {:.0}%", f * 100.0)).font(font(12.0)).color(DIM));
-                                            ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
-                                        }
-                                        Some((_, Some(Err(e)))) => {
-                                            ui.label(egui::RichText::new(lf!("ffmpeg не скачался: {e}", "ffmpeg didn't download: {e}")).font(font(12.0)).color(DANGER));
-                                        }
-                                        _ => {
-                                            if ui::button(ui, crate::i18n::l("скачать ffmpeg: сожмёт лучше", "get ffmpeg: compresses better"), ui::Kind::Ghost).clicked() {
-                                                let c = ctx.clone();
-                                                self.ffmpeg_dl = Some(crate::ffmpeg::download(move || c.request_repaint()));
-                                            }
-                                        }
-                                    }
-                                }
-                                ui.label(
-                                    egui::RichText::new(crate::i18n::t("с обрезкой и громкостью дорожек, звук в одну дорожку"))
-                                        .font(font(12.0))
-                                        .color(DIM),
-                                );
-                                if ui::button(ui, crate::i18n::t("сжать и скопировать"), ui::Kind::Accent).clicked() {
-                                    self.start_tg(&ctx);
-                                    ui.close();
-                                }
-                            });
                             let gif = ui::button(ui, "gif", ui::Kind::Ghost);
                             egui::Popup::menu(&gif).show(|ui| {
                                 ui.set_min_width(250.0);
@@ -1111,7 +1008,7 @@ impl VideoApp {
         if resp.clicked() && self.job.is_none() {
             if self.playing { self.pause() } else { self.play() }
         }
-        if !self.playing && self.job.is_none() && self.tg.is_none() {
+        if !self.playing && self.job.is_none() {
             let h = resp.hovered();
             let c = rect.center();
             let a = if h { 1.0 } else { 0.75 };
@@ -1126,8 +1023,8 @@ impl VideoApp {
     }
 
     fn job_overlay(&mut self, ui: &mut egui::Ui, rect: Rect) {
-        let (what, f, cancel, engine) = match (&self.job, &self.tg) {
-            (Some(job), _) => {
+        let (what, f, cancel, engine): (String, f32, _, Option<String>) = match &self.job {
+            Some(job) => {
                 let w = match job.kind {
                     ExportKind::Gif => crate::i18n::t("сохраняю gif"),
                     ExportKind::Audio(_) => crate::i18n::l("сохраняю звук", "saving the sound"),
@@ -1135,13 +1032,7 @@ impl VideoApp {
                 };
                 (w.to_string(), job.fraction(), job.cancel.clone(), None)
             }
-            (None, Some(tg)) => (
-                lf!("сжимаю для telegram · {}", "compressing for telegram · {}", self.tg_mode.label()),
-                tg.fraction(),
-                Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                Some(tg.engine.lock().unwrap().clone()),
-            ),
-            _ => return,
+            None => return,
         };
         let p = ui.painter().clone();
         p.rect_filled(rect, 0, Color32::from_black_alpha(150));
@@ -1159,9 +1050,6 @@ impl VideoApp {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(btn));
         if ui::button(&mut child, crate::i18n::t("отмена"), ui::Kind::Ghost).clicked() {
             cancel.store(true, Ordering::SeqCst);
-            if let Some(tg) = &self.tg {
-                tg.cancel.store(true, Ordering::SeqCst);
-            }
         }
     }
 
@@ -1203,7 +1091,7 @@ impl VideoApp {
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         // typing a marker's note: letters are text, not shortcuts
-        if self.job.is_some() || self.tg.is_some() || ctx.memory(|m| m.focused().is_some()) {
+        if self.job.is_some() || ctx.memory(|m| m.focused().is_some()) {
             return;
         }
         let (cmd, shift) = ctx.input(|i| (i.modifiers.command, i.modifiers.shift));
@@ -1255,13 +1143,12 @@ impl eframe::App for VideoApp {
                 ctx.request_repaint();
             }
         }
-        if ctx.input(|i| i.viewport().close_requested()) && (self.job.is_some() || self.tg.is_some()) {
+        if ctx.input(|i| i.viewport().close_requested()) && (self.job.is_some()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.notice = Some(Notice::new(&ctx, crate::i18n::t("ещё сохраняется")));
         }
         self.tick(&ctx);
         self.poll_job(&ctx);
-        self.poll_tg(&ctx);
         if let Some(job) = &self.upload {
             match job.result() {
                 None => {

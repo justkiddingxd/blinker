@@ -16,13 +16,57 @@ pub(crate) enum Btn {
     Stop,
 }
 
-/// Pill position under `area` (centered), above it when the bottom has no
-/// room, inside along the bottom edge when neither fits.
+/// The places chosen in the settings for the recording going on: for an
+/// area, for a whole display.
+static PLACE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+static PLACE_SCREEN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+fn index(place: crate::config::PillPlace) -> u8 {
+    crate::config::PillPlace::ALL.iter().position(|p| *p == place).unwrap_or(0) as u8
+}
+
+fn from_index(i: u8) -> crate::config::PillPlace {
+    crate::config::PillPlace::ALL.get(i as usize).copied().unwrap_or_default()
+}
+
+/// Takes the settings' places for the pill (at the start of a recording).
+pub fn set_place(area: crate::config::PillPlace, screen: crate::config::PillPlace) {
+    use std::sync::atomic::Ordering::Relaxed;
+    PLACE.store(index(area), Relaxed);
+    PLACE_SCREEN.store(index(screen), Relaxed);
+}
+
+/// Pill position: where the settings put it on the screen, or (auto) under
+/// `area` (centered), above it when the bottom has no room, inside along the
+/// bottom edge when neither fits; the whole screen puts it by the tray.
 pub(crate) fn pill_position(area: IRect, monitor: &Monitor, size: (i32, i32), scale: f32) -> (i32, i32) {
     let px = |v: f32| (v * scale).round() as i32;
     let gap = px(8.0);
     let margin = px(5.0);
     let (mon, work) = (monitor.rect, monitor.work);
+    let whole = area.x <= mon.x && area.y <= mon.y && area.right() >= mon.right() && area.bottom() >= mon.bottom();
+    let chosen = from_index(if whole { &PLACE_SCREEN } else { &PLACE }.load(std::sync::atomic::Ordering::Relaxed));
+    if let Some((fx, fy)) = chosen.anchor() {
+        let g = px(12.0);
+        let x = work.x + g + ((work.w - size.0 - 2 * g) as f32 * fx) as i32;
+        let y = work.y + g + ((work.h - size.1 - 2 * g) as f32 * fy) as i32;
+        return (x, y);
+    }
+    // the whole display: in the corner by the tray, just off the taskbar
+    if whole {
+        let g = px(12.0);
+        let right = work.right() - size.0 - g;
+        let bottom = work.bottom() - size.1 - g;
+        return if work.y > mon.y {
+            // taskbar on top: the tray is in its right end
+            (right, work.y + g)
+        } else if work.x > mon.x {
+            // on the left: the tray is at its bottom
+            (work.x + g, bottom)
+        } else {
+            (right, bottom)
+        };
+    }
     let mut pos = (area.x + area.w / 2 - size.0 / 2, area.bottom() + margin + gap);
     if pos.1 + size.1 > work.bottom() {
         pos.1 = area.y - margin - gap - size.1;
@@ -192,4 +236,28 @@ pub(crate) fn draw_pill(look: &PillLook, s: f32) -> Option<sk::Pixmap> {
         }
     }
     Some(pm)
+}
+
+#[cfg(test)]
+mod place_tests {
+    use crate::win::{IRect, Monitor};
+
+    #[test]
+    fn whole_screen_sits_by_the_tray() {
+        let mon = IRect::new(0, 0, 1920, 1080);
+        let size = (150, 30);
+        // taskbar at the bottom: bottom right, above it
+        let m = Monitor { rect: mon, work: IRect::new(0, 0, 1920, 1032), scale: 1.0 };
+        assert_eq!(super::pill_position(mon, &m, size, 1.0), (1920 - 150 - 12, 1032 - 30 - 12));
+        // on top: top right, below it
+        let m = Monitor { rect: mon, work: IRect::new(0, 48, 1920, 1032), scale: 1.0 };
+        assert_eq!(super::pill_position(mon, &m, size, 1.0), (1920 - 150 - 12, 48 + 12));
+        // on the left: bottom left, next to it
+        let m = Monitor { rect: mon, work: IRect::new(62, 0, 1858, 1080), scale: 1.0 };
+        assert_eq!(super::pill_position(mon, &m, size, 1.0), (62 + 12, 1080 - 30 - 12));
+        // an area keeps its pill under it
+        let area = IRect::new(100, 100, 400, 300);
+        let m = Monitor { rect: mon, work: IRect::new(0, 0, 1920, 1032), scale: 1.0 };
+        assert_eq!(super::pill_position(area, &m, size, 1.0).1, 100 + 300 + 13);
+    }
 }

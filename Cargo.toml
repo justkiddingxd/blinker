@@ -1,6 +1,6 @@
 [package]
 name = "blinker"
-version = "0.3.4"
+version = "0.4.0"
 edition = "2024"
 description = "Fast, quiet screenshot and screen recording tool for Windows and macOS"
 license = "GPL-3.0-only"
@@ -14,7 +14,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 dirs = "7.0.0"
 gif = "0.14.2"
 drag = "2.1.1"
-eframe = { version = "0.37.0", default-features = false, features = ["glow", "wgpu", "default_fonts"] }
+eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 raw-window-handle = "0.6.2"
 rfd = "0.17.2"
@@ -56,6 +56,7 @@ windows = { version = "0.62.2", features = [
     "Win32_System_WinRT_Graphics",
     "Win32_System_WinRT_Graphics_Capture",
     "Win32_Storage_FileSystem",
+    "Win32_UI_Accessibility",
     "Win32_UI_Shell",
     "Win32_UI_Shell_PropertiesSystem",
 ] }
@@ -86,6 +87,8 @@ cc = "1.2.30"
 embed-resource = "3.0.12"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# settings and history drawn with Metal (OpenGL stops at 60 Hz on a Mac)
+eframe = { version = "0.37.0", default-features = false, features = ["wgpu"] }
 # the same winit eframe uses: macOS event loop options (activation policy, menu)
 winit = { version = "0.30.13", default-features = false }
 # MP3 when a clip is saved as sound only (Windows has an MP3 encoder built in)

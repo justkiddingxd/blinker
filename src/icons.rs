@@ -42,12 +42,13 @@ pub enum Icon {
     Mute,
     Frame,
     Upload,
-    Send,
     Video,
     VideoOff,
     /// A marker on the video timeline.
     Flag,
     Trash,
+    /// Opens a link (an arrow out of a box).
+    Link,
 }
 
 /// (points, closed)
@@ -189,9 +190,10 @@ pub fn paths(icon: Icon) -> Vec<Path> {
             p(&[(6.8, 7.0), (7.0, 11.0)], false),
             p(&[(9.2, 7.0), (9.0, 11.0)], false),
         ],
-        Send => vec![
-            p(&[(1.5, 7.0), (14.5, 1.5), (10.0, 14.5), (7.5, 8.5)], true),
-            p(&[(7.5, 8.5), (14.5, 1.5)], false),
+        Link => vec![
+            p(&[(7.0, 3.5), (2.5, 3.5), (2.5, 13.5), (12.5, 13.5), (12.5, 9.0)], false),
+            p(&[(7.5, 8.5), (13.5, 2.5)], false),
+            p(&[(9.0, 2.5), (13.5, 2.5), (13.5, 7.0)], false),
         ],
         Frame => vec![rect(1.5, 2.5, 14.5, 13.5), rect(4.5, 5.5, 11.5, 10.5)],
         Upload => vec![

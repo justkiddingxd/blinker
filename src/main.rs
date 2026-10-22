@@ -10,7 +10,6 @@ mod config;
 mod demo;
 mod discord;
 mod editor;
-mod ffmpeg;
 mod games;
 mod geom;
 mod history;
@@ -19,7 +18,6 @@ mod hotkey;
 #[cfg_attr(target_os = "macos", path = "mac/media.rs")]
 mod media;
 mod record;
-mod reencode;
 mod icons;
 mod output;
 mod overlay;
@@ -102,7 +100,7 @@ fn main() {
         let Some(mon) = win::monitor_at(&win::monitors(), x, y) else { return };
         let title = crate::i18n::t("скопировано").to_string();
         let badge = has("--clip").then_some(CLIPPED);
-        toast::run(&shared, Arc::new(img.to_rgba8()), title, Some(PathBuf::from(path)), None, mon, toast::Kind::Image, None, None, badge);
+        toast::run(&shared, Arc::new(img.to_rgba8()), title, Some(PathBuf::from(path)), None, mon, toast::Kind::Image, None, badge);
         return;
     }
     if let Some(path) = arg_after("--video") {
@@ -293,7 +291,7 @@ fn controller(shared: &Arc<Shared>) -> bool {
                     crate::i18n::t("он включается в настройках, раздел «запись»"),
                 ),
             },
-            Command::Record | Command::RecordGif => {
+            Command::Record | Command::RecordGif | Command::RecordScreen => {
                 let gif = matches!(cmd_now, Command::RecordGif);
                 if let Some(rec) = recording.take() {
                     shared.recording.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -301,20 +299,26 @@ fn controller(shared: &Arc<Shared>) -> bool {
                     finish_recording(shared, rec);
                     continue;
                 }
-                let Some(snap) = capture::grab_desktop() else { continue };
-                if let Some(out) = overlay::run(shared, snap, true, gif) {
+                // the whole display under the pointer, or what's picked on the overlay
+                let chosen = if cmd_now == Command::RecordScreen {
+                    let (x, y) = win::cursor_pos();
+                    win::monitor_at(&win::monitors(), x, y).map(|m| (record::Selection { rect: m.rect, monitor: m, window: None }, false))
+                } else {
+                    let Some(snap) = capture::grab_desktop() else { continue };
+                    overlay::run(shared, snap, true, gif).map(|out| (record::Selection { rect: out.rect, monitor: out.monitor, window: out.window }, out.gif))
+                };
+                if let Some((sel, gif)) = chosen {
                     let (s2, s3) = (shared.clone(), shared.clone());
-                    let sel = record::Selection { rect: out.rect, monitor: out.monitor, window: out.window };
                     match record::start(
                         &shared.config(),
                         sel,
-                        out.gif,
+                        gif,
                         move || s2.push(Command::Record),
                         move || s3.push(Command::RecordPause),
                     ) {
                         Ok(r) => {
                             let cfg = shared.config();
-                            let note = if out.gif {
+                            let note = if gif {
                                 format!("GIF · {} fps", cfg.gif_fps)
                             } else {
                                 format!("{} × {} · {} fps", r.rect.w, r.rect.h, record::resolve_fps(&cfg, &r.monitor))
@@ -396,6 +400,7 @@ fn finish_recording(shared: &Arc<Shared>, rec: record::Recording) {
 /// Converts a GIF recording in the background; the card shows it as saving
 /// and the finished GIF goes to the clipboard.
 fn finish_gif(shared: &Arc<Shared>, f: record::Finished) {
+    discord::count(true);
     let cfg = shared.config();
     let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
     let mut dst = cfg.videos_dir().join(format!("blinker {stamp}.gif"));
@@ -441,7 +446,7 @@ fn finish_gif(shared: &Arc<Shared>, f: record::Finished) {
     let thumb = Arc::new(f.thumb.unwrap_or_else(|| RgbaImage::from_pixel(16, 9, image::Rgba([22, 22, 21, 255]))));
     let secs = f.duration.round() as u64;
     let title = format!("gif · {}:{:02}", secs / 60, secs % 60);
-    let _ = toast::run(shared, thumb, title, Some(dst), Some(done), f.monitor, toast::Kind::Gif, None, None, None);
+    let _ = toast::run(shared, thumb, title, Some(dst), Some(done), f.monitor, toast::Kind::Gif, None, None);
 }
 
 /// Toast (or the editor) for a finished recording / saved replay.
@@ -450,6 +455,7 @@ const CLIPPED: &str = "Clipped!";
 
 /// `badge`: a word over the card (a saved replay is "Clipped!").
 fn show_video_result(shared: &Arc<Shared>, f: record::Finished, what: &str, badge: Option<&'static str>) {
+    discord::count(true);
     let cfg = shared.config();
     if cfg.rec_open_editor {
         open_video_editor(&f.path);
@@ -464,8 +470,7 @@ fn show_video_result(shared: &Arc<Shared>, f: record::Finished, what: &str, badg
     let saved = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let cfg = shared.config();
     let job = (cfg.upload_auto && upload::configured(&cfg)).then(|| upload::start(&cfg, f.path.clone(), None));
-    let tg = cfg.tg_auto.then(|| reencode::start(f.path.clone(), cfg.tg_mode, None, || {}));
-    if toast::run(shared, thumb, title, Some(f.path.clone()), Some(saved), f.monitor, toast::Kind::Video, job, tg, badge)
+    if toast::run(shared, thumb, title, Some(f.path.clone()), Some(saved), f.monitor, toast::Kind::Video, job, badge)
         == toast::ToastResult::Edit
     {
         open_video_editor(&f.path);
@@ -479,6 +484,7 @@ fn open_video_editor(path: &Path) {
 /// Clipboard / file / toast for a finished capture.
 fn deliver(shared: &Arc<Shared>, image: RgbaImage, action: Action, rect: win::IRect, monitor: win::Monitor) {
     *shared.last_region.lock().unwrap() = Some(rect);
+    discord::count(false);
     let cfg = shared.config();
     let img = Arc::new(if action == Action::Beauty { beauty::render(&image, &cfg.beauty) } else { image });
     match action {
@@ -538,7 +544,6 @@ fn deliver(shared: &Arc<Shared>, image: RgbaImage, action: Action, rect: win::IR
             monitor,
             toast::Kind::Image,
             job,
-            None,
             None,
         ) == toast::ToastResult::Edit
     {

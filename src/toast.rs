@@ -66,7 +66,6 @@ pub fn run(
     monitor: Monitor,
     kind: Kind,
     upload: Option<Arc<crate::upload::Job>>,
-    reencode: Option<Arc<crate::reencode::Job>>,
     badge: Option<&'static str>,
 ) -> ToastResult {
     let video = kind != Kind::Image;
@@ -134,8 +133,6 @@ pub fn run(
             video,
             gif: kind == Kind::Gif,
             upload,
-            reencode,
-            tg_copied: false,
             note_shown: false,
             hwnd,
             monitor,
@@ -174,9 +171,6 @@ struct ToastApp {
     video: bool,
     gif: bool,
     upload: Option<Arc<crate::upload::Job>>,
-    /// "For Telegram" re-encode of a recording.
-    reencode: Option<Arc<crate::reencode::Job>>,
-    tg_copied: bool,
     /// The note of a first upload to post.blinker.cool is on the card.
     note_shown: bool,
     hwnd: Option<win::HWND>,
@@ -249,19 +243,10 @@ impl ToastApp {
 
     fn is_uploading(&self) -> bool {
         self.upload.as_ref().is_some_and(|j| j.result().is_none())
-            || self.reencode.as_ref().is_some_and(|j| j.result().is_none())
-    }
-
-    /// The compressed file once the re-encode finished.
-    fn compressed(&self) -> Option<PathBuf> {
-        self.reencode.as_ref().and_then(|j| j.result()).and_then(|r| r.ok())
     }
 
     /// A file on disk for drag-and-drop: the saved capture, or a temp copy.
     fn file_for_drag(&self) -> Option<PathBuf> {
-        if let Some(p) = self.compressed() {
-            return Some(p);
-        }
         if let Some(flag) = &self.saved {
             let start = std::time::Instant::now();
             while !flag.load(Ordering::Acquire) && start.elapsed() < std::time::Duration::from_secs(3) {
@@ -489,10 +474,7 @@ impl eframe::App for ToastApp {
         }
         if self.video && hover_t < 1.0 {
             let a = (1.0 - hover_t) * alpha;
-            let c = img_rect.center();
-            painter.circle_filled(c, 19.0, Color32::from_rgba_unmultiplied(18, 18, 17, (200.0 * a) as u8));
-            painter.circle_stroke(c, 19.0, Stroke::new(1.0, Color32::from_white_alpha((30.0 * a) as u8)));
-            icons::paint(&painter, Rect::from_center_size(c + vec2(1.5, 0.0), Vec2::splat(18.0)), Icon::Play, 14.0, TEXT.gamma_multiply(a));
+            ui::play_badge(&painter, img_rect.center(), 21.0, a);
         }
         if img_resp.drag_started() {
             if let Some(path) = self.file_for_drag() {
@@ -528,9 +510,6 @@ impl eframe::App for ToastApp {
             }
             if !self.video {
                 actions.push((Icon::Pin, crate::i18n::t("закрепить поверх окон")));
-            }
-            if self.video && !self.gif && self.reencode.is_none() {
-                actions.push((Icon::Send, crate::i18n::t("сжать для telegram и скопировать")));
             }
             if crate::upload::configured(&self.cfg) && self.upload.is_none() {
                 actions.push((Icon::Upload, crate::i18n::t("загрузить и скопировать ссылку")));
@@ -569,14 +548,6 @@ impl eframe::App for ToastApp {
                             if let Some(p) = self.path.clone() {
                                 win::reveal_in_explorer(&p);
                                 self.close(&ctx, ToastResult::Closed);
-                            }
-                        }
-                        Icon::Send => {
-                            if let Some(p) = self.path.clone() {
-                                let c = ctx.clone();
-                                self.reencode = Some(crate::reencode::start(p, self.cfg.tg_mode, None, move || c.request_repaint()));
-                                self.remaining = self.remaining.max(3.0);
-                                self.flash = Some((crate::i18n::l("сжимаю для telegram…", "compressing for telegram…").to_string(), now));
                             }
                         }
                         Icon::Upload => {
@@ -630,32 +601,15 @@ impl eframe::App for ToastApp {
             let title = if self.copied_at.is_some_and(|t| now - t < 1.5) { crate::i18n::t("скопировано снова") } else { &self.title };
             painter.text(pos2(left, title_y), Align2::LEFT_CENTER, title, font_medium(13.0), TEXT.gamma_multiply(alpha));
             let upload = self.upload.as_ref().map(|j| (j.fraction(), j.result()));
-            let tg = self.reencode.as_ref().map(|j| (j.fraction(), j.result()));
-            if let Some((_, Some(Ok(p)))) = &tg
-                && !self.tg_copied
-            {
-                // the compressed file replaces the recording on the clipboard
-                self.tg_copied = true;
-                crate::output::copy_file(p);
-                self.remaining = self.remaining.max(4.0);
-            }
-            let sub = match (&tg, upload.clone()) {
-                (Some((f, None)), _) => lf!("сжатие {:.0}%", "compressing {:.0}%", f * 100.0),
-                (Some((_, Some(Ok(p)))), None) => {
-                    let mb = std::fs::metadata(p).map(|m| m.len() as f64 / 1048576.0).unwrap_or(0.0);
-                    lf!("в буфере · {mb:.1} мб", "copied · {mb:.1} mb").replace('.', ",")
+            let sub = match upload.clone() {
+                Some((f, None)) => lf!("загрузка {:.0}%", "uploading {:.0}%", f * 100.0),
+                Some((_, Some(Ok(_)))) => crate::i18n::t("ссылка в буфере").to_string(),
+                Some((_, Some(Err(_)))) => crate::i18n::t("не загрузилось").to_string(),
+                None if saving => {
+                    let dots = ".".repeat(((now * 3.0) as usize % 3) + 1);
+                    lf!("сохраняется{dots}", "saving{dots}")
                 }
-                (Some((_, Some(Err(_)))), None) => crate::i18n::t("не сжалось").to_string(),
-                (_, upload) => match upload {
-                    Some((f, None)) => lf!("загрузка {:.0}%", "uploading {:.0}%", f * 100.0),
-                    Some((_, Some(Ok(_)))) => crate::i18n::t("ссылка в буфере").to_string(),
-                    Some((_, Some(Err(_)))) => crate::i18n::t("не загрузилось").to_string(),
-                    None if saving => {
-                        let dots = ".".repeat(((now * 3.0) as usize % 3) + 1);
-                        lf!("сохраняется{dots}", "saving{dots}")
-                    }
-                    None => self.size_text.clone(),
-                },
+                None => self.size_text.clone(),
             };
             // the first upload to post.blinker.cool: what it keeps, in place of the size
             let note = self.upload.as_ref().filter(|_| matches!(upload, Some((_, Some(Ok(_)))))).and_then(|j| j.note.clone());
@@ -663,7 +617,7 @@ impl eframe::App for ToastApp {
                 self.note_shown = true;
                 self.remaining = self.remaining.max(7.0);
             }
-            let failed = matches!(upload, Some((_, Some(Err(_))))) || matches!(tg, Some((_, Some(Err(_)))));
+            let failed = matches!(upload, Some((_, Some(Err(_)))));
             let sc = if failed { DANGER } else { FAINT_TEXT };
             let sr = match note {
                 Some(n) => {
@@ -675,12 +629,12 @@ impl eframe::App for ToastApp {
                 }
                 None => painter.text(pos2(left, sub_y), Align2::LEFT_CENTER, sub, mono(11.0), sc.gamma_multiply(alpha)),
             };
-            if let Some((_, Some(Err(e)))) = upload.as_ref().or(tg.as_ref().map(|(f, r)| (f, r)).map(|(f, r)| (*f, r.clone().map(|x| x.map(|p| p.display().to_string())))).as_ref()) {
+            if let Some((_, Some(Err(e)))) = upload.as_ref() {
                 ui.interact(sr, ui.scope_id().with("upload-err"), Sense::hover()).on_hover_text(e);
             }
-            // progress of an upload / compression as a thin bar under the text
-            let busy = match (&tg, &upload) {
-                (Some((f, None)), _) | (None, Some((f, None))) => Some(*f),
+            // progress of an upload as a thin bar under the text
+            let busy = match &upload {
+                Some((f, None)) => Some(*f),
                 _ => None,
             };
             if let Some(f) = busy {

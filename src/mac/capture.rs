@@ -14,6 +14,8 @@ pub struct WindowInfo {
     pub hwnd: isize,
     #[allow(dead_code)]
     pub title: String,
+    /// Parts of the window taken alone: Windows only for now.
+    pub parts: Vec<IRect>,
 }
 
 /// A frozen copy of the monitor under the pointer plus the geometry the
@@ -65,7 +67,7 @@ fn snapshot_of(d: &win::Display, all: &[(IRect, u32)], notice: bool) -> Option<S
         .iter()
         .filter_map(|(rect, id)| {
             let r = rect.intersect(&vs);
-            (!r.is_empty()).then(|| WindowInfo { rect: r.offset(-vs.x, -vs.y), hwnd: *id as isize, title: String::new() })
+            (!r.is_empty()).then(|| WindowInfo { rect: r.offset(-vs.x, -vs.y), hwnd: *id as isize, title: String::new(), parts: Vec::new() })
         })
         .collect();
     let m = d.monitor();

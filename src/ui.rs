@@ -484,3 +484,19 @@ impl Notice {
         true
     }
 }
+
+/// The round "play" mark over a video's picture: a dark disc with a soft
+/// rim and a filled, slightly rounded triangle (set a bit right of the
+/// middle, where the eye puts its centre).
+pub fn play_badge(p: &egui::Painter, c: egui::Pos2, r: f32, alpha: f32) {
+    p.circle_filled(c + vec2(0.0, 1.5), r + 1.0, Color32::from_black_alpha((60.0 * alpha) as u8));
+    p.circle_filled(c, r, Color32::from_rgba_unmultiplied(14, 14, 13, (185.0 * alpha) as u8));
+    p.circle_stroke(c, r, Stroke::new(1.0, Color32::from_white_alpha((34.0 * alpha) as u8)));
+    let s = r * 0.42;
+    let o = c + vec2(s * 0.18, 0.0);
+    let tri = vec![o + vec2(-s * 0.62, -s * 0.8), o + vec2(s * 0.85, 0.0), o + vec2(-s * 0.62, s * 0.8)];
+    let white = Color32::from_rgba_unmultiplied(240, 238, 232, (255.0 * alpha) as u8);
+    // the stroke in the same color rounds the corners off a little
+    p.add(egui::Shape::convex_polygon(tri.clone(), white, Stroke::NONE));
+    p.add(egui::Shape::closed_line(tri, Stroke::new(r * 0.12, white)));
+}

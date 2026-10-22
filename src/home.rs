@@ -93,11 +93,12 @@ pub fn run(shared: &Arc<Shared>, tab: HomeTab) {
             replay_min,
             upload_mode: None,
             sharex: None,
+            nvidia: win::nvidia_overlay(),
+            nvidia_open: false,
             notes: None,
             all_notes: None,
             changelog_open: false,
             mics: None,
-            ffmpeg_dl: None,
             shown: None,
             page_at: 0.0,
         }
@@ -226,6 +227,10 @@ struct HomeApp {
     upload_mode: Option<UploadMode>,
     /// ShareX settings on this computer (looked up once).
     sharex: Option<Option<crate::sharex::Source>>,
+    /// The NVIDIA overlay is installed (looked up once).
+    nvidia: bool,
+    /// The steps to quiet it are open (in "system").
+    nvidia_open: bool,
     /// This version's notes, read once.
     notes: Option<Vec<Note>>,
     /// Every version's notes, for the changelog.
@@ -234,8 +239,6 @@ struct HomeApp {
     changelog_open: bool,
     /// The microphones there are (read when the page opens).
     mics: Option<Vec<(String, String)>>,
-    /// ffmpeg being downloaded.
-    ffmpeg_dl: Option<Arc<crate::ffmpeg::Download>>,
     /// Page currently on screen and when it started appearing.
     shown: Option<HomeTab>,
     page_at: f64,
@@ -423,6 +426,7 @@ impl HomeApp {
                     ui.set_max_width(600.0f32.min(ui.available_width()));
                     ui.spacing_mut().item_spacing.y = 0.0;
                     ui.add_space((1.0 - t) * 14.0);
+                    self.nvidia_note(ui);
                     match self.tab {
                         HomeTab::Capture => self.capture_page(ui),
                         HomeTab::Record => self.record_page(ui),
@@ -438,6 +442,48 @@ impl HomeApp {
             });
         });
         self.apply_config(before);
+    }
+
+    /// Once, with the NVIDIA overlay installed: why "Press Alt+Z to open
+    /// NVIDIA Overlay" pops up with blinker, and the way to the steps.
+    fn nvidia_note(&mut self, ui: &mut egui::Ui) {
+        if !self.nvidia || self.cfg.nvidia_tip_seen {
+            return;
+        }
+        let mut go = false;
+        let mut done = false;
+        egui::Frame::new()
+            .fill(PANEL)
+            .stroke(Stroke::new(1.0, ACCENT.gamma_multiply(0.45)))
+            .corner_radius(10)
+            .inner_margin(egui::Margin::symmetric(16, 12))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(egui::RichText::new(l("видишь «press alt+z to open nvidia overlay»?", "seeing “press alt+z to open nvidia overlay”?")).font(font_semibold(13.5)).color(TEXT));
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(l(
+                        "это оверлей nvidia: он считает игрой всё, что рисует через видеокарту и не стоит в его списке. discord и браузеры nvidia вписала туда сама, а программа вписаться не может. надпись выключается в настройках оверлея за 10 секунд",
+                        "that's the nvidia overlay: it takes for a game anything drawn on the graphics card that isn't on its list. nvidia put discord and browsers there itself; an app can't. the note is turned off in the overlay's settings in 10 seconds",
+                    ))
+                    .font(font(12.5))
+                    .color(DIM),
+                );
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    go = ui::button(ui, l("как убрать", "how to"), ui::Kind::Accent).clicked();
+                    done = ui::button(ui, l("понятно", "got it"), ui::Kind::Ghost).clicked();
+                });
+            });
+        ui.add_space(14.0);
+        if go {
+            self.tab = HomeTab::System;
+            self.nvidia_open = true;
+        }
+        if go || done {
+            self.cfg.nvidia_tip_seen = true;
+        }
     }
 
     fn page_title(ui: &mut egui::Ui, title: &str, sub: &str) {
@@ -599,41 +645,21 @@ impl HomeApp {
             });
         });
 
+        ui::group(ui, l("плашка записи", "recording pill"), |ui| {
+            ui.add_space(10.0);
+            ui.columns(2, |cols| {
+                let (left, right) = cols.split_at_mut(1);
+                pill_column(&mut left[0], l("область или окно", "an area or a window"), &mut self.cfg.rec_pill, false);
+                pill_column(&mut right[0], l("весь экран", "the whole screen"), &mut self.cfg.rec_pill_screen, true);
+            });
+            ui.add_space(8.0);
+        });
+
         ui::group(ui, l("после остановки", "after stopping"), |ui| {
             ui::setting_row(ui, t("открывать редактор"), "", |ui| {
                 ui::toggle(ui, &mut self.cfg.rec_open_editor);
             });
         });
-
-        ui::group(ui, t("для telegram"), |ui| {
-            ui::setting_row(ui, t("режим"), self.cfg.tg_mode.desc(), |ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                for m in config::TgMode::ALL.into_iter().rev() {
-                    if ui::filter(ui, m.label(), self.cfg.tg_mode == m).clicked() {
-                        self.cfg.tg_mode = m;
-                    }
-                }
-            });
-            if crate::ffmpeg::find().is_some() {
-                ui::setting_row(ui, t("чем сжимается"), &crate::reencode::engine_label(self.cfg.tg_mode), |_| {});
-            } else {
-                // without ffmpeg it still works, with it the file comes out better
-                let desc = l(
-                    "сейчас встроенным кодировщиком. с ffmpeg видео сжимается лучше и быстрее",
-                    "the built-in encoder for now. with ffmpeg videos come out better and faster",
-                );
-                self.ffmpeg_row(ui, t("чем сжимается"), desc);
-            }
-            ui::setting_row(
-                ui,
-                t("сжимать каждую запись"),
-                t("копия ложится в буфер, оригинал остаётся"),
-                |ui| {
-                    ui::toggle(ui, &mut self.cfg.tg_auto);
-                },
-            );
-        });
-
     }
 
     fn replay_page(&mut self, ui: &mut egui::Ui) {
@@ -1123,67 +1149,6 @@ impl HomeApp {
         });
     }
 
-    /// ffmpeg: where it is, or a way to get it (a download in one click).
-    fn ffmpeg_row(&mut self, ui: &mut egui::Ui, title: &str, missing: &str) {
-        let found = crate::ffmpeg::find();
-        if let Some(job) = &self.ffmpeg_dl
-            && let Some(r) = job.result()
-        {
-            self.notice = Some(Notice::new(
-                ui.ctx(),
-                match r {
-                    Ok(_) => l("ffmpeg скачан", "ffmpeg is downloaded").to_string(),
-                    Err(e) => lf!("ffmpeg не скачался: {e}", "ffmpeg didn't download: {e}"),
-                },
-            ));
-            self.ffmpeg_dl = None;
-        }
-        let downloading = self.ffmpeg_dl.as_ref().map(|j| j.fraction());
-        let desc = match (&found, downloading) {
-            (_, Some(f)) => lf!("скачиваю {:.0}%", "downloading {:.0}%", f * 100.0),
-            (Some(p), None) => p.display().to_string(),
-            (None, None) => missing.to_string(),
-        };
-        let mut pick = false;
-        let mut auto = false;
-        let mut get = false;
-        ui::setting_row(ui, title, &desc, |ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            ui.add_enabled_ui(downloading.is_none(), |ui| {
-                if found.is_none() {
-                    get = ui::button(ui, l("скачать", "download"), ui::Kind::Accent).on_hover_text(l("около 20–30 мб, в папку blinker", "about 20–30 mb, into blinker's folder")).clicked();
-                }
-                pick = ui::button(ui, l("папка…", "folder…"), ui::Kind::Ghost).clicked();
-                if !self.cfg.ffmpeg_dir.is_empty() {
-                    auto = ui::button(ui, l("искать само", "find it"), ui::Kind::Ghost).on_hover_text(l("забыть выбранную папку и найти ffmpeg самому", "forget the chosen folder and look for ffmpeg")).clicked();
-                }
-            });
-        });
-        if downloading.is_some() {
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
-        }
-        if get {
-            let ctx = ui.ctx().clone();
-            self.ffmpeg_dl = Some(crate::ffmpeg::download(move || ctx.request_repaint()));
-        }
-        if pick && let Some(d) = rfd::FileDialog::new().set_title(l("папка с ffmpeg", "the ffmpeg folder")).pick_folder() {
-            let exe = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
-            // a "bin" inside is where ffmpeg usually is
-            let dir = if !d.join(exe).is_file() && d.join("bin").join(exe).is_file() { d.join("bin") } else { d };
-            if dir.join(exe).is_file() {
-                self.cfg.ffmpeg_dir = dir.display().to_string();
-            } else {
-                self.notice = Some(Notice::new(ui.ctx(), lf!("в этой папке нет {exe}", "there's no {exe} in this folder")));
-            }
-        }
-        if auto {
-            self.cfg.ffmpeg_dir.clear();
-        }
-        if pick || auto || get {
-            crate::ffmpeg::forget();
-        }
-    }
-
     fn sharex_group(&mut self, ui: &mut egui::Ui, found: Option<crate::sharex::Source>) {
         ui::group(ui, l("переезд с sharex", "moving from sharex"), |ui| {
             let desc = match &found {
@@ -1248,22 +1213,41 @@ impl HomeApp {
                 ui::toggle(ui, &mut self.cfg.autostart);
             });
         });
+        if self.nvidia {
+            ui::group(ui, "nvidia", |ui| {
+                ui::setting_row(
+                    ui,
+                    l("надпись «press alt+z»", "the “press alt+z” note"),
+                    l("оверлей nvidia принимает blinker за игру. убрать её можно только в его настройках", "the nvidia overlay takes blinker for a game. only its own settings can quiet it"),
+                    |ui| {
+                        let label = if self.nvidia_open { l("скрыть", "hide") } else { l("как убрать", "how to") };
+                        if ui::button(ui, label, ui::Kind::Ghost).clicked() {
+                            self.nvidia_open = !self.nvidia_open;
+                        }
+                    },
+                );
+                if self.nvidia_open {
+                    nvidia_steps(ui);
+                }
+            });
+        }
         ui::group(ui, "discord", |ui| {
             ui::setting_row(
                 ui,
                 l("статус в discord", "discord status"),
-                l("логотип blinker и кнопка на blinker.cool, пока blinker запущен; в игре: «clipping dota 2»", "the blinker logo and a blinker.cool button while blinker runs; in a game: “clipping dota 2”"),
+                l("логотип blinker и кнопка на blinker.cool, пока blinker запущен", "the blinker logo and a blinker.cool button while blinker runs"),
                 |ui| {
                     ui::toggle(ui, &mut self.cfg.discord_presence);
                 },
             );
-        });
-        ui::group(ui, "ffmpeg", |ui| {
-            let missing = l(
-                "не найден. blinker работает и без него, а с ним лучше сжимает для telegram",
-                "not found. blinker works without it, with it compressing for telegram is better",
-            );
-            self.ffmpeg_row(ui, l("папка ffmpeg", "ffmpeg folder"), missing);
+            if self.cfg.discord_presence {
+                ui::setting_row(ui, l("показывать игру", "show the game"), l("«clipping dota 2» и значок игры, пока она запущена", "“clipping dota 2” and the game's icon while it runs"), |ui| {
+                    ui::toggle(ui, &mut self.cfg.discord_game);
+                });
+                ui::setting_row(ui, l("показывать статистику", "show the numbers"), l("сколько снимков и клипов за сегодня", "how many screenshots and clips today"), |ui| {
+                    ui::toggle(ui, &mut self.cfg.discord_stats);
+                });
+            }
         });
         ui::group(ui, l("обновления", "updates"), |ui| {
             let newer = self.update.lock().unwrap().clone();
@@ -1334,15 +1318,20 @@ impl HomeApp {
             self.sharex_group(ui, None);
         }
         ui.add_space(18.0);
-        ui.label(
-            egui::RichText::new(format!(
-                "blinker {}\n{}",
-                env!("CARGO_PKG_VERSION"),
-                config::app_dir().join("config.toml").display()
-            ))
-            .font(mono(11.0))
-            .color(FAINT),
-        );
+        ui.label(egui::RichText::new(format!("blinker {}", env!("CARGO_PKG_VERSION"))).font(mono(11.0)).color(FAINT));
+        // the config file: a click shows it in its folder
+        let path = config::app_dir().join("config.toml");
+        let resp = ui.add(egui::Label::new(egui::RichText::new(path.display().to_string()).font(mono(11.0)).color(FAINT)).sense(egui::Sense::click()));
+        if resp.hovered() {
+            ui.painter().hline(resp.rect.x_range(), resp.rect.bottom(), egui::Stroke::new(1.0, FAINT));
+        }
+        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(l("показать в папке", "show in the folder")).clicked() {
+            if path.exists() {
+                win::reveal_in_explorer(&path);
+            } else {
+                win::open_path(&config::app_dir());
+            }
+        }
     }
 
     /// After an update: what the new version brings, once, over the settings.
@@ -1840,4 +1829,143 @@ impl eframe::App for HomeApp {
         }
         ctx.request_repaint_after(std::time::Duration::from_secs(2));
     }
+}
+
+/// One of the pill's two places: a heading, the choice in words, the picker.
+fn pill_column(ui: &mut egui::Ui, title: &str, place: &mut config::PillPlace, whole: bool) {
+    ui.vertical_centered(|ui| {
+        ui.label(egui::RichText::new(title).font(font_medium(13.0)).color(TEXT));
+        ui.add_space(2.0);
+        let words = if whole { place.label_screen() } else { place.label() };
+        ui.label(egui::RichText::new(words).font(font(12.0)).color(DIM));
+        ui.add_space(6.0);
+        pill_picker(ui, place, whole);
+    });
+}
+
+/// A small screen with a taskbar and what's recorded (an area, or all of
+/// it): the pill sits where it will during a recording; a click on another
+/// spot moves it there.
+fn pill_picker(ui: &mut egui::Ui, place: &mut config::PillPlace, whole: bool) {
+    use config::PillPlace;
+    let w = ui.available_width().clamp(200.0, 360.0);
+    let h = (w * 0.62).round();
+    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), h + 8.0), Sense::hover());
+    let screen = Rect::from_center_size(row.center(), vec2(w, h));
+    let p = ui.painter().clone();
+    p.rect_filled(screen, 9, egui::Color32::from_rgb(0x19, 0x19, 0x18));
+    // what is recorded: the whole screen, or an area in it
+    let recorded = if whole { screen.shrink(1.5) } else { Rect::from_min_size(screen.min + vec2(w * 0.24, h * 0.2), vec2(w * 0.42, h * 0.4)) };
+    let edge = if whole { recorded.shrink(2.0) } else { recorded };
+    let dash = egui::Shape::dashed_line(&[edge.left_top(), edge.right_top(), edge.right_bottom(), edge.left_bottom(), edge.left_top()], Stroke::new(1.0, ACCENT.gamma_multiply(0.7)), 5.0, 3.0);
+    p.extend(dash);
+    if !whole {
+        p.rect_stroke(screen, 9, Stroke::new(1.0, LINE), StrokeKind::Inside);
+    }
+    // the taskbar: apps in the middle, the tray and the clock on the right
+    let bar = Rect::from_min_max(pos2(screen.left(), screen.bottom() - 13.0), screen.max);
+    p.rect_filled(bar, egui::CornerRadius { nw: 0, ne: 0, sw: 9, se: 9 }, egui::Color32::from_rgb(0x24, 0x24, 0x22));
+    for i in -2..=2 {
+        p.rect_filled(Rect::from_center_size(pos2(bar.center().x + i as f32 * 10.0, bar.center().y), egui::Vec2::splat(6.0)), 2, egui::Color32::from_rgb(0x46, 0x46, 0x42));
+    }
+    for i in 0..3 {
+        p.circle_filled(pos2(bar.right() - 38.0 + i as f32 * 6.0, bar.center().y), 1.5, FAINT);
+    }
+    p.rect_filled(Rect::from_center_size(pos2(bar.right() - 13.0, bar.center().y), vec2(13.0, 4.0)), 1, FAINT);
+
+    // where each choice puts the pill (spots relative to the little screen,
+    // so scrolling the page doesn't send the pill gliding)
+    // the real pill, about a third of the little screen wide
+    let pw = (w * 0.3).round();
+    let size = vec2(pw, (pw * 40.0 / 170.0).round());
+    let work = Rect::from_min_max(screen.min, pos2(screen.right(), bar.top())).shrink(6.0);
+    let spot = |pl: PillPlace| -> Rect {
+        match pl.anchor() {
+            Some((fx, fy)) => Rect::from_min_size(pos2(work.left() + (work.width() - size.x) * fx, work.top() + (work.height() - size.y) * fy), size),
+            // by the tray
+            None if whole => Rect::from_min_size(work.right_bottom() - size, size),
+            None => Rect::from_center_size(pos2(recorded.center().x, recorded.bottom() + 5.0 + size.y / 2.0), size),
+        }
+    };
+    // recording the whole screen, "auto" already is the bottom right corner
+    let choices: Vec<PillPlace> = PillPlace::ALL.into_iter().filter(|pl| !(whole && *pl == PillPlace::BottomRight)).collect();
+    let words = |pl: PillPlace| if whole { pl.label_screen() } else { pl.label() };
+    let mut hovered = None;
+    for pl in choices {
+        let r = spot(pl);
+        let resp = ui.interact(r.expand(4.0), ui.scope_id().with(("pill-spot", whole, words(pl))), Sense::click());
+        if pl != *place {
+            p.rect_stroke(r, size.y * 0.3, Stroke::new(1.0, if resp.hovered() { DIM } else { LINE }), StrokeKind::Inside);
+        }
+        if resp.hovered() {
+            hovered = Some(r);
+        }
+        if resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(words(pl)).clicked() {
+            *place = pl;
+        }
+    }
+    // the pill glides to the chosen spot; a ghost of it under the pointer
+    let to = spot(*place);
+    let x = ui.ctx().animate_value_with_time(ui.scope_id().with(("pill-x", whole)), to.left() - screen.left(), 0.25);
+    let y = ui.ctx().animate_value_with_time(ui.scope_id().with(("pill-y", whole)), to.top() - screen.top(), 0.25);
+    if let Some(r) = hovered.filter(|r| *r != to) {
+        mini_pill(ui, &p, r, 0.4);
+    }
+    mini_pill(ui, &p, Rect::from_min_size(screen.min + vec2(x, y), size), 1.0);
+}
+
+/// The recording pill as it looks during a recording (drawn by the same
+/// code), at the size of `r`: rasterized for this screen's pixels, kept.
+fn mini_pill(ui: &egui::Ui, p: &egui::Painter, r: Rect, a: f32) {
+    let ppp = ui.ctx().pixels_per_point();
+    let s = r.width() * ppp / 170.0;
+    let key = egui::Id::unique(("mini-pill", (s * 1000.0).round() as i64));
+    let tex = ui.data(|d| d.get_temp::<egui::TextureHandle>(key)).or_else(|| {
+        let look = crate::record::hud::PillLook { secs: 12, paused: false, clock: 0.0, hover: None, glass: false };
+        let pm = crate::record::hud::draw_pill(&look, s)?;
+        let img = theme::pixmap_to_image(&pm);
+        let t = ui.ctx().load_texture("mini-pill", theme::color_image(&img), egui::TextureOptions::LINEAR);
+        ui.data_mut(|d| d.insert_temp(key, t.clone()));
+        Some(t)
+    });
+    match tex {
+        Some(t) => {
+            let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+            p.image(t.id(), r, uv, egui::Color32::WHITE.gamma_multiply(a));
+        }
+        None => {
+            p.rect_filled(r, r.height() / 2.0, egui::Color32::from_rgba_unmultiplied(22, 22, 21, (245.0 * a) as u8));
+        }
+    }
+}
+
+/// How to quiet the NVIDIA overlay's note, step by step.
+fn nvidia_steps(ui: &mut egui::Ui) {
+    let steps = [
+        l("нажми alt+z: откроется оверлей nvidia", "press alt+z: the nvidia overlay opens"),
+        l("справа нажми шестерёнку (настройки оверлея, не nvidia app)", "on the right, click the gear (the overlay's settings, not the nvidia app)"),
+        l("открой «уведомления»", "open “notifications”"),
+        l("выключи уведомление об открытии оверлея", "turn off the note about opening the overlay"),
+    ];
+    egui::Frame::new().inner_margin(egui::Margin { left: 16, right: 16, top: 4, bottom: 14 }).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 8.0;
+        for (i, step) in steps.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
+                ui.painter().circle_filled(r.center(), 10.0, HOVER);
+                ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, (i + 1).to_string(), font_medium(11.5), TEXT);
+                ui.label(egui::RichText::new(*step).font(font(12.5)).color(TEXT));
+            });
+        }
+        ui.add_space(2.0);
+        ui.label(
+            egui::RichText::new(l(
+                "alt+z продолжит работать, пропадёт только надпись. совсем выключить оверлей: nvidia app → настройки → функции → оверлей nvidia",
+                "alt+z keeps working, only the note goes. to turn the overlay off altogether: nvidia app → settings → features → nvidia overlay",
+            ))
+            .font(font(12.0))
+            .color(FAINT),
+        );
+    });
 }

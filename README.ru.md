@@ -123,8 +123,6 @@ blinker.exe picture.png      открыть картинку в редактор
 
 На маке `scripts/macos-app.sh` собирает `target/release/Blinker.app`, `Blinker.dmg` и zip с ним (`UNIVERSAL=1` — для Apple silicon и Intel сразу). Окно dmg раскладывает [dmgbuild](https://github.com/dmgbuild/dmgbuild), скрипт сам ставит его в `target/dmgbuild`; фон рисует `scripts/dmg-background.swift`. Перед первой сборкой один раз запусти `scripts/macos-signing.sh`: он создаёт сертификат подписи в отдельной связке ключей, и все подписанные им сборки сохраняют разрешение на запись экрана (с подписью ad hoc каждую сборку приходится разрешать заново). Сохрани копию `.p12`, путь к которому он выведет: с новым сертификатом всем пользователям придётся разрешать запись снова. Те же флаги работают у файла внутри, `Blinker.app/Contents/MacOS/blinker`. Настройки лежат в `~/Library/Application Support/Blinker/config.toml`, снимки — в `~/Pictures/Blinker`. Оверлей выделения — отдельное окно на каждом дисплее (у каждого дисплея на маке своё пространство); выделение — в пределах одного дисплея.
 
-**Необязательно:** если в `PATH` есть [ffmpeg](https://ffmpeg.org) (на маке подойдёт и из Homebrew), blinker пережимает им видео под Telegram по настроенному рецепту NVENC / x264. Без него это делает встроенный кодировщик: Media Foundation в Windows, VideoToolbox на маке.
-
 ## Загрузка: протокол сервера
 
 Если свой сервер не задан, файлы уходят на [post.blinker.cool](https://post.blinker.cool). Сервер за ним лежит в [`server/`](server/README.ru.md): `docker compose up` поднимает такой же у себя. Подойдёт любой сервер, который понимает такой запрос:

@@ -47,6 +47,10 @@ impl Item {
     pub fn separator() -> Self {
         Self { id: 0, icon: None, label: String::new(), hint: String::new(), children: Vec::new(), tiles: Vec::new() }
     }
+    /// A small heading over a group (not clickable, like a separator).
+    pub fn caption(label: &str) -> Self {
+        Self { label: label.into(), ..Self::separator() }
+    }
     fn is_sep(&self) -> bool {
         self.id == 0
     }
@@ -125,7 +129,9 @@ fn make_level(items: Vec<Item>, anchor: (i32, i32), sub_of: Option<(i32, i32)>, 
     let mut y = pad;
     let mut rows = Vec::new();
     for it in &items {
-        let h = if it.is_sep() {
+        let h = if it.is_sep() && !it.label.is_empty() {
+            px(24.0)
+        } else if it.is_sep() {
             px(9.0)
         } else if it.is_tiles() {
             px(TILE_H + 4.0)
@@ -471,6 +477,12 @@ fn render(li: usize) {
                         let tw = text_width(f, px, &tile.label);
                         draw_text(&mut pm, f, px, cx - tw / 2.0, t + 49.0 * s, &tile.label, if hot { theme::TEXT } else { theme::DIM });
                     }
+                }
+                continue;
+            }
+            if it.is_sep() && !it.label.is_empty() {
+                if let Some(f) = &regular {
+                    draw_text(&mut pm, f, 11.5 * s, pad + 12.0 * s, cy + 3.0 * s, &it.label, theme::FAINT);
                 }
                 continue;
             }

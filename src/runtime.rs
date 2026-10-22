@@ -48,6 +48,8 @@ pub enum Command {
     Record,
     /// Same, recorded straight into a GIF.
     RecordGif,
+    /// Record the whole display under the pointer, no selecting.
+    RecordScreen,
     RecordPause,
     /// Save the instant replay buffer.
     ReplaySave,
@@ -216,17 +218,22 @@ pub fn run_window<A: eframe::App + 'static>(
     run_with(shared, viewport, centered, eframe::Renderer::Glow, make);
 }
 
-/// `run_window` for a window people move around in (settings, history):
-/// drawn with Metal / DirectX, which keep up with 120 Hz screens. OpenGL
-/// stops at 60 on a Mac and judders there; it stays for the windows that
-/// have to open instantly (the capture overlay, the card).
+/// `run_window` for a window people move around in (settings, history).
+/// On a Mac it's drawn with Metal: OpenGL stops at 60 Hz there and judders
+/// on 120 Hz screens. Windows keeps OpenGL, which follows the screen's
+/// rate anyway: a DirectX window makes the NVIDIA overlay take blinker for
+/// a game ("Press Alt+Z to open NVIDIA Overlay" on every open).
 pub fn run_smooth_window<A: eframe::App + 'static>(
     shared: &Arc<Shared>,
     viewport: egui::ViewportBuilder,
     centered: bool,
     make: impl FnOnce(&eframe::CreationContext<'_>) -> A + 'static,
 ) {
-    run_with(shared, viewport, centered, eframe::Renderer::Wgpu, make);
+    #[cfg(target_os = "macos")]
+    let renderer = eframe::Renderer::Wgpu;
+    #[cfg(not(target_os = "macos"))]
+    let renderer = eframe::Renderer::Glow;
+    run_with(shared, viewport, centered, renderer, make);
 }
 
 fn run_with<A: eframe::App + 'static>(

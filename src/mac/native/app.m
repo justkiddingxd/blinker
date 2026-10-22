@@ -915,14 +915,21 @@ void bk_tray_menu(const bk_menu_item *items, int n, bk_menu_cb cb) {
     NSMenu *root = [NSMenu new];
     root.autoenablesItems = NO;
     NSMenu *sub = nil;
-    // the tiles come first, as one row
-    int tiles = 0;
-    while (tiles < n && items[tiles].depth < 0) tiles++;
-    if (tiles > 0) {
-        [root addItem:make_tiles(items, tiles)];
-        [root addItem:NSMenuItem.separatorItem];
+    // first the tiles: rows of them (depth -1), each under its heading (-2)
+    int i = 0;
+    while (i < n && items[i].depth < 0) {
+        if (items[i].depth == -2) {
+            [root addItem:[NSMenuItem sectionHeaderWithTitle:bk_str(items[i].label)]];
+            i++;
+            continue;
+        }
+        int j = i;
+        while (j < n && items[j].depth == -1) j++;
+        [root addItem:make_tiles(items + i, j - i)];
+        i = j;
     }
-    for (int i = tiles; i < n; i++) {
+    if (i > 0) [root addItem:NSMenuItem.separatorItem];
+    for (; i < n; i++) {
         const bk_menu_item *it = &items[i];
         NSMenu *into = it->depth > 0 && sub ? sub : root;
         if (it->id == 0 && !it->submenu) {
