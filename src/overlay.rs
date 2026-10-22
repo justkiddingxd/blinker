@@ -128,6 +128,9 @@ impl OverlayApp {
         let tex = TiledTexture::new(ctx, &name, &snap.image, TextureOptions::NEAREST);
         let c = shared.config().editor_color;
         let primary = title.is_none();
+        let cfg = shared.config();
+        let tour = (!cfg.tour_done && !record && !cfg.instant_mode)
+            .then_some(Tour { step: TourStep::Select, at: f64::NAN, rect: None, shapes: 0 });
         OverlayApp {
             cfg: shared.config(),
             shared: shared.clone(),
@@ -175,6 +178,7 @@ impl OverlayApp {
             active: primary,
             title,
             yield_focus: false,
+            tour,
             palette_open: false,
             glass: None,
         }
@@ -364,8 +368,32 @@ enum Phase {
 }
 
 /// The tools panel: big buttons, the colors folded into one swatch.
-const BAR_BTN: f32 = 42.0;
-const BAR_ICON: f32 = 19.0;
+/// Button and icon size of the panels: smaller next to a small selection,
+/// so the panels don't dwarf it or run into each other.
+const BAR_SIZES: [(f32, f32); 3] = [(42.0, 19.0), (36.0, 17.0), (32.0, 15.0)];
+
+thread_local! {
+    static BAR: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn bar_btn() -> f32 {
+    BAR_SIZES[BAR.with(|b| b.get())].0
+}
+
+fn bar_icon() -> f32 {
+    BAR_SIZES[BAR.with(|b| b.get())].1
+}
+
+/// Panel size step for a selection of `w` × `h` points.
+fn bar_step(w: f32, h: f32) -> usize {
+    if h < 200.0 || w < 320.0 {
+        2
+    } else if h < 340.0 || w < 560.0 {
+        1
+    } else {
+        0
+    }
+}
 
 struct OverlayApp {
     /// macOS 26: a blurred copy of the screenshot the panels are made of,
@@ -435,6 +463,28 @@ struct OverlayApp {
     title: Option<String>,
     /// The work is on another display: the main window leaves the focus there.
     yield_focus: bool,
+    /// The first capture's walkthrough: its step, when the step began, and
+    /// where its bubble was last frame (points).
+    tour: Option<Tour>,
+}
+
+/// Steps of the first capture's walkthrough.
+#[derive(Clone, Copy, PartialEq)]
+enum TourStep {
+    /// Nothing selected yet: how to pick an area.
+    Select,
+    /// The selection is there: the drawing tools.
+    Draw,
+    /// What to do with the shot.
+    Act,
+}
+
+struct Tour {
+    step: TourStep,
+    at: f64,
+    rect: Option<Rect>,
+    /// Shapes drawn when the step began (one more moves the tour on).
+    shapes: usize,
 }
 
 /// Loupe magnification steps (points per screen pixel); 0 = hidden.
@@ -504,6 +554,9 @@ impl OverlayApp {
         if s.width() < 1.0 || s.height() < 1.0 {
             return;
         }
+        if self.tour.is_some() {
+            self.end_tour();
+        }
         self.commit_text();
         let mut image =
             image::imageops::crop_imm(&self.snap.image, s.min.x as u32, s.min.y as u32, s.width() as u32, s.height() as u32)
@@ -553,7 +606,9 @@ impl OverlayApp {
         }
         let p = pointer_pt.map(|p| pos2(p.x * ppp, p.y * ppp));
         let over_toolbar = pointer_pt.is_some_and(|p| {
-            self.toolbar_rect.is_some_and(|r| r.contains(p)) || self.top_rect.is_some_and(|r| r.contains(p))
+            self.toolbar_rect.is_some_and(|r| r.contains(p))
+                || self.top_rect.is_some_and(|r| r.contains(p))
+                || self.tour.as_ref().and_then(|t| t.rect).is_some_and(|r| r.contains(p))
         }) && matches!(self.drag, Drag::None);
 
         // Typing a label: keys go into the text, rendered live exactly as it will look.
@@ -1221,40 +1276,40 @@ impl OverlayApp {
                             let mut act = None;
                             if self.record {
                                 let tip = if self.gif { crate::i18n::t("начать запись gif  enter") } else { crate::i18n::t("начать запись  enter") };
-                                if ui::icon_button_sized(ui, Icon::Record, tip, BAR_BTN, BAR_ICON, false, ui::Kind::Accent).clicked() {
+                                if ui::icon_button_sized(ui, Icon::Record, tip, bar_btn(), bar_icon(), false, ui::Kind::Accent).clicked() {
                                     act = Some(Action::Record);
                                 }
-                                if ui::icon_button_sized(ui, Icon::Close, crate::i18n::t("отмена  esc"), BAR_BTN, BAR_ICON, false, ui::Kind::Ghost).clicked() {
+                                if ui::icon_button_sized(ui, Icon::Close, crate::i18n::t("отмена  esc"), bar_btn(), bar_icon(), false, ui::Kind::Ghost).clicked() {
                                     self.cancel(ctx);
                                 }
                                 return act;
                             }
-                            if ui::icon_button_sized(ui, Icon::Copy, crate::i18n::t("копировать  enter"), BAR_BTN, BAR_ICON, false, ui::Kind::Accent).clicked() {
+                            if ui::icon_button_sized(ui, Icon::Copy, crate::i18n::t("копировать  enter"), bar_btn(), bar_icon(), false, ui::Kind::Accent).clicked() {
                                 act = Some(Action::Copy);
                             }
-                            if ui::icon_button_sized(ui, Icon::Save, &crate::i18n::kb(crate::i18n::t("сохранить  ctrl s")), BAR_BTN, BAR_ICON, false, ui::Kind::Ghost).clicked() {
+                            if ui::icon_button_sized(ui, Icon::Save, &crate::i18n::kb(crate::i18n::t("сохранить  ctrl s")), bar_btn(), bar_icon(), false, ui::Kind::Ghost).clicked() {
                                 act = Some(Action::Save);
                             }
-                            if ui::icon_button_sized(ui, Icon::Edit, crate::i18n::t("править  e"), BAR_BTN, BAR_ICON, false, ui::Kind::Ghost).clicked() {
+                            if ui::icon_button_sized(ui, Icon::Edit, crate::i18n::t("править  e"), bar_btn(), bar_icon(), false, ui::Kind::Ghost).clicked() {
                                 act = Some(Action::Edit);
                             }
-                            if ui::icon_button_sized(ui, Icon::Pin, crate::i18n::t("закрепить поверх окон  p"), BAR_BTN, BAR_ICON, false, ui::Kind::Ghost).clicked() {
+                            if ui::icon_button_sized(ui, Icon::Pin, crate::i18n::t("закрепить поверх окон  p"), bar_btn(), bar_icon(), false, ui::Kind::Ghost).clicked() {
                                 act = Some(Action::Pin);
                             }
-                            if ui::icon_button_sized(ui, Icon::Frame, crate::i18n::t("красивый снимок  b"), BAR_BTN, BAR_ICON, false, ui::Kind::Ghost)
+                            if ui::icon_button_sized(ui, Icon::Frame, crate::i18n::t("красивый снимок  b"), bar_btn(), bar_icon(), false, ui::Kind::Ghost)
                                 .clicked()
                             {
                                 act = Some(Action::Beauty);
                             }
                             if crate::upload::configured(&self.cfg)
-                                && ui::icon_button_sized(ui, Icon::Upload, crate::i18n::t("загрузить и скопировать ссылку  u"), BAR_BTN, BAR_ICON, false, ui::Kind::Ghost)
+                                && ui::icon_button_sized(ui, Icon::Upload, crate::i18n::t("загрузить и скопировать ссылку  u"), bar_btn(), bar_icon(), false, ui::Kind::Ghost)
                                     .clicked()
                             {
                                 act = Some(Action::Upload);
                             }
-                            let (sep, _) = ui.allocate_exact_size(vec2(BAR_BTN, 5.0), egui::Sense::hover());
+                            let (sep, _) = ui.allocate_exact_size(vec2(bar_btn(), 5.0), egui::Sense::hover());
                             ui.painter().hline(sep.shrink2(vec2(4.0, 0.0)).x_range(), sep.center().y, Stroke::new(1.0, LINE));
-                            if ui::icon_button_sized(ui, Icon::Close, crate::i18n::t("отмена  esc"), BAR_BTN, BAR_ICON, false, ui::Kind::Ghost).clicked() {
+                            if ui::icon_button_sized(ui, Icon::Close, crate::i18n::t("отмена  esc"), bar_btn(), bar_icon(), false, ui::Kind::Ghost).clicked() {
                                 self.cancel(ctx);
                             }
                             act
@@ -1358,6 +1413,15 @@ impl OverlayApp {
         let ppp = ctx.pixels_per_point();
         self.handle_input(&ctx, ppp, now);
         self.paint(&ctx, ppp, now);
+        if matches!(self.drag, Drag::None) {
+            let step = self.sel.filter(|_| self.phase == Phase::Adjusting).map_or(0, |s| bar_step(s.width() / ppp, s.height() / ppp));
+            if BAR.with(|b| b.replace(step)) != step {
+                // the panels change size: measure them afresh
+                self.top_rect = None;
+                self.toolbar_rect = None;
+                ctx.request_repaint();
+            }
+        }
         if self.active {
             self.tools_bar(&ctx);
         }
@@ -1371,6 +1435,9 @@ impl OverlayApp {
             self.toolbar(&ctx, ppp, now);
         } else {
             self.toolbar_rect = None;
+        }
+        if self.active && self.tour.is_some() {
+            self.tour(&ctx, now);
         }
         if let Phase::Closing { at } = self.phase
             && now - at >= CLOSE
@@ -1387,6 +1454,201 @@ impl OverlayApp {
             ctx.request_repaint();
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// The first capture's walkthrough: a bubble per step, next to what it explains
+
+impl OverlayApp {
+    fn end_tour(&mut self) {
+        self.tour = None;
+        if self.demo.is_none() {
+            self.shared.update_config(|c| c.tour_done = true);
+        }
+    }
+
+    fn tour(&mut self, ctx: &egui::Context, now: f64) {
+        let Some(mut tour) = self.tour.take() else { return };
+        if tour.at.is_nan() {
+            tour.at = now;
+        }
+        // the step follows what the user does
+        let want = match (self.phase, tour.step) {
+            (Phase::Selecting, _) => TourStep::Select,
+            (Phase::Adjusting, TourStep::Select) => TourStep::Draw,
+            (_, s) => s,
+        };
+        let drew = tour.step == TourStep::Draw && self.shapes.len() > tour.shapes && matches!(self.drag, Drag::None);
+        let want = if drew { TourStep::Act } else { want };
+        if want != tour.step {
+            tour = Tour { step: want, at: now, rect: None, shapes: self.shapes.len() };
+        }
+        if matches!(self.phase, Phase::Finishing { .. } | Phase::Closing { .. }) || !matches!(self.drag, Drag::None) && tour.step == TourStep::Select {
+            // out of the way while the area is being dragged out
+            tour.rect = None;
+            self.tour = Some(tour);
+            return;
+        }
+        let ctrl = |s: &str| crate::i18n::kb(s).into_owned();
+        let l = crate::i18n::l;
+        let (title, lines, anchor): (&str, Vec<(String, &str)>, Option<Rect>) = match tour.step {
+            TourStep::Select => (
+                l("выдели, что снять", "select what to capture"),
+                vec![
+                    (l("тяни", "drag").into(), l("область", "an area")),
+                    (l("клик", "click").into(), l("окно под курсором", "the window under the cursor")),
+                    (l("пробел", "space").into(), l("весь экран", "the whole screen")),
+                    ("esc".into(), l("отмена", "cancel")),
+                ],
+                None,
+            ),
+            TourStep::Draw => (
+                l("рисуй прямо на снимке", "draw right on the shot"),
+                vec![
+                    ("1 – 9".into(), l("стрелки, шаги, размытие…", "arrows, steps, blur…")),
+                    (ctrl("ctrl z"), l("отменить", "undo")),
+                    (l("края", "edges").into(), l("тяни, чтобы поправить рамку", "drag to adjust the frame")),
+                ],
+                self.top_rect,
+            ),
+            TourStep::Act => (
+                l("что сделать со снимком", "what to do with the shot"),
+                vec![
+                    (ctrl("ctrl c"), l("копировать", "copy")),
+                    (ctrl("ctrl s"), l("сохранить", "save")),
+                    ("e".into(), l("открыть в редакторе", "open in the editor")),
+                    ("p".into(), l("закрепить поверх окон", "pin on top")),
+                ],
+                self.toolbar_rect,
+            ),
+        };
+        let index = tour.step as usize;
+        let last = tour.step == TourStep::Act;
+        let size = tour.rect.map(|r| r.size()).unwrap_or(vec2(290.0, 170.0));
+        // where the bubble goes: the screen's top middle, or beside the panel it explains
+        let Some(mon) = self.bar_mon else {
+            self.tour = Some(tour);
+            return;
+        };
+        let room = mon.shrink(12.0);
+        let mut side = None;
+        let pos = match anchor {
+            None => pos2(mon.center().x - size.x / 2.0, self.top_rect.map_or(mon.top() + 80.0, |r| r.bottom() + 14.0)),
+            Some(a) if tour.step == TourStep::Draw => {
+                // under the panel; else beside it; over it (on the picture) last
+                let mid_y = (a.center().y - size.y / 2.0).clamp(room.top(), (room.bottom() - size.y).max(room.top()));
+                if a.bottom() + 14.0 + size.y <= room.bottom() {
+                    side = Some((a.center_bottom(), vec2(0.0, -1.0)));
+                    pos2(a.center().x - size.x / 2.0, a.bottom() + 14.0)
+                } else if a.right() + 14.0 + size.x <= room.right() {
+                    side = Some((a.right_center(), vec2(-1.0, 0.0)));
+                    pos2(a.right() + 14.0, mid_y)
+                } else if a.left() - 14.0 - size.x >= room.left() {
+                    side = Some((a.left_center(), vec2(1.0, 0.0)));
+                    pos2(a.left() - 14.0 - size.x, mid_y)
+                } else {
+                    side = Some((a.center_top(), vec2(0.0, 1.0)));
+                    pos2(a.center().x - size.x / 2.0, a.top() - 14.0 - size.y)
+                }
+            }
+            Some(a) => {
+                // beside the actions bar, away from the selection when there's room
+                if a.right() + 14.0 + size.x <= room.right() {
+                    side = Some((a.right_center(), vec2(-1.0, 0.0)));
+                    pos2(a.right() + 14.0, a.center().y - size.y / 2.0)
+                } else {
+                    side = Some((a.left_center(), vec2(1.0, 0.0)));
+                    pos2(a.left() - 14.0 - size.x, a.center().y - size.y / 2.0)
+                }
+            }
+        };
+        let pos = pos2(pos.x.clamp(room.left(), (room.right() - size.x).max(room.left())), pos.y.clamp(room.top(), (room.bottom() - size.y).max(room.top())));
+        let t = ui::ease_out_cubic(((now - tour.at - 0.15) / 0.3) as f32);
+        if t < 1.0 {
+            ctx.request_repaint();
+        }
+        let slide = side.map_or(vec2(0.0, -8.0), |(_, d)| d * 8.0) * (1.0 - t);
+        let mut next = false;
+        let mut skip = false;
+        let resp = egui::Area::new(Id::unique("tour"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos + slide)
+            .show(ctx, |ui| {
+                ui.set_opacity(t);
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .stroke(Stroke::new(1.0, ACCENT.gamma_multiply(0.55)))
+                    .corner_radius(12)
+                    .shadow(egui::epaint::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(110) })
+                    .inner_margin(egui::Margin::symmetric(16, 14))
+                    .show(ui, |ui| {
+                        ui.set_width(268.0);
+                        ui.spacing_mut().item_spacing.y = 6.0;
+                        ui.label(egui::RichText::new(title).font(font_semibold(15.0)).color(TEXT));
+                        ui.add_space(2.0);
+                        for (key, what) in &lines {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 8.0;
+                                keycap(ui, key);
+                                ui.label(egui::RichText::new(*what).font(font(12.5)).color(DIM));
+                            });
+                        }
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            // where we are: three dots
+                            let (r, _) = ui.allocate_exact_size(vec2(34.0, 20.0), egui::Sense::hover());
+                            for i in 0..3 {
+                                let c = pos2(r.left() + 4.0 + i as f32 * 12.0, r.center().y);
+                                let on = i == index;
+                                ui.painter().circle_filled(c, if on { 3.5 } else { 2.5 }, if on { ACCENT } else { LINE });
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if tour.step != TourStep::Select {
+                                    let label = if last { l("понятно", "got it") } else { l("дальше", "next") };
+                                    next = ui::button_h(ui, label, ui::Kind::Accent, 28.0).clicked();
+                                }
+                                if !last {
+                                    skip = ui::button_h(ui, l("пропустить", "skip"), ui::Kind::Ghost, 28.0).clicked();
+                                }
+                            });
+                        });
+                    });
+            });
+        let rect = resp.response.rect;
+        // a small arrow from the bubble towards what it explains
+        if let Some((target, dir)) = side {
+            let edge = rect.center() - dir * vec2(rect.width() / 2.0, rect.height() / 2.0);
+            let tip_at = pos2(
+                if dir.x == 0.0 { target.x.clamp(rect.left() + 18.0, rect.right() - 18.0) } else { edge.x },
+                if dir.y == 0.0 { target.y.clamp(rect.top() + 18.0, rect.bottom() - 18.0) } else { edge.y },
+            );
+            let n = -dir;
+            let perp = vec2(-n.y, n.x);
+            let tri = vec![tip_at + n * 7.0, tip_at + perp * 7.0 - n * 0.5, tip_at - perp * 7.0 - n * 0.5];
+            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("tour-arrow")));
+            painter.add(egui::Shape::convex_polygon(tri.clone(), PANEL.gamma_multiply(t), Stroke::NONE));
+            painter.line(vec![tri[1], tri[0], tri[2]], Stroke::new(1.0, ACCENT.gamma_multiply(0.55 * t)));
+        }
+        tour.rect = Some(rect);
+        if skip || (next && last) {
+            self.end_tour();
+            return;
+        }
+        if next {
+            tour = Tour { step: TourStep::Act, at: now, rect: None, shapes: self.shapes.len() };
+        }
+        self.tour = Some(tour);
+    }
+}
+
+/// A key name on a little plate, as on a keyboard.
+fn keycap(ui: &mut egui::Ui, key: &str) {
+    let g = ui.painter().layout_no_wrap(key.to_string(), mono(11.5), TEXT);
+    let w = (g.size().x + 12.0).max(52.0);
+    let (r, _) = ui.allocate_exact_size(vec2(w, 20.0), egui::Sense::hover());
+    ui.painter().rect_filled(r, 5, HOVER);
+    ui.painter().rect_stroke(r, 5, Stroke::new(1.0, LINE), StrokeKind::Inside);
+    ui.painter().galley(r.center() - g.size() / 2.0, g, TEXT);
 }
 
 /// Closes the overlay: the main window, and with it every display's window.
@@ -1573,7 +1835,8 @@ impl OverlayApp {
                     crate::config::ToolsPos::Below | crate::config::ToolsPos::Above => {
                         let order = if mode == crate::config::ToolsPos::Below { [below, above] } else { [above, below] };
                         let y = order.into_iter().find(|y| fits(*y)).unwrap_or(r.bottom() - size.y - gap);
-                        pos2(x, y.clamp(m.top(), (m.bottom() - size.y).max(m.top())))
+                        let at = pos2(x, y.clamp(m.top(), (m.bottom() - size.y).max(m.top())));
+                        self.clear_of_actions(at, size, m)
                     }
                     _ => {
                         let right = r.right() + gap;
@@ -1626,7 +1889,7 @@ impl OverlayApp {
                                 return;
                             }
                             for (tool, icon, tip, _) in TOOLS {
-                                if ui::icon_button_sized(ui, icon, crate::i18n::t(tip), BAR_BTN, BAR_ICON, self.tool == tool, ui::Kind::Ghost).clicked() {
+                                if ui::icon_button_sized(ui, icon, crate::i18n::t(tip), bar_btn(), bar_icon(), self.tool == tool, ui::Kind::Ghost).clicked() {
                                     self.commit_text();
                                     self.tool = tool;
                                 }
@@ -1638,7 +1901,7 @@ impl OverlayApp {
                             self.palette(ui);
                             bar_sep(ui);
                             ui.add_enabled_ui(!self.shapes.is_empty(), |ui| {
-                                if ui::icon_button_sized(ui, Icon::Undo, &crate::i18n::kb(crate::i18n::t("отменить  ctrl z")), BAR_BTN, BAR_ICON, false, ui::Kind::Ghost).clicked() {
+                                if ui::icon_button_sized(ui, Icon::Undo, &crate::i18n::kb(crate::i18n::t("отменить  ctrl z")), bar_btn(), bar_icon(), false, ui::Kind::Ghost).clicked() {
                                     self.shapes.pop();
                                 }
                             });
@@ -1683,7 +1946,7 @@ impl OverlayApp {
         if !self.palette_open {
             let name = crate::editor::PALETTE.iter().find(|(c, _)| *c == self.color).map(|(_, n)| crate::i18n::t(n)).unwrap_or("");
             let tip = lf!("цвет: {name}", "color: {name}");
-            if swatch(ui, self.color, BAR_BTN).on_hover_text(tip).clicked() {
+            if swatch(ui, self.color, bar_btn()).on_hover_text(tip).clicked() {
                 self.palette_open = true;
             }
             return;
@@ -1698,12 +1961,35 @@ impl OverlayApp {
         }
     }
 
+    /// Moves the tools panel at `at` so it doesn't run into the actions bar:
+    /// sideways first (it stays by the selection), past the bar's end last.
+    fn clear_of_actions(&self, at: Pos2, size: Vec2, m: Rect) -> Pos2 {
+        let Some(a) = self.toolbar_rect else { return at };
+        let gap = 8.0;
+        if !Rect::from_min_size(at, size).expand(gap / 2.0).intersects(a) {
+            return at;
+        }
+        let left = a.left() - gap - size.x;
+        if left >= m.left() {
+            return pos2(left, at.y);
+        }
+        if a.right() + gap + size.x <= m.right() {
+            return pos2(a.right() + gap, at.y);
+        }
+        let below = a.bottom() + gap;
+        if below + size.y <= m.bottom() {
+            pos2(at.x, below)
+        } else {
+            pos2(at.x, (a.top() - gap - size.y).max(m.top()))
+        }
+    }
+
     /// The tools panel laid out vertically (right of the selection).
     fn tools_column(&mut self, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
             for (tool, icon, tip, _) in TOOLS {
-                if ui::icon_button_sized(ui, icon, crate::i18n::t(tip), BAR_BTN, BAR_ICON, self.tool == tool, ui::Kind::Ghost).clicked() {
+                if ui::icon_button_sized(ui, icon, crate::i18n::t(tip), bar_btn(), bar_icon(), self.tool == tool, ui::Kind::Ghost).clicked() {
                     self.commit_text();
                     self.tool = tool;
                 }
@@ -1726,7 +2012,7 @@ impl OverlayApp {
             }
             bar_sep_h(ui);
             ui.add_enabled_ui(!self.shapes.is_empty(), |ui| {
-                if ui::icon_button_sized(ui, Icon::Undo, &crate::i18n::kb(crate::i18n::t("отменить  ctrl z")), BAR_BTN, BAR_ICON, false, ui::Kind::Ghost).clicked() {
+                if ui::icon_button_sized(ui, Icon::Undo, &crate::i18n::kb(crate::i18n::t("отменить  ctrl z")), bar_btn(), bar_icon(), false, ui::Kind::Ghost).clicked() {
                     self.shapes.pop();
                 }
             });
@@ -1735,7 +2021,7 @@ impl OverlayApp {
 
     /// Top bar in record mode: what goes into the video.
     fn record_bar(&mut self, ui: &mut egui::Ui) {
-        let (r, resp) = ui.allocate_exact_size(vec2(28.0, BAR_BTN), egui::Sense::hover());
+        let (r, resp) = ui.allocate_exact_size(vec2(28.0, bar_btn()), egui::Sense::hover());
         resp.on_hover_text(crate::i18n::t("тяни область, кликни окно или нажми пробел для всего экрана"));
         ui.painter().circle_filled(pos2(r.left() + 14.0, r.center().y), 4.5, DANGER);
         if ui::filter(ui, crate::i18n::t("видео"), !self.gif).clicked() {
@@ -1748,7 +2034,7 @@ impl OverlayApp {
         if self.gif {
             // a GIF has no sound; only its size and the effects matter
             let clicks = self.cfg.rec_show_clicks;
-            if ui::icon_button_sized(ui, Icon::Select, crate::i18n::t("показывать клики в записи"), BAR_BTN, BAR_ICON, clicks, ui::Kind::Ghost).clicked() {
+            if ui::icon_button_sized(ui, Icon::Select, crate::i18n::t("показывать клики в записи"), bar_btn(), bar_icon(), clicks, ui::Kind::Ghost).clicked() {
                 self.cfg.rec_show_clicks = !clicks;
                 self.shared.update_config(|c| c.rec_show_clicks = !clicks);
             }
@@ -1757,25 +2043,25 @@ impl OverlayApp {
         }
         let desk = self.cfg.rec_desktop_audio;
         let tip = if desk { crate::i18n::t("звук системы пишется") } else { crate::i18n::t("звук системы выключен") };
-        if ui::icon_button_sized(ui, if desk { Icon::Sound } else { Icon::Mute }, tip, BAR_BTN, BAR_ICON, desk, ui::Kind::Ghost).clicked() {
+        if ui::icon_button_sized(ui, if desk { Icon::Sound } else { Icon::Mute }, tip, bar_btn(), bar_icon(), desk, ui::Kind::Ghost).clicked() {
             self.cfg.rec_desktop_audio = !desk;
             self.shared.update_config(|c| c.rec_desktop_audio = !desk);
         }
         let mic = self.cfg.rec_mic;
         let tip = if mic { crate::i18n::t("микрофон пишется") } else { crate::i18n::t("микрофон выключен") };
-        if ui::icon_button_sized(ui, if mic { Icon::Mic } else { Icon::MicOff }, tip, BAR_BTN, BAR_ICON, mic, ui::Kind::Ghost).clicked() {
+        if ui::icon_button_sized(ui, if mic { Icon::Mic } else { Icon::MicOff }, tip, bar_btn(), bar_icon(), mic, ui::Kind::Ghost).clicked() {
             self.cfg.rec_mic = !mic;
             self.shared.update_config(|c| c.rec_mic = !mic);
         }
         let clicks = self.cfg.rec_show_clicks;
         let tip = if clicks { crate::i18n::t("клики видны в записи") } else { crate::i18n::t("показывать клики в записи") };
-        if ui::icon_button_sized(ui, Icon::Select, tip, BAR_BTN, BAR_ICON, clicks, ui::Kind::Ghost).clicked() {
+        if ui::icon_button_sized(ui, Icon::Select, tip, bar_btn(), bar_icon(), clicks, ui::Kind::Ghost).clicked() {
             self.cfg.rec_show_clicks = !clicks;
             self.shared.update_config(|c| c.rec_show_clicks = !clicks);
         }
         let keys = self.cfg.rec_show_keys;
         let tip = if keys { crate::i18n::t("сочетания клавиш видны в записи") } else { &crate::i18n::kb(crate::i18n::t("показывать сочетания клавиш (ctrl + c…)")) };
-        if ui::icon_button_sized(ui, Icon::Keys, tip, BAR_BTN, BAR_ICON, keys, ui::Kind::Ghost).clicked() {
+        if ui::icon_button_sized(ui, Icon::Keys, tip, bar_btn(), bar_icon(), keys, ui::Kind::Ghost).clicked() {
             self.cfg.rec_show_keys = !keys;
             self.shared.update_config(|c| c.rec_show_keys = !keys);
         }
@@ -1896,13 +2182,13 @@ fn curve_control(a: Pos2, b: Pos2, path: &[Pos2]) -> Pos2 {
 }
 
 fn bar_sep_h(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(BAR_BTN, 7.0), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(bar_btn(), 7.0), egui::Sense::hover());
     ui.painter().hline(rect.shrink2(vec2(8.0, 0.0)).x_range(), rect.center().y, Stroke::new(1.0, LINE));
 }
 
 /// Color chip for the vertical panel (two per row).
 fn color_chip_small(ui: &mut egui::Ui, c: eframe::egui::Color32, selected: bool) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(BAR_BTN / 2.0, 24.0), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(bar_btn() / 2.0, 24.0), egui::Sense::click());
     let p = ui.painter();
     if resp.hovered() {
         p.rect_filled(rect, 3, HOVER);
@@ -1919,7 +2205,7 @@ fn color_chip_small(ui: &mut egui::Ui, c: eframe::egui::Color32, selected: bool)
 }
 
 fn bar_sep(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(9.0, BAR_BTN), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(9.0, bar_btn()), egui::Sense::hover());
     ui.painter().vline(rect.center().x, rect.shrink2(vec2(0.0, 11.0)).y_range(), Stroke::new(1.0, LINE));
 }
 
@@ -1937,7 +2223,7 @@ fn swatch(ui: &mut egui::Ui, c: eframe::egui::Color32, size: f32) -> egui::Respo
 }
 
 fn color_chip(ui: &mut egui::Ui, c: eframe::egui::Color32, selected: bool) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(30.0, BAR_BTN), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(30.0, bar_btn()), egui::Sense::click());
     let p = ui.painter();
     if resp.hovered() {
         p.rect_filled(rect.shrink2(vec2(0.0, 7.0)), 4, HOVER);

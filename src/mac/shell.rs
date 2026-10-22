@@ -47,6 +47,7 @@ pub fn spawn(shared: Arc<Shared>) -> ShellHandle {
     win::listen(&format!("BlinkerShell.{WM_RELOAD_HOTKEYS}"), 2, on_note);
     win::listen(&format!("BlinkerShell.{WM_SUSPEND_HOTKEYS}"), 3, on_note);
     win::listen(&format!("BlinkerShell.{WM_RESTART}"), 4, on_note);
+    win::listen(win::QUIT_TRAY, 5, on_note);
     ShellHandle
 }
 
@@ -151,6 +152,7 @@ extern "C" fn on_note(which: i32) {
         }
         3 => unregister(),
         4 => s.push(Command::Restart),
+        5 => s.push(Command::Quit),
         _ => {}
     }
 }

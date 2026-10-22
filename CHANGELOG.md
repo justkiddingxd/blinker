@@ -2,6 +2,36 @@
 
 Each version's section becomes its release notes on GitHub (`.github/workflows/release.yml` takes the part under `## <version>`).
 
+## 0.3.3
+
+- «Выход» в трее закрывает всё: открытые настройки, историю, редакторы и закреплённые снимки. Раньше они оставались висеть после выхода. Закрыть blinker можно и командой `blinker --quit`.
+- В истории файлы можно переименовать двойным кликом по имени. Enter сохраняет, Esc отменяет.
+- Уведомление отвечает на нажатия: кнопка вдавливается, «копировать» сменяется галочкой, над картинкой появляется плашка с тем, что случилось. Над картинкой рука вместо стрелок «переместить».
+- Сохранённый повтор встречает надпись «Clipped!» над уведомлением.
+- «Уведомление» переехало в раздел «общее»: оно и для снимков, и для записей.
+- Первый снимок проводит по шагам: как выделить, чем рисовать, что сделать со снимком. Повторить можно в «захват → знакомство».
+- Уведомление показывает снимок целиком, а не обрезанный кусок.
+- Панели при выделении меньше рядом с маленькой областью и больше не наезжают друг на друга.
+- Длительность повтора вводится в секундах, рядом видно, сколько это («≈ 5 мин»).
+- Статус в Discord называет игру: «Clipping Dota 2».
+- В настройках страницы прокручиваются под кнопками окна, а не поверх них.
+- post.blinker.cool: файлы больше 25 мб живут сутки, а когда место кончается, первыми удаляются самые старые, и загрузка не отказывает.
+
+---
+
+- "Quit" in the tray closes everything: open settings, history, editors and pinned shots. They used to stay behind. `blinker --quit` does the same.
+- Files can be renamed in the history with a double click on the name. Enter keeps the name, Esc drops it.
+- The card answers clicks: the button presses in, "copy" turns into a tick, a chip over the picture says what happened. The picture shows a hand, not the "move" arrows.
+- A saved replay gets "Clipped!" over its card.
+- "Notification" moved to "general": it is for screenshots and recordings alike.
+- The first capture walks you through: selecting, drawing, what to do with the shot. Again any time from "capture → walkthrough".
+- The card shows the whole capture, not a cropped part.
+- The capture panels shrink next to a small selection and no longer run into each other.
+- The replay length is typed in seconds, with what that makes beside it ("≈ 5 min").
+- The Discord status names the game: "Clipping Dota 2".
+- Settings pages scroll under the window buttons, not over them.
+- post.blinker.cool: files over 25 mb live one day, and a full disk makes room by dropping the oldest files instead of refusing uploads.
+
 ## 0.3.2
 
 **Мак**

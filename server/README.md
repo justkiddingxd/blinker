@@ -2,7 +2,7 @@
 
 [Русский](README.ru.md)
 
-The server behind **post.blinker.cool**: blinker uploads a screenshot or a recording, gets a link, and the link opens a page of its own: an image viewer, or a video / sound player with the markers set in blinker's video editor. Files are deleted after 3 days.
+The server behind **post.blinker.cool**: blinker uploads a screenshot or a recording, gets a link, and the link opens a page of its own: an image viewer, or a video / sound player with the markers set in blinker's video editor. Files are deleted after 3 days (big ones after one); when the disk fills up, the oldest go first.
 
 The same server can run on your own machine, for your team or just for yourself.
 
@@ -56,8 +56,10 @@ DATA_DIR=/var/lib/blinker-post PUBLIC_URL=https://post.your.domain TOKEN=... ./t
 | `PUBLIC_URL` | `http://localhost:8080` | the address links are made with |
 | `TOKEN` | empty | the upload token; empty = anyone can upload |
 | `TTL_HOURS` | `72` | how long a file lives |
+| `BIG_MB` | `25` | files bigger than this… |
+| `BIG_TTL_HOURS` | `24` | …live this long instead |
 | `MAX_MB` | `100` | the largest file |
-| `DISK_LIMIT_GB` | `20` | uploads stop when the files take this much |
+| `DISK_LIMIT_GB` | `20` | past this the oldest files are deleted to make room |
 | `UPLOADS_PER_HOUR` | `120` | per address |
 | `TRUST_PROXY` | `0` | `1`: the client address comes from `X-Real-IP` (behind a proxy) |
 | `BIND` | `0.0.0.0:8080` | |

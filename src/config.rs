@@ -294,6 +294,8 @@ pub struct Config {
     pub show_toast: bool,
     pub magnifier: bool,
     pub tools_pos: ToolsPos,
+    /// The first capture's walkthrough was shown (or skipped).
+    pub tour_done: bool,
     /// Releasing the mouse immediately copies the selection (no toolbar).
     pub instant_mode: bool,
     // Each action can have several key combinations.
@@ -397,6 +399,7 @@ impl Default for Config {
             copy_on_save: true,
             show_toast: true,
             magnifier: true,
+            tour_done: false,
             tools_pos: ToolsPos::Screen,
             instant_mode: false,
             hotkey_region: default_keys(&["PrintScreen"], &["Shift+Cmd+2"]),
@@ -634,7 +637,12 @@ pub fn load() -> Config {
     migrate_dirs();
     let text = std::fs::read_to_string(config_path()).ok();
     let fresh = text.is_none();
+    // people who used blinker before the walkthrough existed know it already
+    let knows = text.as_deref().is_some_and(|t| !t.contains("tour_done"));
     let mut cfg: Config = text.and_then(|s| toml::from_str(&s).ok()).unwrap_or_default();
+    if knows {
+        cfg.tour_done = true;
+    }
     // a new install has nothing new to tell; an update from a version
     // without this field does
     if fresh {

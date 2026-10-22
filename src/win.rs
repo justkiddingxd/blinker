@@ -35,6 +35,42 @@ pub fn init_process() {
         let id = wide("Blinker.App");
         SetCurrentProcessExplicitAppUserModelID(id.as_ptr());
     }
+    // settings, history, editors and pins go away with the tray
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let has = |f: &str| args.iter().any(|a| a == f);
+    let child = ["--pin", "--settings", "--history", "--edit", "--video"].iter().any(|f| has(f))
+        || args.iter().any(|a| !a.starts_with("--") && Path::new(a).is_file());
+    if child {
+        let ev = quit_event();
+        if !ev.is_null() {
+            let ev = ev as isize;
+            std::thread::spawn(move || {
+                if unsafe { WaitForSingleObject(ev as HANDLE, INFINITE) } == WAIT_OBJECT_0 {
+                    std::process::exit(0);
+                }
+            });
+        }
+    }
+}
+
+/// Set when the tray quits: every blinker process waits on it. Manual reset,
+/// so one signal reaches them all.
+const QUIT_EVENT: &str = "Local\\Blinker.Quit";
+
+pub fn quit_event() -> HANDLE {
+    let name = wide(QUIT_EVENT);
+    unsafe { CreateEventW(null(), 1, 0, name.as_ptr()) }
+}
+
+/// Tells every blinker process to quit (the tray included).
+pub fn signal_quit() {
+    let ev = quit_event();
+    if !ev.is_null() {
+        unsafe {
+            SetEvent(ev);
+            CloseHandle(ev);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +281,18 @@ pub fn force_foreground(hwnd: HWND) {
 pub fn no_dwm_border(hwnd: HWND) {
     dwm_set(hwnd, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE);
     dwm_set(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND);
+}
+
+/// No system shadow around the window: it would outline the whole window,
+/// transparent parts included. winit keeps a 1 px frame at the top of a
+/// borderless window to get that shadow; a window region without that row
+/// drops both (DWM draws no shadow for a window with a region).
+pub fn no_shadow(hwnd: HWND) {
+    unsafe {
+        let rgn = windows_sys::Win32::Graphics::Gdi::CreateRectRgn(0, 1, 32767, 32767);
+        // the window owns the region from here on
+        SetWindowRgn(hwnd, rgn, 1);
+    }
 }
 
 /// DWM cloaking: the window exists and renders, but isn't shown yet.

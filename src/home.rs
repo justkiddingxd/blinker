@@ -248,7 +248,6 @@ impl HomeApp {
                         l("снимки", "screenshots"),
                         &[
                             (HomeTab::Capture, Icon::Region, t("захват")),
-                            (HomeTab::Notify, Icon::Bell, t("уведомление")),
                             (HomeTab::Sound, Icon::Sound, t("звук")),
                         ],
                     ),
@@ -259,6 +258,7 @@ impl HomeApp {
                     (
                         l("общее", "general"),
                         &[
+                            (HomeTab::Notify, Icon::Bell, t("уведомление")),
                             (HomeTab::Storage, Icon::Save, t("сохранение")),
                             (HomeTab::Upload, Icon::Upload, t("загрузка")),
                             (HomeTab::Hotkeys, Icon::Keys, t("горячие клавиши")),
@@ -398,9 +398,15 @@ impl HomeApp {
                     .layout(egui::Layout::right_to_left(egui::Align::Center)),
             );
             chrome::window_buttons(&mut buttons);
+            // Windows: the pages scroll below the strip with the window
+            // buttons instead of over them
+            let strip = if cfg!(target_os = "macos") { 0.0 } else { 40.0 };
+            let mut page = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_max(r.min + vec2(0.0, strip), r.max)));
+            let ui = &mut page;
             ui.set_opacity(t);
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                egui::Frame::new().inner_margin(egui::Margin { left: 32, right: 32, top: 26, bottom: 28 }).show(ui, |ui| {
+                let top = if strip > 0.0 { 0 } else { 26 };
+                egui::Frame::new().inner_margin(egui::Margin { left: 32, right: 32, top, bottom: 28 }).show(ui, |ui| {
                     ui.set_max_width(600.0f32.min(ui.available_width()));
                     ui.spacing_mut().item_spacing.y = 0.0;
                     ui.add_space((1.0 - t) * 14.0);
@@ -443,6 +449,16 @@ impl HomeApp {
             });
             ui::setting_row(ui, t("мгновенный режим"), t("копировать без панели кнопок"), |ui| {
                 ui::toggle(ui, &mut self.cfg.instant_mode);
+            });
+            let (sub, label) = if self.cfg.tour_done {
+                (l("подсказки по шагам при следующем снимке", "step-by-step hints on the next capture"), l("показать снова", "show again"))
+            } else {
+                (l("покажется при следующем снимке", "shows on the next capture"), l("не показывать", "don't show"))
+            };
+            ui::setting_row(ui, l("знакомство", "walkthrough"), sub, |ui| {
+                if ui::button(ui, label, ui::Kind::Ghost).clicked() {
+                    self.cfg.tour_done = !self.cfg.tour_done;
+                }
             });
         });
         ui::group(ui, t("лупа"), |ui| {
@@ -623,21 +639,22 @@ impl HomeApp {
                 ui::toggle(ui, &mut self.cfg.replay_enabled);
             });
             if self.cfg.replay_enabled {
-                let max_min = crate::record::replay::MAX_SECS / 60;
-                ui::setting_row(ui, t("сколько хранить"), &lf!("от 1 до {max_min} минут", "1 to {max_min} minutes"), |ui| {
+                let max = crate::record::replay::MAX_SECS;
+                let sub = lf!("от {MIN_REPLAY} до {max} секунд · это {}", "{MIN_REPLAY} to {max} seconds · that's {}", approx_length(self.cfg.replay_secs));
+                ui::setting_row(ui, t("сколько хранить"), &sub, |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    ui.label(egui::RichText::new(l("мин", "min")).font(font(12.5)).color(DIM));
+                    ui.label(egui::RichText::new(l("сек", "sec")).font(font(12.5)).color(DIM));
                     let resp = ui.add(
                         egui::TextEdit::singleline(&mut self.replay_min)
-                            .desired_width(44.0)
+                            .desired_width(52.0)
                             .align(egui::Align2::CENTER_CENTER)
-                            .char_limit(2)
+                            .char_limit(4)
                             .font(mono(12.5)),
                     );
                     if resp.changed()
-                        && let Ok(m) = self.replay_min.trim().parse::<u32>()
+                        && let Ok(s) = self.replay_min.trim().parse::<u32>()
                     {
-                        self.cfg.replay_secs = m.clamp(1, max_min) * 60;
+                        self.cfg.replay_secs = s.clamp(MIN_REPLAY, max);
                     }
                     if !resp.has_focus() {
                         self.replay_min = replay_minutes(self.cfg.replay_secs);
@@ -1190,7 +1207,7 @@ impl HomeApp {
             ui::setting_row(
                 ui,
                 l("статус в discord", "discord status"),
-                l("«clipping with blinker» с логотипом и кнопкой на blinker.cool, пока blinker запущен", "“clipping with blinker” with the logo and a blinker.cool button while blinker runs"),
+                l("логотип blinker и кнопка на blinker.cool, пока blinker запущен; в игре: «clipping dota 2»", "the blinker logo and a blinker.cool button while blinker runs; in a game: “clipping dota 2”"),
                 |ui| {
                     ui::toggle(ui, &mut self.cfg.discord_presence);
                 },
@@ -1544,8 +1561,23 @@ fn plain(s: &str) -> String {
     out.replace("**", "").replace('`', "")
 }
 
+const MIN_REPLAY: u32 = crate::record::replay::MIN_SECS;
+
+/// The replay length as typed: seconds.
 fn replay_minutes(secs: u32) -> String {
-    (secs.div_ceil(60)).max(1).to_string()
+    secs.max(MIN_REPLAY).to_string()
+}
+
+/// "45 sec", "5 min", "≈ 5.5 min": the length the way people say it.
+fn approx_length(secs: u32) -> String {
+    let (m, s) = (secs / 60, secs % 60);
+    match (m, s) {
+        (0, s) => lf!("{s} сек", "{s} sec"),
+        (m, 0) => lf!("{m} мин", "{m} min"),
+        (m, s) if s < 15 => lf!("≈ {m} мин", "≈ {m} min"),
+        (m, s) if s > 45 => lf!("≈ {} мин", "≈ {} min", m + 1),
+        (m, _) => lf!("≈ {m},5 мин", "≈ {m}.5 min"),
+    }
 }
 
 /// An .sxb backup or the ShareX folder, picked by the user.

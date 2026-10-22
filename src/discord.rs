@@ -112,9 +112,11 @@ fn activity(shared: &crate::runtime::Shared) -> serde_json::Value {
         "buttons": [{ "label": "blinker.cool", "url": "https://blinker.cool" }],
     });
     let note = shared.recording_note.lock().unwrap().clone();
+    // a game in front (or running): "Clipping Dota 2"
+    let game = crate::games::running();
     match note {
         Some((start, what)) => {
-            a["details"] = "Recording the screen".into();
+            a["details"] = game.as_ref().map_or("Recording the screen".to_string(), |g| format!("Recording {}", g.name)).into();
             a["state"] = what.into();
             a["timestamps"] = serde_json::json!({ "start": start });
             a["assets"]["small_image"] = "https://blinker.cool/assets/discord-rec.png".into();
@@ -141,6 +143,17 @@ fn activity(shared: &crate::runtime::Shared) -> serde_json::Value {
                     a["state"] = s.into();
                 }
                 (false, None) => a["details"] = tagline.into(),
+            }
+            if let Some(g) = game {
+                if a["state"].is_null() {
+                    a["state"] = a["details"].clone();
+                }
+                a["details"] = format!("Clipping {}", g.name).into();
+                // the game's icon in the corner of blinker's logo
+                if let Some(icon) = g.icon {
+                    a["assets"]["small_image"] = icon.into();
+                    a["assets"]["small_text"] = g.name.into();
+                }
             }
         }
     }

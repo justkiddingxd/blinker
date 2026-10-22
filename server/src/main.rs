@@ -42,6 +42,9 @@ struct Settings {
     /// Links are made with this, e.g. https://post.blinker.cool
     public_url: String,
     ttl: u64,
+    /// Files bigger than `big_bytes` live `big_ttl` instead.
+    big_bytes: u64,
+    big_ttl: u64,
     max_bytes: u64,
     /// The data folder never grows past this.
     disk_limit: u64,
@@ -62,6 +65,8 @@ impl Settings {
             data: PathBuf::from(var("DATA_DIR", "./data")),
             public_url: var("PUBLIC_URL", "http://localhost:8080").trim_end_matches('/').to_string(),
             ttl: num("TTL_HOURS", 72) * 3600,
+            big_bytes: num("BIG_MB", 25) * 1024 * 1024,
+            big_ttl: num("BIG_TTL_HOURS", 24) * 3600,
             max_bytes: num("MAX_MB", 100) * 1024 * 1024,
             disk_limit: num("DISK_LIMIT_GB", 20) * 1024 * 1024 * 1024,
             per_hour: num("UPLOADS_PER_HOUR", 120) as usize,
@@ -108,6 +113,8 @@ struct App {
     recent: Mutex<HashMap<String, Vec<u64>>>,
     /// At most a few uploads are held in memory at once.
     slots: tokio::sync::Semaphore,
+    /// One eviction at a time.
+    evicting: tokio::sync::Mutex<()>,
 }
 
 fn now() -> u64 {
@@ -258,7 +265,7 @@ async fn upload(State(app): State<Arc<App>>, ConnectInfo(addr): ConnectInfo<Sock
         }
         list.push(t);
     }
-    if app.used.load(Ordering::Relaxed) + body.len() as u64 > app.s.disk_limit {
+    if app.used.load(Ordering::Relaxed) + body.len() as u64 > app.s.disk_limit && !make_room(&app, body.len() as u64).await {
         return error(StatusCode::INSUFFICIENT_STORAGE, "the server is full, try again later");
     }
     let Some((kind, mime, ext)) = sniff(&body) else {
@@ -287,7 +294,7 @@ async fn upload(State(app): State<Arc<App>>, ConnectInfo(addr): ConnectInfo<Sock
         ext: ext.into(),
         size: body.len() as u64,
         created,
-        expires: created + app.s.ttl,
+        expires: created + if body.len() as u64 > app.s.big_bytes { app.s.big_ttl } else { app.s.ttl },
         markers,
         delete_token: random_id(24),
         width,
@@ -440,6 +447,43 @@ async fn remove(app: &App, meta: &Meta) {
     app.used.fetch_sub(meta.size.min(app.used.load(Ordering::Relaxed)), Ordering::Relaxed);
 }
 
+/// The disk is full: the oldest files go first until `need` bytes fit.
+/// False if even an empty folder couldn't take it.
+async fn make_room(app: &App, need: u64) -> bool {
+    let _lock = app.evicting.lock().await;
+    let mut used = sweep(app).await;
+    if used + need <= app.s.disk_limit {
+        app.used.store(used, Ordering::Relaxed);
+        return true;
+    }
+    let mut metas = all_meta(app).await;
+    metas.sort_by_key(|m| m.created);
+    for m in metas {
+        if used + need <= app.s.disk_limit {
+            break;
+        }
+        println!("evicted {} ({} bytes) to make room", m.id, m.size);
+        remove(app, &m).await;
+        used = used.saturating_sub(m.size);
+    }
+    app.used.store(used, Ordering::Relaxed);
+    used + need <= app.s.disk_limit
+}
+
+/// Notes of every stored file.
+async fn all_meta(app: &App) -> Vec<Meta> {
+    let mut out = Vec::new();
+    let Ok(mut dir) = tokio::fs::read_dir(&app.s.data).await else { return out };
+    while let Ok(Some(e)) = dir.next_entry().await {
+        if e.file_name().to_string_lossy().ends_with(".json")
+            && let Some(m) = tokio::fs::read(e.path()).await.ok().and_then(|b| serde_json::from_slice::<Meta>(&b).ok())
+        {
+            out.push(m);
+        }
+    }
+    out
+}
+
 /// Deletes expired files (and strays without notes); returns the bytes kept.
 async fn sweep(app: &App) -> u64 {
     let mut kept = 0;
@@ -505,7 +549,13 @@ async fn main() {
     }
     let max = s.max_bytes as usize;
     let bind = s.bind.clone();
-    let app = Arc::new(App { s, used: AtomicU64::new(0), recent: Mutex::new(HashMap::new()), slots: tokio::sync::Semaphore::new(4) });
+    let app = Arc::new(App {
+        s,
+        used: AtomicU64::new(0),
+        recent: Mutex::new(HashMap::new()),
+        slots: tokio::sync::Semaphore::new(4),
+        evicting: tokio::sync::Mutex::new(()),
+    });
     app.used.store(sweep(&app).await, Ordering::Relaxed);
     let a2 = app.clone();
     tokio::spawn(async move {

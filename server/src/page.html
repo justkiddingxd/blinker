@@ -219,7 +219,7 @@ foot.innerHTML = T('сделано в <a href="https://blinker.cool">blinker</a>
 if (!D) {
   document.title = "blinker";
   const g = $("div", "gone");
-  g.innerHTML = icon.gone + `<h1>${T("здесь ничего нет", "nothing here")}</h1><p>${T("файлы на post.blinker.cool живут 3 дня. этот уже удалён или ссылка неверная.", "files on post.blinker.cool live for 3 days. this one is gone, or the link is wrong.")}</p>`;
+  g.innerHTML = icon.gone + `<h1>${T("здесь ничего нет", "nothing here")}</h1><p>${T("файлы на post.blinker.cool живут до 3 дней. этот уже удалён или ссылка неверная.", "files on post.blinker.cool live up to 3 days. this one is gone, or the link is wrong.")}</p>`;
   const a = $("a", "btn primary", T("что такое blinker", "what is blinker")); a.href = "https://blinker.cool";
   g.append(a); main.append(g);
 } else {

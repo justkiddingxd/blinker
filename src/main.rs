@@ -11,6 +11,7 @@ mod demo;
 mod discord;
 mod editor;
 mod ffmpeg;
+mod games;
 mod geom;
 mod history;
 mod home;
@@ -68,6 +69,10 @@ fn main() {
         }
         return;
     }
+    if has("--quit") {
+        win::signal_quit();
+        return;
+    }
     if let Some(dir) = arg_after("--demo") {
         let lang = arg_after(&dir).unwrap_or_default();
         if has("replay") {
@@ -96,7 +101,8 @@ fn main() {
         let (x, y) = win::cursor_pos();
         let Some(mon) = win::monitor_at(&win::monitors(), x, y) else { return };
         let title = crate::i18n::t("скопировано").to_string();
-        toast::run(&shared, Arc::new(img.to_rgba8()), title, Some(PathBuf::from(path)), None, mon, toast::Kind::Image, None, None);
+        let badge = has("--clip").then_some(CLIPPED);
+        toast::run(&shared, Arc::new(img.to_rgba8()), title, Some(PathBuf::from(path)), None, mon, toast::Kind::Image, None, None, badge);
         return;
     }
     if let Some(path) = arg_after("--video") {
@@ -158,6 +164,9 @@ fn main() {
 
     output::wait_pending();
     shell.shutdown();
+    if !restart {
+        win::signal_quit();
+    }
     if restart {
         update::relaunch();
     }
@@ -276,7 +285,7 @@ fn controller(shared: &Arc<Shared>) -> bool {
             }
             Command::ReplaySave => match &replay {
                 Some(r) => match r.save(&shared.config()) {
-                    Ok(f) => show_video_result(shared, f, crate::i18n::t("повтор")),
+                    Ok(f) => show_video_result(shared, f, crate::i18n::t("повтор"), Some(CLIPPED)),
                     Err(e) => win::message_box(crate::i18n::t("повтор не сохранился"), &e),
                 },
                 None => win::message_box(
@@ -380,7 +389,7 @@ fn finish_recording(shared: &Arc<Shared>, rec: record::Recording) {
     if f.gif {
         finish_gif(shared, f);
     } else {
-        show_video_result(shared, f, crate::i18n::t("запись"));
+        show_video_result(shared, f, crate::i18n::t("запись"), None);
     }
 }
 
@@ -432,11 +441,15 @@ fn finish_gif(shared: &Arc<Shared>, f: record::Finished) {
     let thumb = Arc::new(f.thumb.unwrap_or_else(|| RgbaImage::from_pixel(16, 9, image::Rgba([22, 22, 21, 255]))));
     let secs = f.duration.round() as u64;
     let title = format!("gif · {}:{:02}", secs / 60, secs % 60);
-    let _ = toast::run(shared, thumb, title, Some(dst), Some(done), f.monitor, toast::Kind::Gif, None, None);
+    let _ = toast::run(shared, thumb, title, Some(dst), Some(done), f.monitor, toast::Kind::Gif, None, None, None);
 }
 
 /// Toast (or the editor) for a finished recording / saved replay.
-fn show_video_result(shared: &Arc<Shared>, f: record::Finished, what: &str) {
+/// Over the card of a saved instant replay.
+const CLIPPED: &str = "Clipped!";
+
+/// `badge`: a word over the card (a saved replay is "Clipped!").
+fn show_video_result(shared: &Arc<Shared>, f: record::Finished, what: &str, badge: Option<&'static str>) {
     let cfg = shared.config();
     if cfg.rec_open_editor {
         open_video_editor(&f.path);
@@ -452,7 +465,7 @@ fn show_video_result(shared: &Arc<Shared>, f: record::Finished, what: &str) {
     let cfg = shared.config();
     let job = (cfg.upload_auto && upload::configured(&cfg)).then(|| upload::start(&cfg, f.path.clone(), None));
     let tg = cfg.tg_auto.then(|| reencode::start(f.path.clone(), cfg.tg_mode, None, || {}));
-    if toast::run(shared, thumb, title, Some(f.path.clone()), Some(saved), f.monitor, toast::Kind::Video, job, tg)
+    if toast::run(shared, thumb, title, Some(f.path.clone()), Some(saved), f.monitor, toast::Kind::Video, job, tg, badge)
         == toast::ToastResult::Edit
     {
         open_video_editor(&f.path);
@@ -525,6 +538,7 @@ fn deliver(shared: &Arc<Shared>, image: RgbaImage, action: Action, rect: win::IR
             monitor,
             toast::Kind::Image,
             job,
+            None,
             None,
         ) == toast::ToastResult::Edit
     {

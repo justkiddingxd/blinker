@@ -18,7 +18,9 @@ const FPS: f64 = 60.0;
 
 pub fn run(dir: PathBuf, lang: &str, record: bool) {
     let _ = std::fs::create_dir_all(&dir);
-    let cfg = Config { tools_pos: ToolsPos::Below, magnifier: true, sound_enabled: false, ..Config::default() };
+    // `tour`: with the first capture walkthrough (to look at it)
+    let tour_done = !std::env::args().any(|a| a == "tour");
+    let cfg = Config { tools_pos: ToolsPos::Below, magnifier: true, sound_enabled: false, tour_done, ..Config::default() };
     let shared = crate::runtime::Shared::new(cfg);
     crate::i18n::apply(lang);
     // while recording, the chart keeps growing
@@ -265,7 +267,9 @@ fn script() -> Vec<Step> {
     use Step::*;
     use Target::*;
     let click = |v: &mut Vec<Step>| v.extend([Press, Wait(0.08), Release]);
-    let mut v = vec![Wait(0.5), Move(At(262.0, 170.0), 0.7), Wait(0.25), Press, Move(At(916.0, 528.0), 1.0), Release, Wait(0.8)];
+    // `small`: a small selection, to look at the compact panels
+    let end = if std::env::args().any(|a| a == "small") { At(560.0, 300.0) } else { At(916.0, 528.0) };
+    let mut v = vec![Wait(0.5), Move(At(262.0, 170.0), 0.7), Wait(0.25), Press, Move(end, 1.0), Release, Wait(0.8)];
     // arrow at the chart's peak
     v.extend([Move(Tool(1), 0.6), Wait(0.1)]);
     click(&mut v);

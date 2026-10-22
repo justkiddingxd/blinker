@@ -236,6 +236,7 @@ pub fn run(shared: &Arc<Shared>, tab: Tab) {
             confirm: None,
             notice: None,
             content: Rect::NOTHING,
+            renaming: None,
         }
     });
 }
@@ -259,6 +260,9 @@ struct HistoryApp {
     confirm: Option<String>,
     notice: Option<Notice>,
     content: Rect,
+    /// A file being renamed: its path, the name typed so far, and whether the
+    /// field still has to take focus.
+    renaming: Option<(PathBuf, String, bool)>,
 }
 
 fn human_size(b: u64) -> String {
@@ -311,7 +315,56 @@ fn open(item: &Item) {
     }
 }
 
+/// Characters no file name may hold (Windows is the strictest).
+fn bad_name(name: &str) -> bool {
+    name.chars().any(|c| matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control())
+        || name.ends_with('.')
+        || name.ends_with(' ')
+}
+
 impl HistoryApp {
+    fn start_rename(&mut self, path: &Path) {
+        let stem = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+        self.renaming = Some((path.to_path_buf(), stem, true));
+    }
+
+    /// Renames the file (the extension stays); a clash or a bad name is a notice.
+    fn finish_rename(&mut self, ctx: &egui::Context) {
+        let Some((old, name, _)) = self.renaming.take() else { return };
+        let name = name.trim();
+        let stem = old.file_stem().unwrap_or_default().to_string_lossy();
+        if name.is_empty() || name == stem {
+            return;
+        }
+        if bad_name(name) {
+            self.notice = Some(Notice::new(ctx, l("в имени не может быть \\ / : * ? \" < > |", "a name can't hold \\ / : * ? \" < > |")));
+            return;
+        }
+        let new = match old.extension() {
+            Some(ext) => old.with_file_name(format!("{name}.{}", ext.to_string_lossy())),
+            None => old.with_file_name(name),
+        };
+        // a different case of the same name is the same file on Windows and macOS
+        let same_file = new.to_string_lossy().to_lowercase() == old.to_string_lossy().to_lowercase();
+        if new.exists() && !same_file {
+            self.notice = Some(Notice::new(ctx, l("файл с таким именем уже есть", "a file with that name exists")));
+            return;
+        }
+        if let Err(e) = std::fs::rename(&old, &new) {
+            self.notice = Some(Notice::new(ctx, lf!("не переименовалось: {e}", "couldn't rename: {e}")));
+            return;
+        }
+        for it in self.items.iter_mut().filter(|it| it.path == old) {
+            it.path = new.clone();
+        }
+        if let Some(t) = self.tex.remove(&old) {
+            self.tex.insert(new.clone(), t);
+        }
+        if let Some(j) = self.jobs.remove(&old) {
+            self.jobs.insert(new, j);
+        }
+    }
+
     fn refresh(&mut self) {
         self.cfg = config::load();
         self.items = scan(&self.cfg.save_dir);
@@ -446,9 +499,19 @@ impl HistoryApp {
         }
         let name = it.path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
         let ext = it.path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
-        let ng = p.layout(name, font_medium(12.5), TEXT, w);
-        let ng_h = ng.size().y.min(18.0);
-        p.with_clip_rect(Rect::from_min_size(pos2(rect.left(), thumb.bottom() + 7.0), vec2(w, ng_h))).galley(pos2(rect.left(), thumb.bottom() + 7.0), ng, TEXT);
+        let name_r = Rect::from_min_size(pos2(rect.left(), thumb.bottom() + 4.0), vec2(w, 22.0));
+        let renaming = self.renaming.as_ref().is_some_and(|(p, ..)| p == &it.path);
+        if renaming {
+            self.rename_field(ui, name_r);
+        } else {
+            let ng = p.layout(name, font_medium(12.5), TEXT, w);
+            let ng_h = ng.size().y.min(18.0);
+            p.with_clip_rect(Rect::from_min_size(pos2(rect.left(), thumb.bottom() + 7.0), vec2(w, ng_h))).galley(pos2(rect.left(), thumb.bottom() + 7.0), ng, TEXT);
+            let nr = ui.interact(name_r, ui.scope_id().with((&it.path, "name")), Sense::click());
+            if nr.on_hover_cursor(CursorIcon::Text).on_hover_text(l("двойной клик: переименовать", "double click: rename")).double_clicked() {
+                self.start_rename(&it.path);
+            }
+        }
         p.text(
             pos2(rect.left(), thumb.bottom() + 33.0),
             Align2::LEFT_CENTER,
@@ -522,8 +585,41 @@ impl HistoryApp {
                 x += size + 4.0;
             }
         }
-        if !clicked_button && resp.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+        let on_name = ui.rect_contains_pointer(name_r);
+        if !clicked_button && !renaming && !on_name && resp.on_hover_cursor(CursorIcon::PointingHand).clicked() {
             open(it);
+        }
+    }
+
+    /// The name field of the file being renamed: Enter or a click elsewhere
+    /// keeps the name, Esc drops it.
+    fn rename_field(&mut self, ui: &mut egui::Ui, r: Rect) {
+        let ctx = ui.ctx().clone();
+        let Some((_, buf, focus)) = self.renaming.as_mut() else { return };
+        let id = ui.scope_id().with("rename");
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r));
+        let resp = child.add(
+            egui::TextEdit::singleline(buf)
+                .id(id)
+                .font(font_medium(12.5))
+                .text_color(TEXT)
+                .desired_width(r.width())
+                .margin(vec2(4.0, 2.0)),
+        );
+        if std::mem::take(focus) {
+            resp.request_focus();
+            // the whole name selected, ready to be typed over
+            if let Some(mut st) = egui::text_edit::TextEditState::load(&ctx, id) {
+                let n = buf.chars().count();
+                st.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(n))));
+                st.store(&ctx, id);
+            }
+            return;
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.renaming = None;
+        } else if resp.lost_focus() || !resp.has_focus() {
+            self.finish_rename(&ctx);
         }
     }
 

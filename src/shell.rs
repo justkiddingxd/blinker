@@ -396,13 +396,23 @@ fn run(shared: Arc<Shared>) {
     let mut hotkeys = Hotkeys { ids: Vec::new() };
     hotkeys.register(&shared);
     let activate = win::activation_event();
+    // `blinker --quit` (or a quit left over from the previous run: cleared)
+    let quit = win::quit_event();
+    if !quit.is_null() {
+        unsafe { windows_sys::Win32::System::Threading::ResetEvent(quit) };
+    }
+    let mut quitting = false;
 
     loop {
-        let handles = [activate];
-        let n = if activate.is_null() { 0 } else { 1 };
-        let r = unsafe { MsgWaitForMultipleObjects(n, handles.as_ptr(), 0, INFINITE, QS_ALLINPUT) };
-        if n == 1 && r == WAIT_OBJECT_0 {
-            shared.push(Command::OpenHome(HomeTab::Capture));
+        let handles: Vec<HANDLE> = [activate, quit].into_iter().filter(|h| !h.is_null() && !(quitting && *h == quit)).collect();
+        let r = unsafe { MsgWaitForMultipleObjects(handles.len() as u32, handles.as_ptr(), 0, INFINITE, QS_ALLINPUT) };
+        if let Some(&h) = handles.get(r.wrapping_sub(WAIT_OBJECT_0) as usize) {
+            if h == activate {
+                shared.push(Command::OpenHome(HomeTab::Capture));
+            } else {
+                quitting = true;
+                shared.push(Command::Quit);
+            }
         }
 
         let mut msg: MSG = unsafe { std::mem::zeroed() };

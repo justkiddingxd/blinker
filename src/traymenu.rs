@@ -108,12 +108,16 @@ fn register_class() {
     });
 }
 
+/// The menu is drawn a little larger than the rest of the interface: it is
+/// read at a glance, often on a big screen far away.
+const ZOOM: f32 = 1.15;
+
 /// Builds a level window. `anchor`: for the root, the tray click point (the
 /// menu opens above it); for a submenu, the parent row's (right, top) and
 /// (left) edges so it can flip to the other side when there is no room.
 fn make_level(items: Vec<Item>, anchor: (i32, i32), sub_of: Option<(i32, i32)>, root: bool) -> Option<Level> {
     let mon = win::monitor_at(&win::monitors(), anchor.0, anchor.1);
-    let scale = mon.map(|m| m.scale).unwrap_or(1.0);
+    let scale = mon.map(|m| m.scale).unwrap_or(1.0) * ZOOM;
     let work = mon.map(|m| m.work).unwrap_or(win::IRect::new(0, 0, 1920, 1040));
     let px = |v: f32| (v * scale).round() as i32;
 
@@ -577,7 +581,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(400));
             let root = find();
             assert!(!root.is_null());
-            let row = |i: i32| (5.0 + 32.0 * i as f32 + 16.0) as i32; // at 100% scale
+            let row = |i: i32| ((5.0 + 32.0 * i as f32 + 16.0) * ZOOM) as i32; // at 100% scale
             for _ in 0..3 {
                 post(root, WM_MOUSEMOVE, 0, row(0)); // "screenshot ›": opens the submenu
                 std::thread::sleep(std::time::Duration::from_millis(150));

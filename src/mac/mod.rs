@@ -345,6 +345,14 @@ const SHELL: &str = "BlinkerShell";
 pub const ACTIVATE: &str = "Blinker.Activate";
 /// "Quit" in the menu bar icon's menu: every blinker process ends.
 pub const QUIT: &str = "Blinker.Quit";
+/// `blinker --quit`: the menu bar icon quits as if "quit" was picked.
+pub const QUIT_TRAY: &str = "Blinker.QuitTray";
+
+/// Tells every blinker process to quit (the menu bar icon included).
+pub fn signal_quit() {
+    post(QUIT_TRAY);
+    post(QUIT);
+}
 
 pub struct InstanceGuard(#[allow(dead_code)] std::fs::File);
 
@@ -470,6 +478,9 @@ pub fn disable_transitions(hwnd: HWND) {
 pub fn no_dwm_border(hwnd: HWND) {
     unsafe { ffi::bk_window_plain(hwnd, 0) };
 }
+
+/// Windows only: AppKit draws no shadow around a clear borderless window.
+pub fn no_shadow(_hwnd: HWND) {}
 
 pub fn make_overlay(hwnd: HWND) {
     unsafe { ffi::bk_window_make_overlay(hwnd) };

@@ -37,6 +37,10 @@ const GAP: f32 = 16.0;
 const PAD: f32 = 8.0;
 const CAPTION_H: f32 = 50.0;
 const RADIUS: u8 = 14;
+/// Room above the card for a badge ("Clipped!").
+const BADGE_H: f32 = 40.0;
+/// How long a click's answer (a tick, a chip over the picture) stays.
+const FLASH: f64 = 1.3;
 
 struct Layout {
     card: Vec2,
@@ -47,7 +51,8 @@ fn layout(cfg: &Config, img: &RgbaImage) -> Layout {
     let w = cfg.toast_size.width();
     let iw = w - PAD * 2.0;
     let aspect = img.height() as f32 / img.width().max(1) as f32;
-    let ih = (iw * aspect).clamp(iw * 0.38, iw * 0.75).round();
+    // the whole picture is shown: a very wide or tall one gets bars around it
+    let ih = (iw * aspect).clamp(iw * 0.3, iw).round();
     let h = PAD + ih + if cfg.toast_caption { CAPTION_H } else { PAD };
     Layout { card: vec2(w, h), image: vec2(iw, ih) }
 }
@@ -62,6 +67,7 @@ pub fn run(
     kind: Kind,
     upload: Option<Arc<crate::upload::Job>>,
     reencode: Option<Arc<crate::reencode::Job>>,
+    badge: Option<&'static str>,
 ) -> ToastResult {
     let video = kind != Kind::Image;
     let cfg = shared.config();
@@ -82,8 +88,10 @@ pub fn run(
         drag_thumb.height(),
         image::ExtendedColorType::Rgba8,
     );
-    // The window is exactly the card: no invisible margins that catch the mouse.
-    let window = lay.card;
+    // The window is exactly the card (and its badge): no invisible margins
+    // that catch the mouse.
+    let top = if badge.is_some() { BADGE_H } else { 0.0 };
+    let window = lay.card + vec2(0.0, top);
     let viewport = egui::ViewportBuilder::default()
         .with_title("blinker")
         .with_decorations(false)
@@ -99,11 +107,15 @@ pub fn run(
         if let Some(h) = hwnd {
             win::disable_transitions(h);
             win::no_dwm_border(h);
+            if badge.is_some() {
+                // the badge's room is clear: a window shadow would frame it
+                win::no_shadow(h);
+            }
             win::cloak(h, true);
             // macOS 26: the card is a pane of glass over the desktop
             #[cfg(target_os = "macos")]
             if theme::glass() {
-                win::window_glass(h, (0.0, 0.0, window.x, window.y), RADIUS as f32, 0);
+                win::window_glass(h, (0.0, top, window.x, window.y - top), RADIUS as f32, 0);
             }
         }
         let tex = cc.egui_ctx.load_texture("toast-thumb", theme::color_image(&thumb), egui::TextureOptions::LINEAR);
@@ -135,6 +147,10 @@ pub fn run(
             frame_no: 0,
             size_text: String::new(),
             copied_at: None,
+            badge,
+            top,
+            flash: None,
+            pulse: None,
         };
         app.place(app.slide_dir() * 22.0);
         app
@@ -174,6 +190,13 @@ struct ToastApp {
     frame_no: u32,
     size_text: String,
     copied_at: Option<f64>,
+    badge: Option<&'static str>,
+    /// Height of the badge's room above the card.
+    top: f32,
+    /// The answer to the last click: a chip over the picture, and since when.
+    flash: Option<(String, f64)>,
+    /// The button clicked last (a ring spreads from it), and since when.
+    pulse: Option<(Icon, Rect, f64)>,
 }
 
 impl ToastApp {
@@ -258,6 +281,71 @@ impl ToastApp {
         Some(path)
     }
 
+    /// A pill over the card that pops in: what just happened ("Clipped!").
+    fn paint_badge(&self, painter: &egui::Painter, card: Rect, text: &str, now: f64, alpha: f32) {
+        let t = ((now - self.t0 - 0.08) / 0.45) as f32;
+        if t <= 0.0 {
+            return;
+        }
+        let pop = ease_out_back(t);
+        let a = alpha * t.clamp(0.0, 1.0);
+        let galley = painter.layout_no_wrap(text.to_string(), font_semibold(14.0), ON_ACCENT);
+        let size = vec2(galley.size().x + 44.0, 30.0) * (0.7 + 0.3 * pop);
+        let center = pos2(card.center().x, card.top() - BADGE_H / 2.0 + (1.0 - pop.min(1.0)) * 8.0);
+        let pill = Rect::from_center_size(center, size);
+        painter.rect_filled(pill.translate(vec2(0.0, 2.0)), 15, Color32::from_black_alpha((60.0 * a) as u8));
+        painter.rect_filled(pill, 15, ACCENT.gamma_multiply(a));
+        // the logo's sparkle, then the words
+        let s = 6.0 * (0.7 + 0.3 * pop);
+        let c = pos2(pill.left() + 18.0, pill.center().y);
+        let w = s * 0.18;
+        let star = vec![
+            c + vec2(0.0, -s),
+            c + vec2(w, -w),
+            c + vec2(s, 0.0),
+            c + vec2(w, w),
+            c + vec2(0.0, s),
+            c + vec2(-w, w),
+            c + vec2(-s, 0.0),
+            c + vec2(-w, -w),
+        ];
+        // a 4-point star is concave: two convex diamonds make it
+        painter.add(egui::Shape::convex_polygon(vec![star[0], star[1], star[4], star[5]], ON_ACCENT.gamma_multiply(a), Stroke::NONE));
+        painter.add(egui::Shape::convex_polygon(vec![star[2], star[3], star[6], star[7]], ON_ACCENT.gamma_multiply(a), Stroke::NONE));
+        painter.add(egui::Shape::convex_polygon(vec![star[0], star[2], star[4], star[6]].iter().map(|p| c + (*p - c) * 0.32).collect(), ON_ACCENT.gamma_multiply(a), Stroke::NONE));
+        let text_pos = pos2(c.x + s + 8.0, pill.center().y - galley.size().y / 2.0);
+        painter.galley(text_pos, galley, ON_ACCENT.gamma_multiply(a));
+    }
+
+    /// The answer to a click: a ring spreading from the button and a chip
+    /// over the picture saying what happened.
+    fn paint_feedback(&mut self, painter: &egui::Painter, img: Rect, now: f64, alpha: f32) {
+        if let Some((_, r, at)) = self.pulse {
+            let t = ((now - at) / 0.45) as f32;
+            if t >= 1.0 {
+                self.pulse = None;
+            } else {
+                let e = ui::ease_out_cubic(t);
+                let radius = 16.0 + 14.0 * e;
+                painter.circle_stroke(r.center(), radius, Stroke::new(2.0 * (1.0 - e), ACCENT.gamma_multiply(alpha * (1.0 - e))));
+            }
+        }
+        if let Some((text, at)) = &self.flash {
+            let t = (now - at) as f32;
+            if t as f64 >= FLASH {
+                self.flash = None;
+                return;
+            }
+            let a = alpha * (t / 0.12).min(1.0) * ((FLASH as f32 - t) / 0.25).min(1.0);
+            let g = painter.layout_no_wrap(text.clone(), font_medium(12.5), TEXT);
+            let rise = (1.0 - ui::ease_out_cubic((t / 0.25).min(1.0))) * 6.0;
+            let chip = Rect::from_center_size(pos2(img.center().x, img.top() + 22.0 + rise), g.size() + vec2(22.0, 12.0));
+            painter.rect_filled(chip, 12, Color32::from_rgba_unmultiplied(18, 18, 17, (235.0 * a) as u8));
+            painter.rect_stroke(chip, 12, Stroke::new(1.0, Color32::from_white_alpha((24.0 * a) as u8)), StrokeKind::Inside);
+            painter.galley(chip.center() - g.size() / 2.0, g, TEXT.gamma_multiply(a));
+        }
+    }
+
     /// Direction the card slides in from (towards its screen edge).
     fn slide_dir(&self) -> Vec2 {
         match self.cfg.toast_corner {
@@ -267,16 +355,42 @@ impl ToastApp {
     }
 }
 
-/// Round action button drawn over the preview.
-fn overlay_button(ui: &mut egui::Ui, rect: Rect, icon: Icon, tip: &str, alpha: f32) -> egui::Response {
+/// Round action button drawn over the preview: lit on hover, pressed in while
+/// held, a tick in place of the icon while `done`.
+fn overlay_button(ui: &mut egui::Ui, rect: Rect, icon: Icon, tip: &str, alpha: f32, done: bool) -> egui::Response {
     let resp = ui.interact(rect, ui.scope_id().with(tip), Sense::click());
-    let h = resp.hovered();
+    let (h, down) = (resp.hovered(), resp.is_pointer_button_down_on());
     let p = ui.painter();
-    let fill = if h { ACCENT } else { Color32::TRANSPARENT };
-    p.rect_filled(rect, 8, fill.gamma_multiply(alpha));
-    let fg = if h { ON_ACCENT } else { TEXT };
-    icons::paint(p, rect, icon, 15.0, fg.gamma_multiply(alpha));
+    let r = if down { rect.shrink(1.5) } else { rect };
+    let fill = if down {
+        ACCENT.gamma_multiply(0.75)
+    } else if h || done {
+        ACCENT
+    } else {
+        Color32::TRANSPARENT
+    };
+    p.rect_filled(r, 8, fill.gamma_multiply(alpha));
+    let fg = if h || down || done { ON_ACCENT } else { TEXT };
+    if done {
+        paint_tick(p, r, fg.gamma_multiply(alpha));
+    } else {
+        icons::paint(p, r, icon, if down { 13.5 } else { 15.0 }, fg.gamma_multiply(alpha));
+    }
     resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(tip)
+}
+
+/// A check mark in the middle of `r`.
+fn paint_tick(p: &egui::Painter, r: Rect, c: Color32) {
+    let c0 = r.center();
+    let pts = vec![c0 + vec2(-5.0, 0.5), c0 + vec2(-1.5, 4.0), c0 + vec2(5.5, -3.5)];
+    p.add(egui::Shape::line(pts, Stroke::new(2.0, c)));
+}
+
+/// `0..1` overshooting a little past 1 on the way (a pop).
+fn ease_out_back(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    let (c1, c3) = (1.70158, 2.70158);
+    1.0 + c3 * (t - 1.0).powi(3) + c1 * (t - 1.0).powi(2)
 }
 
 impl eframe::App for ToastApp {
@@ -334,7 +448,8 @@ impl eframe::App for ToastApp {
         let alpha = appear * (1.0 - fade_out);
         let shift = self.slide_dir() * ((1.0 - appear) * 22.0 + fade_out * 12.0);
         self.place(shift);
-        let card = ctx.content_rect();
+        let mut card = ctx.content_rect();
+        card.min.y += self.top;
         let img_rect = Rect::from_min_size(card.min + Vec2::splat(PAD), self.lay.image);
 
         let hovered = ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| card.contains(p));
@@ -353,15 +468,21 @@ impl eframe::App for ToastApp {
         let (fill, edge) = if theme::glass() { (PANEL.gamma_multiply(0.45 * alpha), Color32::TRANSPARENT) } else { (PANEL.gamma_multiply(alpha), LINE.gamma_multiply(alpha)) };
         painter.rect_filled(card, RADIUS, fill);
         painter.rect_stroke(card, RADIUS, Stroke::new(1.0, edge), StrokeKind::Inside);
+        if let Some(text) = self.badge {
+            self.paint_badge(&painter, card, text, now, alpha);
+        }
 
         // preview (drag = file, click = edit)
         let img_resp = ui.interact(img_rect, ui.scope_id().with("img"), Sense::click_and_drag());
-        let uv = ui::cover_uv(img_rect.size(), self.thumb_size);
         let img_radius = CornerRadius::same(RADIUS - PAD as u8 + 2);
-        painter.add(
-            egui::epaint::RectShape::filled(img_rect, img_radius, Color32::WHITE.gamma_multiply(alpha))
-                .with_texture(self.tex.id(), uv),
-        );
+        // the whole capture, fitted in (not a cropped part of it)
+        let k = (img_rect.width() / self.thumb_size.x).min(img_rect.height() / self.thumb_size.y);
+        let fit = Rect::from_center_size(img_rect.center(), self.thumb_size * k);
+        if fit.width() < img_rect.width() - 1.0 || fit.height() < img_rect.height() - 1.0 {
+            painter.rect_filled(img_rect, img_radius, Color32::from_rgba_unmultiplied(12, 12, 11, (255.0 * alpha) as u8));
+        }
+        let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        painter.add(egui::epaint::RectShape::filled(fit, img_radius, Color32::WHITE.gamma_multiply(alpha)).with_texture(self.tex.id(), full));
         painter.rect_stroke(img_rect, img_radius, Stroke::new(1.0, Color32::from_white_alpha((14.0 * alpha) as u8)), StrokeKind::Inside);
         if hover_t > 0.0 {
             painter.rect_filled(img_rect, img_radius, Color32::from_black_alpha((120.0 * hover_t * alpha) as u8));
@@ -388,6 +509,7 @@ impl eframe::App for ToastApp {
             return;
         }
         let mut clicked_button = false;
+        let mut over_button = false;
 
         // actions: a row at the bottom of the preview, shown on hover
         if hover_t > 0.01 {
@@ -424,8 +546,12 @@ impl eframe::App for ToastApp {
             let mut x = bar.left() + 4.0;
             for (icon, tip) in actions {
                 let r = Rect::from_min_size(pos2(x, bar.top() + 4.0), Vec2::splat(size));
-                if overlay_button(ui, r, icon, tip, a).clicked() {
+                let done = icon == Icon::Copy && self.copied_at.is_some_and(|t| now - t < FLASH);
+                let resp = overlay_button(ui, r, icon, tip, a, done);
+                over_button |= resp.hovered();
+                if resp.clicked() {
                     clicked_button = true;
+                    self.pulse = Some((icon, r, now));
                     match icon {
                         Icon::Edit => self.close(&ctx, ToastResult::Edit),
                         Icon::Copy => {
@@ -436,6 +562,8 @@ impl eframe::App for ToastApp {
                             if ok {
                                 self.copied_at = Some(now);
                             }
+                            let msg = if ok { crate::i18n::t("скопировано") } else { crate::i18n::l("не скопировалось", "couldn't copy") };
+                            self.flash = Some((msg.to_string(), now));
                         }
                         Icon::Folder => {
                             if let Some(p) = self.path.clone() {
@@ -448,12 +576,14 @@ impl eframe::App for ToastApp {
                                 let c = ctx.clone();
                                 self.reencode = Some(crate::reencode::start(p, self.cfg.tg_mode, None, move || c.request_repaint()));
                                 self.remaining = self.remaining.max(3.0);
+                                self.flash = Some((crate::i18n::l("сжимаю для telegram…", "compressing for telegram…").to_string(), now));
                             }
                         }
                         Icon::Upload => {
                             if let Some(p) = self.file_for_drag() {
                                 self.upload = Some(crate::upload::start(&self.cfg, p, None));
                                 self.remaining = self.remaining.max(3.0);
+                                self.flash = Some((crate::i18n::l("загружаю…", "uploading…").to_string(), now));
                             }
                         }
                         Icon::Pin => {
@@ -468,20 +598,28 @@ impl eframe::App for ToastApp {
             }
             if !self.cfg.toast_caption {
                 let close_r = Rect::from_min_size(img_rect.right_top() + vec2(-30.0, 8.0), Vec2::splat(22.0));
-                if overlay_button(ui, close_r, Icon::Close, crate::i18n::t("закрыть"), a).clicked() {
+                let resp = overlay_button(ui, close_r, Icon::Close, crate::i18n::t("закрыть"), a, false);
+                over_button |= resp.hovered();
+                if resp.clicked() {
                     clicked_button = true;
                     self.close(&ctx, ToastResult::Closed);
                 }
             }
         }
-        if !clicked_button
-            && img_resp
-                .on_hover_cursor(CursorIcon::Grab)
-                .on_hover_text(crate::i18n::t("тяни как файл, клик открывает редактор"))
-                .clicked()
-        {
+        // the picture opens the editor on a click: a hand, as on any link
+        // (not the four-way "move" arrows); the buttons keep their own
+        let img_resp = if over_button {
+            img_resp
+        } else {
+            img_resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(crate::i18n::t("тяни как файл, клик открывает редактор"))
+        };
+        if img_resp.is_pointer_button_down_on() && !over_button {
+            painter.rect_filled(img_rect, img_radius, Color32::from_black_alpha((50.0 * alpha) as u8));
+        }
+        if !clicked_button && !over_button && img_resp.clicked() {
             self.close(&ctx, ToastResult::Edit);
         }
+        self.paint_feedback(&painter, img_rect, now, alpha);
 
         // caption: what it is and where it stands, a close button
         if self.cfg.toast_caption {
