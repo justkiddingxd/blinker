@@ -1934,35 +1934,55 @@ impl OverlayApp {
         self.top_rect = Some(resp.response.rect);
     }
 
-    /// A pane of glass at `rect` (points): the blurred screenshot under it, a
-    /// dark tint, a light rim and a highlight along the top edge.
+    /// A pane of Liquid Glass at `rect` (points): the screenshot under it,
+    /// softly blurred and a little magnified, a light veil, a sheen over its
+    /// top, a bright rim and a shadow it floats on.
     fn paint_glass(&mut self, ctx: &egui::Context, rect: Rect, alpha: f32, ppp: f32, id: &str, radius: u8) {
         if !glass() || alpha <= 0.0 {
             return;
         }
         if self.glass.is_none() {
-            // an eighth of the size, blurred: cheap, and it's all a pane shows
+            // a quarter of the size, blurred a little: what's under the pane
+            // stays recognizable, as through real glass
             let img = &self.snap.image;
-            let (w, h) = ((img.width() / 8).max(1), (img.height() / 8).max(1));
+            let (w, h) = ((img.width() / 4).max(1), (img.height() / 4).max(1));
             let small = image::imageops::resize(img, w, h, image::imageops::FilterType::Triangle);
-            let blurred = image::imageops::blur(&small, 2.2);
+            let blurred = image::imageops::blur(&small, 2.5);
             self.glass = Some(ctx.load_texture("glass", color_image(&blurred), TextureOptions::LINEAR));
         }
         let Some(tex) = &self.glass else { return };
         let img = vec2(self.snap.image.width() as f32, self.snap.image.height() as f32);
+        // a lens: the pane shows a slightly smaller patch, magnified
+        let lens = rect.shrink2(rect.size() * 0.04);
         let uv = Rect::from_min_max(
-            pos2(rect.min.x * ppp / img.x, rect.min.y * ppp / img.y),
-            pos2(rect.max.x * ppp / img.x, rect.max.y * ppp / img.y),
+            pos2(lens.min.x * ppp / img.x, lens.min.y * ppp / img.y),
+            pos2(lens.max.x * ppp / img.x, lens.max.y * ppp / img.y),
         );
+        let a = |v: f32| (v * alpha) as u8;
         let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, Id::unique(id)));
         let r = egui::CornerRadius::same(radius);
+        p.add(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(a(80.0)) }.as_shape(rect, r));
         p.add(egui::epaint::RectShape::filled(rect, r, Color32::WHITE.gamma_multiply(alpha)).with_texture(tex.id(), uv));
-        p.rect_filled(rect, r, Color32::from_rgba_unmultiplied(20, 20, 19, (125.0 * alpha) as u8));
-        p.rect_stroke(rect, r, Stroke::new(1.0, Color32::from_white_alpha((42.0 * alpha) as u8)), StrokeKind::Inside);
-        // light catching the top edge
-        let inset = radius as f32;
-        let top = Rect::from_min_size(rect.min + vec2(inset, 1.0), vec2(rect.width() - 2.0 * inset, 1.0));
-        p.rect_filled(top, 0, Color32::from_white_alpha((36.0 * alpha) as u8));
+        // dark enough for the icons, light enough to see through
+        p.rect_filled(rect, r, Color32::from_rgba_unmultiplied(18, 18, 17, a(78.0)));
+        p.rect_filled(rect, r, Color32::from_white_alpha(a(10.0)));
+        // the sheen: light pooling in the top half
+        let inset = radius as f32 * 0.6;
+        let sheen = Rect::from_min_max(rect.min + vec2(inset, 1.0), pos2(rect.right() - inset, rect.top() + rect.height() * 0.55));
+        let mut mesh = egui::Mesh::default();
+        let (top, clear) = (Color32::from_white_alpha(a(20.0)), Color32::TRANSPARENT);
+        mesh.colored_vertex(sheen.left_top(), top);
+        mesh.colored_vertex(sheen.right_top(), top);
+        mesh.colored_vertex(sheen.right_bottom(), clear);
+        mesh.colored_vertex(sheen.left_bottom(), clear);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        p.add(mesh);
+        // the rim, brightest where the light hits the top edge
+        p.rect_stroke(rect, r, Stroke::new(1.0, Color32::from_white_alpha(a(58.0))), StrokeKind::Inside);
+        let edge = radius as f32 * 0.8;
+        p.rect_filled(Rect::from_min_size(rect.min + vec2(edge, 0.5), vec2(rect.width() - 2.0 * edge, 1.0)), 0, Color32::from_white_alpha(a(120.0)));
+        p.rect_filled(Rect::from_min_size(rect.left_bottom() + vec2(edge, -1.5), vec2(rect.width() - 2.0 * edge, 1.0)), 0, Color32::from_white_alpha(a(22.0)));
     }
 
     /// The current color as one swatch; a click unfolds the others next to it.

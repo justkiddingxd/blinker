@@ -109,9 +109,11 @@ fn keycaps(img: &mut image::RgbaImage, keys: &[&str], down: bool) {
     let mut pm = sk::Pixmap::new(W, H).unwrap();
     let mut spots = Vec::new();
     for w in &widths {
-        rrect(&mut pm, x, y + 3.0, *w, h, 8.0, rgba(0x0B0B0A, 200));
-        rrect(&mut pm, x - 1.0, y + press - 1.0, w + 2.0, h + 2.0, 9.0, rgba(0x45453F, 255));
-        rrect(&mut pm, x, y + press, *w, h, 8.0, rgba(if down { 0x2B2B28 } else { 0x232321 }, 255));
+        if !glass(img, x, y + press, *w, h, 10.0) {
+            rrect(&mut pm, x, y + 3.0, *w, h, 8.0, rgba(0x0B0B0A, 200));
+            rrect(&mut pm, x - 1.0, y + press - 1.0, w + 2.0, h + 2.0, 9.0, rgba(0x45453F, 255));
+            rrect(&mut pm, x, y + press, *w, h, 8.0, rgba(if down { 0x2B2B28 } else { 0x232321 }, 255));
+        }
         spots.push(x);
         x += w + gap;
     }
@@ -131,13 +133,16 @@ fn clip_card(img: &mut image::RgbaImage, clip: &image::RgbaImage, dx: f32, shown
     let ih = (iw * clip.height() as f32 / clip.width() as f32).round();
     let (w, h) = (iw + pad * 2.0, pad + ih + caption);
     let (x, y) = (W as f32 - w - 20.0 + dx, H as f32 - h - 20.0);
+    let flat = !glass(img, x, y, w, h, 16.0);
     let mut pm = sk::Pixmap::new(W, H).unwrap();
-    for i in 0..8 {
-        let e = 1.0 + i as f32 * 2.5;
-        rrect(&mut pm, x - e, y - e + 6.0, w + e * 2.0, h + e * 2.0, 14.0 + e, rgba(0, 14));
+    if flat {
+        for i in 0..8 {
+            let e = 1.0 + i as f32 * 2.5;
+            rrect(&mut pm, x - e, y - e + 6.0, w + e * 2.0, h + e * 2.0, 14.0 + e, rgba(0, 14));
+        }
+        rrect(&mut pm, x - 1.0, y - 1.0, w + 2.0, h + 2.0, 15.0, rgba(0x3A3A36, 255));
+        rrect(&mut pm, x, y, w, h, 14.0, rgba(0x1C1C1A, 255));
     }
-    rrect(&mut pm, x - 1.0, y - 1.0, w + 2.0, h + 2.0, 15.0, rgba(0x3A3A36, 255));
-    rrect(&mut pm, x, y, w, h, 14.0, rgba(0x1C1C1A, 255));
     // the preview, rounded
     let thumb = image::imageops::resize(clip, iw as u32, ih as u32, image::imageops::FilterType::Triangle);
     let (tx, ty) = (x + pad, y + pad);
@@ -239,7 +244,8 @@ fn recording(dir: &std::path::Path, first: usize, reveal0: f32, monitor: Monitor
         let mut pm = sk::Pixmap::new(W, H).unwrap();
         hud::draw_frame(&mut pm, (l, t), (r - l, b - t), 1.0);
         let hover = ((p - stop).length() < 12.0).then_some(hud::Btn::Stop);
-        let look = hud::PillLook { secs: tm as u64, paused: false, clock: tm as f32, hover, glass: false };
+        let on_glass = glass(&mut img, pill_at.0 as f32, pill_at.1 as f32, size.0 as f32, size.1 as f32, 12.0);
+        let look = hud::PillLook { secs: tm as u64, paused: false, clock: tm as f32, hover, glass: on_glass };
         image::imageops::overlay(&mut img, &crate::theme::pixmap_to_image(&pm), 0, 0);
         if let Some(pill) = hud::draw_pill(&look, 1.0) {
             image::imageops::overlay(&mut img, &crate::theme::pixmap_to_image(&pill), pill_at.0 as i64, pill_at.1 as i64);
@@ -563,11 +569,14 @@ fn scene(reveal: f32) -> image::RgbaImage {
     let (w, h) = (W as f32, H as f32);
     let mut pm = sk::Pixmap::new(W, H).unwrap();
     let id = sk::Transform::identity();
-    // wallpaper: graphite with two soft glows
+    // wallpaper: graphite with two soft glows; on a Mac a bright one, like
+    // macOS 26's, for the glass to show what it lies on
+    let mac = cfg!(target_os = "macos");
+    let (from, to) = if mac { (0x2C4A86, 0x3A1F5C) } else { (0x2B2A27, 0x121211) };
     let bg = sk::LinearGradient::new(
         sk::Point::from_xy(0.0, 0.0),
         sk::Point::from_xy(w, h),
-        vec![sk::GradientStop::new(0.0, rgba(0x2B2A27, 255)), sk::GradientStop::new(1.0, rgba(0x121211, 255))],
+        vec![sk::GradientStop::new(0.0, rgba(from, 255)), sk::GradientStop::new(1.0, rgba(to, 255))],
         sk::SpreadMode::Pad,
         id,
     )
@@ -575,7 +584,12 @@ fn scene(reveal: f32) -> image::RgbaImage {
     let mut p = sk::Paint::default();
     p.shader = bg;
     pm.fill_rect(sk::Rect::from_xywh(0.0, 0.0, w, h).unwrap(), &p, id, None);
-    for (x, y, r, c) in [(120.0, 600.0, 420.0, rgba(0x8A7A5C, 70)), (900.0, 40.0, 380.0, rgba(0x5C6E8A, 60))] {
+    let glows = if mac {
+        [(120.0, 600.0, 460.0, rgba(0xF0884A, 210)), (900.0, 40.0, 420.0, rgba(0x58B4F0, 190))]
+    } else {
+        [(120.0, 600.0, 420.0, rgba(0x8A7A5C, 70)), (900.0, 40.0, 380.0, rgba(0x5C6E8A, 60))]
+    };
+    for (x, y, r, c) in glows {
         let g = sk::RadialGradient::new(
             sk::Point::from_xy(x, y),
             0.0,
@@ -704,6 +718,70 @@ fn scene(reveal: f32) -> image::RgbaImage {
     img
 }
 
+/// macOS 26: a pane of Liquid Glass at (x, y, w, h), `r` round, over `img`
+/// (as the app's glass looks there): what's under it softly blurred and a
+/// little magnified, a light veil, a sheen over its top, a bright rim and a
+/// shadow. Elsewhere it draws nothing and returns false: the caller draws
+/// its flat card.
+fn glass(img: &mut image::RgbaImage, x: f32, y: f32, w: f32, h: f32, r: f32) -> bool {
+    if !cfg!(target_os = "macos") {
+        return false;
+    }
+    let id = sk::Transform::identity();
+    // what's under the pane, taken before its shadow falls there
+    let pad = 24.0;
+    let x0 = (x - pad).max(0.0) as u32;
+    let y0 = (y - pad).max(0.0) as u32;
+    let x1 = ((x + w + pad) as u32).min(W);
+    let y1 = ((y + h + pad) as u32).min(H);
+    if x1 <= x0 || y1 <= y0 {
+        return true;
+    }
+    let under = image::imageops::blur(&image::imageops::crop_imm(img, x0, y0, x1 - x0, y1 - y0).to_image(), 4.0);
+    let size = sk::IntSize::from_wh(under.width(), under.height());
+    let mut pm = sk::Pixmap::new(W, H).unwrap();
+    for i in 0..8 {
+        let e = 1.0 + i as f32 * 2.5;
+        rrect(&mut pm, x - e, y - e + 7.0, w + e * 2.0, h + e * 2.0, r + e, rgba(0, 13));
+    }
+    let Some(path) = crate::theme::rounded_rect_path(x, y, w, h, r) else { return true };
+    // the scene is opaque: its pixels are already premultiplied
+    if let Some(under) = size.and_then(|sz| sk::Pixmap::from_vec(under.into_raw(), sz)) {
+        // a lens: magnified 5% around the pane's middle
+        let (k, cx, cy) = (1.05, x + w / 2.0, y + h / 2.0);
+        let lens = sk::Transform::from_row(k, 0.0, 0.0, k, k * x0 as f32 + (1.0 - k) * cx, k * y0 as f32 + (1.0 - k) * cy);
+        let mut p = sk::Paint::default();
+        p.anti_alias = true;
+        p.shader = sk::Pattern::new(under.as_ref(), sk::SpreadMode::Pad, sk::FilterQuality::Bilinear, 1.0, lens);
+        pm.fill_path(&path, &p, sk::FillRule::Winding, id, None);
+    }
+    pm.fill_path(&path, &paint(rgba(0x121211, 78)), sk::FillRule::Winding, id, None);
+    pm.fill_path(&path, &paint(rgba(0xFFFFFF, 10)), sk::FillRule::Winding, id, None);
+    // the sheen: light pooling in the top half
+    if let Some(g) = sk::LinearGradient::new(
+        sk::Point::from_xy(x, y),
+        sk::Point::from_xy(x, y + h * 0.55),
+        vec![sk::GradientStop::new(0.0, rgba(0xFFFFFF, 22)), sk::GradientStop::new(1.0, rgba(0xFFFFFF, 0))],
+        sk::SpreadMode::Pad,
+        id,
+    ) {
+        let mut p = sk::Paint::default();
+        p.anti_alias = true;
+        p.shader = g;
+        pm.fill_path(&path, &p, sk::FillRule::Winding, id, None);
+    }
+    // the rim, brightest along the top edge
+    let mut rim = paint(rgba(0xFFFFFF, 58));
+    rim.anti_alias = true;
+    pm.stroke_path(&path, &rim, &sk::Stroke { width: 1.0, ..Default::default() }, id, None);
+    let edge = r * 0.8;
+    if let Some(top) = sk::Rect::from_xywh(x + edge, y + 0.5, w - 2.0 * edge, 1.0) {
+        pm.fill_rect(top, &paint(rgba(0xFFFFFF, 120)), id, None);
+    }
+    image::imageops::overlay(img, &crate::theme::pixmap_to_image(&pm), 0, 0);
+    true
+}
+
 /// A small pill in the bottom right corner: the logo and `msg`.
 fn copied_note(img: &mut image::RgbaImage, msg: &str) {
     let reg = FontRef::try_from_slice(FONT).unwrap();
@@ -711,14 +789,16 @@ fn copied_note(img: &mut image::RgbaImage, msg: &str) {
     let tw: f32 = msg.chars().map(|c| sf.h_advance(sf.glyph_id(c))).sum();
     let (w, h) = (tw + 56.0, 40.0);
     let (x, y) = (W as f32 - w - 24.0, H as f32 - h - 24.0);
-    let mut pm = sk::Pixmap::new(W, H).unwrap();
-    for i in 0..6 {
-        let e = 1.0 + i as f32 * 2.0;
-        rrect(&mut pm, x - e, y - e + 4.0, w + e * 2.0, h + e * 2.0, 8.0 + e, rgba(0, 14));
+    if !glass(img, x, y, w, h, 12.0) {
+        let mut pm = sk::Pixmap::new(W, H).unwrap();
+        for i in 0..6 {
+            let e = 1.0 + i as f32 * 2.0;
+            rrect(&mut pm, x - e, y - e + 4.0, w + e * 2.0, h + e * 2.0, 8.0 + e, rgba(0, 14));
+        }
+        rrect(&mut pm, x - 1.0, y - 1.0, w + 2.0, h + 2.0, 9.0, rgba(0x3A3A36, 255));
+        rrect(&mut pm, x, y, w, h, 8.0, rgba(0x1F1F1D, 255));
+        image::imageops::overlay(img, &crate::theme::pixmap_to_image(&pm), 0, 0);
     }
-    rrect(&mut pm, x - 1.0, y - 1.0, w + 2.0, h + 2.0, 9.0, rgba(0x3A3A36, 255));
-    rrect(&mut pm, x, y, w, h, 8.0, rgba(0x1F1F1D, 255));
-    image::imageops::overlay(img, &crate::theme::pixmap_to_image(&pm), 0, 0);
     let mark = crate::theme::mark_image(16);
     image::imageops::overlay(img, &mark, (x + 14.0) as i64, (y + 12.0) as i64);
     text(img, &reg, 13.5, x + 40.0, y + 25.0, [0xD8, 0xD5, 0xCD], msg);
