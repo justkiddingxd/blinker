@@ -249,7 +249,7 @@ footer .grow { flex: 1; }
           </div>
         </div>
         <div class="screen" id="screen">
-          <img id="demo-img" src="assets/demo-ru.gif" alt="" width="1000" height="640">
+          <img id="demo-img" src="assets/demo-ru.gif?v=__V__" alt="" width="1000" height="640">
           <button type="button" class="arrow prev" data-step="-1" aria-label="←"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
           <button type="button" class="arrow next" data-step="1" aria-label="→"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
         </div>
@@ -569,6 +569,9 @@ footer .grow { flex: 1; }
   T.ru = RU;
 
   var DEMOS = ["demo", "record", "replay"];
+  // the deploy puts the commit here: new animations get new addresses, so
+  // Cloudflare's week-long cache can't serve the old ones
+  var V = "__V__";
   var lang, os, demo = 0, release = null;
   function t(k) {
     return (T[lang] && T[lang][k]) || RU[k] || "";
@@ -623,7 +626,7 @@ footer .grow { flex: 1; }
     });
     document.getElementById("count").textContent = demo + 1 + " / " + DEMOS.length;
     var img = document.getElementById("demo-img");
-    var src = "assets/" + DEMOS[demo] + "-" + lang + ".gif";
+    var src = "assets/" + DEMOS[demo] + "-" + lang + ".gif?v=" + V;
     if (img.getAttribute("src") !== src) img.setAttribute("src", src);
     document.title = lang === "ru" ? "blinker · скриншоты и запись экрана" : "blinker · screenshots and screen recording";
 
@@ -692,7 +695,7 @@ footer .grow { flex: 1; }
 
   // the other demos load once the page is up, so a tab switches at once
   window.addEventListener("load", function () {
-    DEMOS.slice(1).forEach(function (d) { new Image().src = "assets/" + d + "-" + lang + ".gif"; });
+    DEMOS.slice(1).forEach(function (d) { new Image().src = "assets/" + d + "-" + lang + ".gif?v=" + V; });
   });
 
   // what's released: the site's own version.json (written by every release),

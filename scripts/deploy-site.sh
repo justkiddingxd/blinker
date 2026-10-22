@@ -9,6 +9,11 @@ set -eu
 cd "$(dirname "$0")/.."
 
 HOST=${1:?usage: deploy-site.sh user@server}
-rsync -rltz --delete --exclude .DS_Store --exclude version.json site/ "$HOST:/var/www/blinker.cool/site/"
+# the animations' addresses carry the commit (see V in index.html)
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+cp -R site/. "$TMP/"
+sed "s/__V__/$(git rev-parse --short=8 HEAD)/g" site/index.html > "$TMP/index.html"
+rsync -rltz --delete --exclude .DS_Store --exclude version.json "$TMP/" "$HOST:/var/www/blinker.cool/site/"
 ssh "$HOST" 'chown -R blinker-deploy:blinker-deploy /var/www/blinker.cool/site && chmod -R u=rwX,go=rX /var/www/blinker.cool/site'
 echo "deployed site/ to $HOST"
