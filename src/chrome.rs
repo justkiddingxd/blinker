@@ -32,12 +32,13 @@ pub fn place_window_buttons(hwnd: crate::win::HWND, bar_h: f32) {
     let _ = (hwnd, bar_h);
 }
 
-/// macOS 26: the title bar of a `width` points wide window as a pane of
+/// macOS 26: the window as frosted glass and its title bar a pane of clear
 /// glass floating at its top (the bar itself is drawn clear over it).
 pub fn glass_bar(hwnd: crate::win::HWND, width: f32, bar_h: f32) {
     #[cfg(target_os = "macos")]
     if crate::theme::glass() {
-        crate::win::window_glass(hwnd, (6.0, 5.0, width - 12.0, bar_h - 8.0), 14.0, 0x121211);
+        crate::win::window_backdrop(hwnd, 0x121211, crate::home::GLASS_TINT);
+        crate::win::window_glass(hwnd, (6.0, 5.0, width - 12.0, bar_h - 8.0), 16.0, 0);
     }
     #[cfg(not(target_os = "macos"))]
     let _ = (hwnd, width, bar_h);

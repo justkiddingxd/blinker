@@ -129,6 +129,30 @@ pub fn apply(ctx: &egui::Context) {
         w.active.bg_stroke = egui::Stroke::NONE;
         w.active.fg_stroke = egui::Stroke::new(1.0, TEXT);
         w.open = w.hovered;
+
+        if glass() {
+            // Liquid Glass: popups, menus and tips are dark panes with a light
+            // rim and round corners; rows in them are rounded too
+            let pane = Color32::from_rgba_unmultiplied(30, 30, 29, 236);
+            let rim = egui::Stroke::new(1.0, Color32::from_white_alpha(30));
+            v.window_fill = pane;
+            v.window_stroke = rim;
+            v.window_corner_radius = 16.into();
+            v.menu_corner_radius = 12.into();
+            let shadow = egui::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(80) };
+            v.window_shadow = shadow;
+            v.popup_shadow = shadow;
+            for wv in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+                wv.corner_radius = 7.into();
+            }
+            w.hovered.bg_fill = Color32::from_white_alpha(11);
+            w.hovered.weak_bg_fill = Color32::from_white_alpha(11);
+            w.open = w.hovered;
+            v.selection.bg_fill = Color32::from_white_alpha(22);
+            // text fields: a dark well in the glass
+            v.extreme_bg_color = Color32::from_black_alpha(70);
+            s.spacing.menu_margin = egui::Margin::same(6);
+        }
     });
 }
 

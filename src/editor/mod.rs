@@ -529,10 +529,10 @@ impl EditorApp {
         egui::Panel::left("tools")
             .exact_size(50.0)
             .resizable(false)
-            .frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(6, 8)))
+            .frame(egui::Frame::new().fill(ui::pane_fill()).inner_margin(egui::Margin::symmetric(6, 8)))
             .show(ui, |ui| {
                 let r = ui.max_rect();
-                ui.painter().vline(r.right() + 6.5, r.y_range().expand(8.0), Stroke::new(1.0, LINE));
+                ui.painter().vline(r.right() + 6.5, r.y_range().expand(8.0), Stroke::new(1.0, ui::hairline()));
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for t in Tool::ALL {
                     if t == Tool::Crop || t == Tool::Arrow {
@@ -550,10 +550,10 @@ impl EditorApp {
         egui::Panel::right("props")
             .exact_size(240.0)
             .resizable(false)
-            .frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(12, 14)))
+            .frame(egui::Frame::new().fill(ui::pane_fill()).inner_margin(egui::Margin::symmetric(12, 14)))
             .show(ui, |ui| {
                 let r = ui.max_rect();
-                ui.painter().vline(r.left() - 12.5, r.y_range().expand(14.0), Stroke::new(1.0, LINE));
+                ui.painter().vline(r.left() - 12.5, r.y_range().expand(14.0), Stroke::new(1.0, ui::hairline()));
                 ui.spacing_mut().item_spacing.y = 8.0;
                 let label = if self.beauty_on { crate::i18n::t("вернуться к рисованию") } else { crate::i18n::t("красивый снимок") };
                 let kind = if self.beauty_on { ui::Kind::Ghost } else { ui::Kind::Accent };
@@ -680,11 +680,11 @@ impl EditorApp {
         ui.add_space(8.0);
         ui.spacing_mut().slider_width = ui.available_width() - 8.0;
         ui::section_label(ui, crate::i18n::t("отступ"));
-        ui.add(egui::Slider::new(&mut self.beauty.padding, 0.02..=0.2).show_value(false));
+        ui::slider(ui, &mut self.beauty.padding, 0.02..=0.2, 0.0);
         ui::section_label(ui, crate::i18n::t("скругление"));
-        ui.add(egui::Slider::new(&mut self.beauty.radius, 0.0..=40.0).show_value(false));
+        ui::slider(ui, &mut self.beauty.radius, 0.0..=40.0, 0.0);
         ui::section_label(ui, crate::i18n::t("тень"));
-        ui.add(egui::Slider::new(&mut self.beauty.shadow, 0.0..=1.0).show_value(false));
+        ui::slider(ui, &mut self.beauty.shadow, 0.0..=1.0, 0.0);
         ui.add_space(10.0);
         ui.label(
             egui::RichText::new(crate::i18n::t("«копировать» и «сохранить» отдадут снимок уже в оформлении"))
@@ -746,10 +746,10 @@ impl EditorApp {
         let ppp = ui.ctx().pixels_per_point();
         egui::Panel::bottom("status")
             .exact_size(26.0)
-            .frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(14, 0)))
+            .frame(egui::Frame::new().fill(ui::pane_fill()).inner_margin(egui::Margin::symmetric(14, 0)))
             .show(ui, |ui| {
                 let r = ui.max_rect();
-                ui.painter().hline(r.x_range().expand(14.0), r.top() - 0.5, Stroke::new(1.0, LINE));
+                ui.painter().hline(r.x_range().expand(14.0), r.top() - 0.5, Stroke::new(1.0, ui::hairline()));
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 18.0;
                     let shown = self.st.crop.unwrap_or(self.st.full_rect());
@@ -1199,11 +1199,7 @@ impl EditorApp {
         let modal = egui::Modal::new(Id::unique("confirm-close"))
             .backdrop_color(Color32::from_black_alpha(140))
             .frame(
-                egui::Frame::new()
-                    .fill(PANEL)
-                    .stroke(Stroke::new(1.0, LINE))
-                    .corner_radius(3)
-                    .inner_margin(egui::Margin::same(18)),
+                ui::float_frame(3).inner_margin(egui::Margin::same(18)),
             )
             .show(ctx, |ui| {
                 ui.set_width(360.0);
@@ -1245,7 +1241,7 @@ fn dashed_rect(r: Rect) -> Vec<egui::Shape> {
 
 fn sep(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(vec2(9.0, 30.0), Sense::hover());
-    ui.painter().vline(rect.center().x, rect.shrink2(vec2(0.0, 6.0)).y_range(), Stroke::new(1.0, LINE));
+    ui.painter().vline(rect.center().x, rect.shrink2(vec2(0.0, 6.0)).y_range(), Stroke::new(1.0, ui::hairline()));
 }
 
 fn tool_icon(t: Tool) -> Icon {
@@ -1291,15 +1287,26 @@ fn swatch(ui: &mut egui::Ui, c: Color32, selected: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
     let p = ui.painter();
     if resp.hovered() {
-        p.rect_filled(rect, 3, HOVER);
+        p.rect_filled(rect, ui::control_radius(rect.height(), 3.0), ui::hover_fill());
     }
     let chip = Rect::from_center_size(rect.center(), vec2(14.0, 14.0));
-    if selected {
-        p.rect_stroke(chip.expand(3.0), 2, Stroke::new(1.0, TEXT), StrokeKind::Inside);
-    }
-    p.rect_filled(chip, 2, c);
-    if c.r() < 40 && c.g() < 40 && c.b() < 40 {
-        p.rect_stroke(chip, 2, Stroke::new(1.0, LINE), StrokeKind::Inside);
+    if theme::glass() {
+        // round drops of color, the chosen one ringed
+        if selected {
+            p.circle_stroke(chip.center(), 10.0, Stroke::new(1.5, TEXT));
+        }
+        p.circle_filled(chip.center(), 7.0, c);
+        if c.r() < 40 && c.g() < 40 && c.b() < 40 {
+            p.circle_stroke(chip.center(), 7.0, Stroke::new(1.0, Color32::from_white_alpha(40)));
+        }
+    } else {
+        if selected {
+            p.rect_stroke(chip.expand(3.0), 2, Stroke::new(1.0, TEXT), StrokeKind::Inside);
+        }
+        p.rect_filled(chip, 2, c);
+        if c.r() < 40 && c.g() < 40 && c.b() < 40 {
+            p.rect_stroke(chip, 2, Stroke::new(1.0, LINE), StrokeKind::Inside);
+        }
     }
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
@@ -1307,14 +1314,17 @@ fn swatch(ui: &mut egui::Ui, c: Color32, selected: bool) -> egui::Response {
 fn width_button(ui: &mut egui::Ui, w: f32, idx: usize, px: f32, on: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
     let p = ui.painter();
+    let glass = theme::glass();
     let fill = if on {
-        ACTIVE
+        ui::plate()
     } else if resp.hovered() {
-        HOVER
+        ui::hover_fill()
+    } else if glass {
+        Color32::from_white_alpha(5)
     } else {
         CANVAS
     };
-    p.rect_filled(rect, 3, fill);
+    p.rect_filled(rect, ui::control_radius(rect.height(), 3.0), fill);
     let fg = if on || resp.hovered() { TEXT } else { DIM };
     let line_h = [1.0, 2.0, 4.0][idx];
     let line = Rect::from_center_size(pos2(rect.center().x - 8.0, rect.center().y), vec2(14.0, line_h));
@@ -1333,12 +1343,15 @@ fn object_row(ui: &mut egui::Ui, s: &Shape, selected: bool) -> RowAction {
     let w = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
     let p = ui.painter();
+    let radius = if theme::glass() { 8 } else { 0 };
     if selected {
-        p.rect_filled(rect, 0, ACTIVE);
+        p.rect_filled(rect, radius, ui::plate());
     } else if resp.hovered() {
-        p.rect_filled(rect, 0, HOVER);
+        p.rect_filled(rect, radius, ui::hover_fill());
     }
-    p.hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, LINE_SOFT));
+    if !theme::glass() {
+        p.hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, LINE_SOFT));
+    }
     let chip = Rect::from_center_size(pos2(rect.left() + 8.0, rect.center().y), vec2(8.0, 8.0));
     p.rect_filled(chip, 1, s.color);
     p.text(pos2(rect.left() + 20.0, rect.center().y), Align2::LEFT_CENTER, kind_name(&s.kind), font(13.0), TEXT);
@@ -1361,7 +1374,7 @@ fn menu_item(ui: &mut egui::Ui, icon: Icon, label: &str, key: &str) -> bool {
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width().max(210.0), 28.0), Sense::click());
     let h = resp.hovered();
     if h {
-        ui.painter().rect_filled(rect, 3, HOVER);
+        ui.painter().rect_filled(rect, ui::soft_radius(3), ui::hover_fill());
     }
     let ir = Rect::from_center_size(pos2(rect.left() + 16.0, rect.center().y), vec2(16.0, 16.0));
     crate::icons::paint(ui.painter(), ir, icon, 14.0, if h { ACCENT } else { DIM });

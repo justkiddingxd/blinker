@@ -141,6 +141,7 @@ unsafe extern "C" {
     pub fn bk_window_buttons_at(w: *mut c_void, x: f64, cy: f64);
     pub fn bk_glass_available() -> c_int;
     pub fn bk_window_glass(w: *mut c_void, x: f64, y: f64, width: f64, height: f64, radius: f64, bg: u32) -> c_int;
+    pub fn bk_window_backdrop(w: *mut c_void, tint: u32, alpha: f64) -> c_int;
     pub fn bk_tray_create(rgba: *const u8, w: c_int, h: c_int, cb: TrayCb);
     pub fn bk_tray_remove();
     pub fn bk_set_mic(id: *const c_char);
@@ -230,6 +231,7 @@ unsafe extern "C" {
 
     // hud.m
     pub fn bk_panel_new(click_through: c_int, cb: PanelCb, ctx: *mut c_void) -> *mut c_void;
+    pub fn bk_panel_glass(p: *mut c_void, radius: f64);
     pub fn bk_panel_set_image(p: *mut c_void, rgba: *const u8, w: c_int, h: c_int, x: f64, y: f64, scale: f64);
     pub fn bk_panel_set_hand(p: *mut c_void, hand: c_int);
     pub fn bk_panel_move(p: *mut c_void, x: f64, y: f64);

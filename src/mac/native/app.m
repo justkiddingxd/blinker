@@ -422,6 +422,46 @@ int bk_window_glass(void *w, double x, double y, double width, double height, do
     return 0;
 }
 
+static char kBKBackdrop;
+
+/// The whole window as frosted glass: the desktop behind it, blurred, under
+/// a `tint` (0x00RRGGBB) of `alpha`. Glass panes added with
+/// `bk_window_glass` float over it; the egui view leaves it clear.
+int bk_window_backdrop(void *w, uint32_t tint, double alpha) {
+    if (@available(macOS 26.0, *)) {
+        NSWindow *win = (__bridge NSWindow *)w;
+        bk_on_main(^{
+            NSView *content = win.contentView;
+            NSView *frame = content.superview;
+            if (!frame) return;
+            if (!objc_getAssociatedObject(win, &kBKBackdrop)) {
+                NSVisualEffectView *blur = [[NSVisualEffectView alloc] initWithFrame:frame.bounds];
+                blur.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+                blur.material = NSVisualEffectMaterialUnderWindowBackground;
+                blur.state = NSVisualEffectStateActive;
+                blur.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+                NSView *shade = [[NSView alloc] initWithFrame:blur.bounds];
+                shade.wantsLayer = YES;
+                shade.layer.backgroundColor = [NSColor colorWithSRGBRed:((tint >> 16) & 0xFF) / 255.0
+                                                                  green:((tint >> 8) & 0xFF) / 255.0
+                                                                   blue:(tint & 0xFF) / 255.0
+                                                                  alpha:alpha].CGColor;
+                shade.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+                [blur addSubview:shade];
+                // the very back: under the glass panes and the egui view
+                [frame addSubview:blur positioned:NSWindowBelow relativeTo:nil];
+                objc_setAssociatedObject(win, &kBKBackdrop, blur, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            win.opaque = NO;
+            win.backgroundColor = NSColor.clearColor;
+            content.wantsLayer = YES;
+            content.layer.opaque = NO;
+        });
+        return 1;
+    }
+    return 0;
+}
+
 void bk_window_style_borderless(void *w) {
     NSWindow *win = (__bridge NSWindow *)w;
     bk_on_main(^{

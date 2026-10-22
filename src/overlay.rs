@@ -1,7 +1,7 @@
 //! Full-desktop selection overlay drawn over a frozen snapshot.
 
 use crate::capture::Snapshot;
-use crate::config::Config;
+use crate::config::{CaptureKey, Config};
 use crate::editor::doc::{self, Kind, Shape};
 use crate::editor::preview::{PrimPainter, View};
 use crate::icons::Icon;
@@ -129,7 +129,9 @@ impl OverlayApp {
         let c = shared.config().editor_color;
         let primary = title.is_none();
         let cfg = shared.config();
-        let tour = (!cfg.tour_done && !record && !cfg.instant_mode)
+        // instant mode copies on release: only the "select" step shows, the
+        // first capture ends it
+        let tour = (!cfg.tour_done && !record)
             .then_some(Tour { step: TourStep::Select, at: f64::NAN, rect: None, shapes: 0 });
         OverlayApp {
             cfg: shared.config(),
@@ -723,28 +725,24 @@ impl OverlayApp {
             self.phase = Phase::Adjusting;
             return self.finish(Action::Copy, now);
         }
-        // Ctrl / Cmd + C: the text field layer turns it into a Copy event
-        // before any key press shows, so both are looked for (and plain Ctrl
-        // on a Mac too)
-        let copy_keys = input.events.iter().any(|e| matches!(e, egui::Event::Copy))
-            || ((cmd || input.modifiers.ctrl) && input.key_pressed(Key::C));
+        // the actions' keys are the user's (the "hotkeys" page)
+        let keys = |k: CaptureKey| self.cfg.capture_keys(k).iter().any(|b| crate::hotkey::pressed(&input, b));
+        let copy_keys = keys(CaptureKey::Copy);
         if self.sel.is_some() && self.phase == Phase::Adjusting {
             if input.key_pressed(Key::Enter) || enter || copy_keys {
                 return self.finish(Action::Copy, now);
             }
-            if cmd && input.key_pressed(Key::S) {
-                return self.finish(Action::Save, now);
+            for (k, action) in [
+                (CaptureKey::Save, Action::Save),
+                (CaptureKey::Edit, Action::Edit),
+                (CaptureKey::Pin, Action::Pin),
+                (CaptureKey::Beauty, Action::Beauty),
+            ] {
+                if keys(k) {
+                    return self.finish(action, now);
+                }
             }
-            if input.key_pressed(Key::E) {
-                return self.finish(Action::Edit, now);
-            }
-            if input.key_pressed(Key::P) {
-                return self.finish(Action::Pin, now);
-            }
-            if input.key_pressed(Key::B) {
-                return self.finish(Action::Beauty, now);
-            }
-            if input.key_pressed(Key::U) && crate::upload::configured(&self.shared.config()) {
+            if keys(CaptureKey::Upload) && crate::upload::configured(&self.shared.config()) {
                 return self.finish(Action::Upload, now);
             }
             let step = if input.modifiers.shift { 10.0 } else { 1.0 };
@@ -1257,7 +1255,7 @@ impl OverlayApp {
             ctx.request_repaint();
         }
         let at = pos2(x - (1.0 - t) * 8.0, y);
-        self.paint_glass(ctx, Rect::from_min_size(at, size), t, ppp, "toolbar-glass");
+        self.paint_glass(ctx, Rect::from_min_size(at, size), t, ppp, "toolbar-glass", 9);
         let resp = egui::Area::new(Id::unique("toolbar"))
             .order(egui::Order::Foreground)
             .fixed_pos(at)
@@ -1284,25 +1282,30 @@ impl OverlayApp {
                                 }
                                 return act;
                             }
-                            if ui::icon_button_sized(ui, Icon::Copy, crate::i18n::t("копировать  enter"), bar_btn(), bar_icon(), false, ui::Kind::Accent).clicked() {
+                            // "save  cmd s": the name and the key the user set
+                            let tip = |k: CaptureKey| {
+                                let key = self.cfg.capture_hint(k);
+                                if key.is_empty() { k.label().to_string() } else { format!("{}  {key}", k.label()) }
+                            };
+                            let copy_tip = match self.cfg.capture_hint(CaptureKey::Copy) {
+                                k if k.is_empty() => crate::i18n::t("копировать  enter").to_string(),
+                                k => format!("{} · {k}", crate::i18n::t("копировать  enter")),
+                            };
+                            if ui::icon_button_sized(ui, Icon::Copy, &copy_tip, bar_btn(), bar_icon(), false, ui::Kind::Accent).clicked() {
                                 act = Some(Action::Copy);
                             }
-                            if ui::icon_button_sized(ui, Icon::Save, &crate::i18n::kb(crate::i18n::t("сохранить  ctrl s")), bar_btn(), bar_icon(), false, ui::Kind::Ghost).clicked() {
-                                act = Some(Action::Save);
-                            }
-                            if ui::icon_button_sized(ui, Icon::Edit, crate::i18n::t("править  e"), bar_btn(), bar_icon(), false, ui::Kind::Ghost).clicked() {
-                                act = Some(Action::Edit);
-                            }
-                            if ui::icon_button_sized(ui, Icon::Pin, crate::i18n::t("закрепить поверх окон  p"), bar_btn(), bar_icon(), false, ui::Kind::Ghost).clicked() {
-                                act = Some(Action::Pin);
-                            }
-                            if ui::icon_button_sized(ui, Icon::Frame, crate::i18n::t("красивый снимок  b"), bar_btn(), bar_icon(), false, ui::Kind::Ghost)
-                                .clicked()
-                            {
-                                act = Some(Action::Beauty);
+                            for (k, icon, action) in [
+                                (CaptureKey::Save, Icon::Save, Action::Save),
+                                (CaptureKey::Edit, Icon::Edit, Action::Edit),
+                                (CaptureKey::Pin, Icon::Pin, Action::Pin),
+                                (CaptureKey::Beauty, Icon::Frame, Action::Beauty),
+                            ] {
+                                if ui::icon_button_sized(ui, icon, &tip(k), bar_btn(), bar_icon(), false, ui::Kind::Ghost).clicked() {
+                                    act = Some(action);
+                                }
                             }
                             if crate::upload::configured(&self.cfg)
-                                && ui::icon_button_sized(ui, Icon::Upload, crate::i18n::t("загрузить и скопировать ссылку  u"), bar_btn(), bar_icon(), false, ui::Kind::Ghost)
+                                && ui::icon_button_sized(ui, Icon::Upload, &tip(CaptureKey::Upload), bar_btn(), bar_icon(), false, ui::Kind::Ghost)
                                     .clicked()
                             {
                                 act = Some(Action::Upload);
@@ -1462,15 +1465,16 @@ impl OverlayApp {
 impl OverlayApp {
     fn end_tour(&mut self) {
         self.tour = None;
-        if self.demo.is_none() {
-            self.shared.update_config(|c| c.tour_done = true);
-        }
     }
 
     fn tour(&mut self, ctx: &egui::Context, now: f64) {
         let Some(mut tour) = self.tour.take() else { return };
         if tour.at.is_nan() {
             tour.at = now;
+            // shown once is enough, however this capture ends (esc too)
+            if self.demo.is_none() {
+                self.shared.update_config(|c| c.tour_done = true);
+            }
         }
         // the step follows what the user does
         let want = match (self.phase, tour.step) {
@@ -1513,12 +1517,16 @@ impl OverlayApp {
             ),
             TourStep::Act => (
                 l("что сделать со снимком", "what to do with the shot"),
-                vec![
-                    (ctrl("ctrl c"), l("копировать", "copy")),
-                    (ctrl("ctrl s"), l("сохранить", "save")),
-                    ("e".into(), l("открыть в редакторе", "open in the editor")),
-                    ("p".into(), l("закрепить поверх окон", "pin on top")),
-                ],
+                // the keys the user set; an action without one is left out
+                [
+                    (CaptureKey::Copy, l("копировать", "copy")),
+                    (CaptureKey::Save, l("сохранить", "save")),
+                    (CaptureKey::Edit, l("открыть в редакторе", "open in the editor")),
+                    (CaptureKey::Pin, l("закрепить поверх окон", "pin on top")),
+                ]
+                .into_iter()
+                .filter_map(|(k, what)| Some((Some(self.cfg.capture_hint(k)).filter(|h| !h.is_empty())?, what)))
+                .collect(),
                 self.toolbar_rect,
             ),
         };
@@ -1568,6 +1576,12 @@ impl OverlayApp {
             ctx.request_repaint();
         }
         let slide = side.map_or(vec2(0.0, -8.0), |(_, d)| d * 8.0) * (1.0 - t);
+        // a pane of glass like the panels, sized from the last frame
+        const TOUR_RADIUS: u8 = 14;
+        if let Some(r) = tour.rect {
+            self.paint_glass(ctx, Rect::from_min_size(pos + slide, r.size()), t, ctx.pixels_per_point(), "tour-glass", TOUR_RADIUS);
+        }
+        let glass = self.glass.is_some();
         let mut next = false;
         let mut skip = false;
         let resp = egui::Area::new(Id::unique("tour"))
@@ -1576,10 +1590,11 @@ impl OverlayApp {
             .show(ctx, |ui| {
                 ui.set_opacity(t);
                 egui::Frame::new()
-                    .fill(PANEL)
-                    .stroke(Stroke::new(1.0, ACCENT.gamma_multiply(0.55)))
-                    .corner_radius(12)
-                    .shadow(egui::epaint::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(110) })
+                    .fill(if glass { Color32::TRANSPARENT } else { PANEL })
+                    .stroke(if glass { Stroke::NONE } else { Stroke::new(1.0, ACCENT.gamma_multiply(0.55)) })
+                    .corner_radius(if glass { TOUR_RADIUS } else { 12 })
+                    // a shadow under clear glass would darken the pane itself
+                    .shadow(if glass { egui::epaint::Shadow::NONE } else { egui::epaint::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(110) } })
                     .inner_margin(egui::Margin::symmetric(16, 14))
                     .show(ui, |ui| {
                         ui.set_width(268.0);
@@ -1600,7 +1615,8 @@ impl OverlayApp {
                             for i in 0..3 {
                                 let c = pos2(r.left() + 4.0 + i as f32 * 12.0, r.center().y);
                                 let on = i == index;
-                                ui.painter().circle_filled(c, if on { 3.5 } else { 2.5 }, if on { ACCENT } else { LINE });
+                                let off = if glass { Color32::from_white_alpha(46) } else { LINE };
+                                ui.painter().circle_filled(c, if on { 3.5 } else { 2.5 }, if on { ACCENT } else { off });
                             }
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if tour.step != TourStep::Select {
@@ -1626,8 +1642,14 @@ impl OverlayApp {
             let perp = vec2(-n.y, n.x);
             let tri = vec![tip_at + n * 7.0, tip_at + perp * 7.0 - n * 0.5, tip_at - perp * 7.0 - n * 0.5];
             let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("tour-arrow")));
-            painter.add(egui::Shape::convex_polygon(tri.clone(), PANEL.gamma_multiply(t), Stroke::NONE));
-            painter.line(vec![tri[1], tri[0], tri[2]], Stroke::new(1.0, ACCENT.gamma_multiply(0.55 * t)));
+            // on glass: the tint and rim of the pane it sticks out of
+            let (fill, edge) = if glass {
+                (Color32::from_rgba_unmultiplied(34, 34, 33, 235), Color32::from_white_alpha(42))
+            } else {
+                (PANEL, ACCENT.gamma_multiply(0.55))
+            };
+            painter.add(egui::Shape::convex_polygon(tri.clone(), fill.gamma_multiply(t), Stroke::NONE));
+            painter.line(vec![tri[1], tri[0], tri[2]], Stroke::new(1.0, edge.gamma_multiply(t)));
         }
         tour.rect = Some(rect);
         if skip || (next && last) {
@@ -1646,8 +1668,9 @@ fn keycap(ui: &mut egui::Ui, key: &str) {
     let g = ui.painter().layout_no_wrap(key.to_string(), mono(11.5), TEXT);
     let w = (g.size().x + 12.0).max(52.0);
     let (r, _) = ui.allocate_exact_size(vec2(w, 20.0), egui::Sense::hover());
-    ui.painter().rect_filled(r, 5, HOVER);
-    ui.painter().rect_stroke(r, 5, Stroke::new(1.0, LINE), StrokeKind::Inside);
+    let (fill, edge) = if glass() { (Color32::from_white_alpha(14), Color32::from_white_alpha(24)) } else { (HOVER, LINE) };
+    ui.painter().rect_filled(r, 6, fill);
+    ui.painter().rect_stroke(r, 6, Stroke::new(1.0, edge), StrokeKind::Inside);
     ui.painter().galley(r.center() - g.size() / 2.0, g, TEXT);
 }
 
@@ -1864,7 +1887,7 @@ impl OverlayApp {
         }
         self.bar_pos = Some(next);
         let pos = next - vec2(0.0, (1.0 - t) * 14.0);
-        self.paint_glass(ctx, Rect::from_min_size(pos, size), t, ppp, "tools-glass");
+        self.paint_glass(ctx, Rect::from_min_size(pos, size), t, ppp, "tools-glass", 9);
         let resp = egui::Area::new(Id::unique("tools-bar"))
             .order(egui::Order::Foreground)
             .fixed_pos(pos)
@@ -1913,7 +1936,7 @@ impl OverlayApp {
 
     /// A pane of glass at `rect` (points): the blurred screenshot under it, a
     /// dark tint, a light rim and a highlight along the top edge.
-    fn paint_glass(&mut self, ctx: &egui::Context, rect: Rect, alpha: f32, ppp: f32, id: &str) {
+    fn paint_glass(&mut self, ctx: &egui::Context, rect: Rect, alpha: f32, ppp: f32, id: &str, radius: u8) {
         if !glass() || alpha <= 0.0 {
             return;
         }
@@ -1932,12 +1955,13 @@ impl OverlayApp {
             pos2(rect.max.x * ppp / img.x, rect.max.y * ppp / img.y),
         );
         let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, Id::unique(id)));
-        let r = egui::CornerRadius::same(9);
+        let r = egui::CornerRadius::same(radius);
         p.add(egui::epaint::RectShape::filled(rect, r, Color32::WHITE.gamma_multiply(alpha)).with_texture(tex.id(), uv));
         p.rect_filled(rect, r, Color32::from_rgba_unmultiplied(20, 20, 19, (125.0 * alpha) as u8));
         p.rect_stroke(rect, r, Stroke::new(1.0, Color32::from_white_alpha((42.0 * alpha) as u8)), StrokeKind::Inside);
         // light catching the top edge
-        let top = Rect::from_min_size(rect.min + vec2(9.0, 1.0), vec2(rect.width() - 18.0, 1.0));
+        let inset = radius as f32;
+        let top = Rect::from_min_size(rect.min + vec2(inset, 1.0), vec2(rect.width() - 2.0 * inset, 1.0));
         p.rect_filled(top, 0, Color32::from_white_alpha((36.0 * alpha) as u8));
     }
 

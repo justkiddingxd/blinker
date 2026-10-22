@@ -25,6 +25,9 @@ const NAV_W: f32 = 204.0;
 /// How far the glass sidebar (macOS 26) stands off the window's edges.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const GLASS_INSET: f32 = 7.0;
+/// How much of the graphite tint lies over the blurred desktop (macOS 26).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub const GLASS_TINT: f32 = 0.8;
 
 /// Tab requested by the tray for the next show (read when the event fires).
 pub fn request_file() -> std::path::PathBuf {
@@ -44,16 +47,18 @@ pub fn run(shared: &Arc<Shared>, tab: HomeTab) {
         .with_transparent(theme::glass());
     let viewport = chrome::style(viewport);
     let shared2 = shared.clone();
-    runtime::run_window(shared, viewport, true, move |cc| {
+    runtime::run_smooth_window(shared, viewport, true, move |cc| {
         let hwnd = win::hwnd_of(cc);
         if let Some(h) = hwnd {
             win::style_borderless(h);
             chrome::place_window_buttons(h, TITLE_BAR_H);
             #[cfg(target_os = "macos")]
             if theme::glass() {
-                // the sidebar: a glass pane floating in the window, like Finder's
+                // the window is frosted glass, the sidebar a pane of clear
+                // glass floating in it, like Finder's
+                win::window_backdrop(h, 0x161615, GLASS_TINT);
                 let (x, y) = (GLASS_INSET, GLASS_INSET);
-                win::window_glass(h, (x, y, NAV_W - 2.0 * x, SIZE.1 - 2.0 * y), 16.0, 0x161615);
+                win::window_glass(h, (x, y, NAV_W - 2.0 * x, SIZE.1 - 2.0 * y), 18.0, 0);
             }
             win::cloak(h, true);
             win::force_foreground(h);
@@ -155,11 +160,39 @@ pub fn tab_from_arg(arg: &str) -> HomeTab {
     }
 }
 
+/// Whose keys are being changed: a system-wide hotkey, or an action's key
+/// inside a capture.
+#[derive(Clone, Copy, PartialEq)]
+enum KeyTarget {
+    Global(HotkeyAction),
+    Capture(config::CaptureKey),
+}
+
+impl KeyTarget {
+    fn keys(self, cfg: &Config) -> &Vec<String> {
+        match self {
+            KeyTarget::Global(a) => cfg.bindings(a),
+            KeyTarget::Capture(k) => cfg.capture_keys(k),
+        }
+    }
+
+    fn keys_mut(self, cfg: &mut Config) -> &mut Vec<String> {
+        match self {
+            KeyTarget::Global(a) => cfg.bindings_mut(a),
+            KeyTarget::Capture(k) => cfg.capture_keys_mut(k),
+        }
+    }
+
+    fn all() -> impl Iterator<Item = KeyTarget> {
+        HotkeyAction::ALL.into_iter().map(KeyTarget::Global).chain(config::CaptureKey::ALL.into_iter().map(KeyTarget::Capture))
+    }
+}
+
 /// Size of everything under `dir` (date / pics / videos subfolders included).
 /// A binding being recorded: which action, and which slot (None = new one).
 #[derive(Clone, Copy, PartialEq)]
 struct Recording {
-    action: HotkeyAction,
+    action: KeyTarget,
     index: Option<usize>,
     started: f64,
 }
@@ -266,10 +299,7 @@ impl HomeApp {
                         ],
                     ),
                 ];
-                for (i, (caption, items)) in groups.into_iter().enumerate() {
-                    if i > 0 {
-                        ui.add_space(6.0);
-                    }
+                for (caption, items) in groups {
                     ui::nav_caption(ui, caption);
                     for &(tab, icon, label) in items {
                         let resp = ui::nav_item(ui, icon, label, self.tab == tab);
@@ -285,14 +315,15 @@ impl HomeApp {
                 if let Some(r) = selected_rect {
                     let y = ui.ctx().animate_value_with_time(egui::Id::unique("nav-plate"), r.top(), 0.16);
                     let rect = Rect::from_min_size(pos2(r.left(), y), r.size());
-                    ui.painter().set(plate, egui::Shape::rect_filled(rect, 7, ACTIVE));
+                    ui.painter().set(plate, egui::Shape::rect_filled(rect, ui::control_radius(rect.height(), 7.0), ui::plate()));
                 }
                 self.nav_footer(ui);
             });
     }
 
     /// Bottom of the sections: the version, a link to GitHub and, when a
-    /// newer release is out, the way to it.
+    /// newer release is out, the way to it (checking by hand is on the
+    /// "system" page).
     fn nav_footer(&mut self, ui: &mut egui::Ui) {
         let newer = self.update.lock().unwrap().clone();
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
@@ -321,26 +352,6 @@ impl HomeApp {
                 if resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(crate::update::REPO_URL).clicked() {
                     win::open_url(crate::update::REPO_URL);
                 }
-                // check for updates: a small arrow, the answer in its tip
-                use crate::update::Check;
-                let state = self.check.as_ref().map(|c| c.lock().unwrap().clone());
-                let tip = match &state {
-                    Some(Check::Asking) => l("проверяю…", "checking…").to_string(),
-                    Some(Check::Latest) => l("это последняя версия", "this is the latest version").to_string(),
-                    Some(Check::Newer(v)) => lf!("вышла версия {v}", "version {v} is out"),
-                    Some(Check::Failed(e)) => lf!("не проверилось: {e}", "the check failed: {e}"),
-                    None => l("проверить обновления", "check for updates").to_string(),
-                };
-                let (rect, resp) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::click());
-                let col = match state {
-                    Some(Check::Asking) => FAINT.gamma_multiply(0.6),
-                    _ if resp.hovered() => TEXT,
-                    _ => FAINT,
-                };
-                icons::paint(ui.painter(), rect, Icon::Repeat, 12.0, col);
-                if resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(tip).clicked() && state != Some(Check::Asking) {
-                    self.check = Some(crate::update::check_now(ui.ctx(), &self.update));
-                }
             });
             use crate::update::Stage;
             let stage = self.install.as_ref().map(|j| j.stage());
@@ -366,8 +377,8 @@ impl HomeApp {
                     note(ui, format!("  {e}"), DANGER);
                 }
                 (None, Some(v)) => {
-                    let tip = lf!("вышла версия {v}: скачать и перезапустить", "version {v} is out: download it and restart");
-                    if ui::button_h(ui, l("обновить blinker", "update blinker"), ui::Kind::Accent, 28.0).on_hover_text(tip).clicked() {
+                    let tip = l("скачать и перезапустить", "download it and restart");
+                    if update_row(ui, &v).on_hover_text(tip).clicked() {
                         self.install = Some(crate::update::install(ui.ctx()));
                     }
                 }
@@ -387,7 +398,9 @@ impl HomeApp {
         if t < 1.0 {
             ui.ctx().request_repaint();
         }
-        egui::CentralPanel::no_frame().frame(egui::Frame::new().fill(BG)).show(ui, |ui| {
+        // on glass the page is clear: the frosted window shows through
+        let fill = if theme::glass() { egui::Color32::TRANSPARENT } else { BG };
+        egui::CentralPanel::no_frame().frame(egui::Frame::new().fill(fill)).show(ui, |ui| {
             self.content_rect = ui.max_rect();
             let r = ui.max_rect();
             // the top strip drags the window; Windows has its buttons there
@@ -883,9 +896,9 @@ impl HomeApp {
             ui::setting_row(ui, t("длительность"), l("при наведении не пропадает", "stays while hovered"), |ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 let label = lf!("{:.0} с", "{:.0} s", self.cfg.toast_seconds);
-                ui.add_sized(vec2(34.0, 20.0), egui::Label::new(egui::RichText::new(label).font(mono(11.5)).color(DIM)));
+                ui.add_sized(vec2(36.0, 26.0), egui::Label::new(egui::RichText::new(label).font(mono(11.5)).color(DIM)));
                 ui.spacing_mut().slider_width = 130.0;
-                ui.add(egui::Slider::new(&mut self.cfg.toast_seconds, 2.0..=15.0).step_by(1.0).show_value(false));
+                ui::slider(ui, &mut self.cfg.toast_seconds, 2.0..=15.0, 1.0);
             });
         });
     }
@@ -902,10 +915,12 @@ impl HomeApp {
         }
         let mut preview = false;
         ui::group(ui, "", |ui| {
-            ui::setting_block(ui, l("какой звук", "which sound"), "", |ui| {
+            ui::setting_row(ui, l("какой звук", "which sound"), "", |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
                 let mut kinds: Vec<SoundKind> = SoundKind::BUILTIN.to_vec();
                 kinds.push(SoundKind::Custom);
-                for k in kinds {
+                // right to left
+                for k in kinds.into_iter().rev() {
                     if ui::filter(ui, k.label(), self.cfg.sound_kind == k).clicked() {
                         self.cfg.sound_kind = k;
                         if k == SoundKind::Custom && self.cfg.sound_file.is_none() {
@@ -934,12 +949,13 @@ impl HomeApp {
                     preview = true;
                 }
                 let mut pct = (self.cfg.sound_volume * 100.0).round();
+                // as tall as the button and the slider: all three on one line
                 ui.add_sized(
-                    vec2(34.0, 20.0),
+                    vec2(36.0, 26.0),
                     egui::Label::new(egui::RichText::new(format!("{pct:.0}%")).font(mono(11.5)).color(DIM)),
                 );
                 ui.spacing_mut().slider_width = 130.0;
-                let resp = ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).step_by(1.0).show_value(false));
+                let resp = ui::slider(ui, &mut pct, 0.0..=100.0, 1.0);
                 self.cfg.sound_volume = pct / 100.0;
                 if resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
                     preview = true;
@@ -997,7 +1013,17 @@ impl HomeApp {
             });
             if self.cfg.format == ImageFormat::Jpeg {
                 ui::setting_row(ui, t("качество jpeg"), "", |ui| {
-                    ui.add(egui::Slider::new(&mut self.cfg.jpeg_quality, 50..=100).suffix("%"));
+                    // right to left: value, slider
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.add_sized(
+                        vec2(36.0, 26.0),
+                        egui::Label::new(egui::RichText::new(format!("{}%", self.cfg.jpeg_quality)).font(mono(11.5)).color(DIM)),
+                    );
+                    ui.spacing_mut().slider_width = 130.0;
+                    let mut q = self.cfg.jpeg_quality as f32;
+                    if ui::slider(ui, &mut q, 50.0..=100.0, 1.0).changed() {
+                        self.cfg.jpeg_quality = q as u8;
+                    }
                 });
             }
             ui::setting_row(ui, t("сохранять каждый снимок"), t("даже если нажал «копировать»"), |ui| {
@@ -1035,35 +1061,21 @@ impl HomeApp {
         for (title, actions) in groups {
             ui::group(ui, title, |ui| {
                 for &action in actions {
-                    ui::setting_row(ui, action.label(), action.desc(), |ui| {
-                        // right to left: "+" first, then the shortcuts (last first)
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        let adding = self.recording.is_some_and(|r| r.action == action && r.index.is_none());
-                        if adding {
-                            recording_chip(ui, now);
-                        } else if add_button(ui).clicked() {
-                            self.start_recording(Recording { action, index: None, started: now });
-                        }
-                        let bindings = self.cfg.bindings(action).clone();
-                        let mut remove = None;
-                        for (i, b) in bindings.iter().enumerate().rev() {
-                            if self.recording.is_some_and(|r| r.action == action && r.index == Some(i)) {
-                                recording_chip(ui, now);
-                                continue;
-                            }
-                            match chip(ui, b, failed.contains(b)) {
-                                ChipAction::Edit => self.start_recording(Recording { action, index: Some(i), started: now }),
-                                ChipAction::Remove => remove = Some(i),
-                                ChipAction::None => {}
-                            }
-                        }
-                        if let Some(i) = remove {
-                            self.cfg.bindings_mut(action).remove(i);
-                        }
-                    });
+                    self.keys_row(ui, KeyTarget::Global(action), action.label(), action.desc(), now, &failed);
                 }
             });
         }
+        // inside a capture, with an area selected
+        let capture = if self.cfg.instant_mode {
+            l("в захвате · не работают в мгновенном режиме", "in a capture · off in instant mode")
+        } else {
+            l("в захвате", "in a capture")
+        };
+        ui::group(ui, capture, |ui| {
+            for k in config::CaptureKey::ALL {
+                self.keys_row(ui, KeyTarget::Capture(k), k.label(), k.desc(), now, &failed);
+            }
+        });
         ui.add_space(14.0);
         let note = if self.recording.is_some() {
             t("нажми сочетание. esc отменяет, backspace удаляет это сочетание.")
@@ -1076,6 +1088,39 @@ impl HomeApp {
             ui.label(egui::RichText::new(note).font(font(12.0)).color(FAINT));
         }
         self.poll_recorder(&ctx);
+    }
+
+    /// One action's key combinations: chips (click to change, × to remove)
+    /// and a "+" for one more.
+    fn keys_row(&mut self, ui: &mut egui::Ui, target: KeyTarget, label: &str, desc: &str, now: f64, failed: &std::collections::HashSet<String>) {
+        ui::setting_row(ui, label, desc, |ui| {
+            // right to left: "+" first, then the shortcuts (last first)
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let adding = self.recording.is_some_and(|r| r.action == target && r.index.is_none());
+            if adding {
+                recording_chip(ui, now);
+            } else if add_button(ui).clicked() {
+                self.start_recording(Recording { action: target, index: None, started: now });
+            }
+            let bindings = target.keys(&self.cfg).clone();
+            let mut remove = None;
+            for (i, b) in bindings.iter().enumerate().rev() {
+                if self.recording.is_some_and(|r| r.action == target && r.index == Some(i)) {
+                    recording_chip(ui, now);
+                    continue;
+                }
+                // a capture's keys are never registered: they can't fail
+                let failed = matches!(target, KeyTarget::Global(_)) && failed.contains(b);
+                match chip(ui, b, failed) {
+                    ChipAction::Edit => self.start_recording(Recording { action: target, index: Some(i), started: now }),
+                    ChipAction::Remove => remove = Some(i),
+                    ChipAction::None => {}
+                }
+            }
+            if let Some(i) = remove {
+                target.keys_mut(&mut self.cfg).remove(i);
+            }
+        });
     }
 
     /// ffmpeg: where it is, or a way to get it (a download in one click).
@@ -1328,10 +1373,8 @@ impl HomeApp {
             let h = 440f32.min(screen.height() - 60.0);
             let card = Rect::from_center_size(screen.center(), vec2(w, h));
             egui::Area::new(egui::Id::unique("whats-new")).order(egui::Order::Tooltip).fixed_pos(card.min).show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(PANEL)
-                    .stroke(Stroke::new(1.0, LINE_HI))
-                    .corner_radius(14)
+                let frame = if theme::glass() { ui::float_frame(14) } else { egui::Frame::new().fill(PANEL).stroke(Stroke::new(1.0, LINE_HI)).corner_radius(14) };
+                frame
                     .inner_margin(egui::Margin { left: 24, right: 24, top: 22, bottom: 18 })
                     .show(ui, |ui| {
                         ui.set_width(w - 48.0);
@@ -1355,7 +1398,7 @@ impl HomeApp {
                                         if i > 0 {
                                             ui.add_space(14.0);
                                             let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-                                            ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, LINE));
+                                            ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, ui::hairline()));
                                             ui.add_space(6.0);
                                         }
                                         ui.label(egui::RichText::new(v).font(mono(12.5)).color(ACCENT));
@@ -1432,17 +1475,18 @@ impl HomeApp {
             // cancel
         } else if backspace {
             if let Some(i) = rec.index {
-                self.cfg.bindings_mut(rec.action).remove(i);
+                rec.action.keys_mut(&mut self.cfg).remove(i);
             }
         } else {
             let combo = hotkey::format(c);
             // One combination belongs to one action: take it away from the others.
-            for a in HotkeyAction::ALL {
+            // (a system-wide hotkey would never let a capture see it)
+            for a in KeyTarget::all() {
                 if a != rec.action {
-                    self.cfg.bindings_mut(a).retain(|b| *b != combo);
+                    a.keys_mut(&mut self.cfg).retain(|b| *b != combo);
                 }
             }
-            let list = self.cfg.bindings_mut(rec.action);
+            let list = rec.action.keys_mut(&mut self.cfg);
             match rec.index {
                 Some(i) if i < list.len() => list[i] = combo.clone(),
                 _ => list.push(combo.clone()),
@@ -1599,8 +1643,8 @@ fn corner_name(c: Corner) -> &'static str {
 fn corner_picker(ui: &mut egui::Ui, value: &mut Corner) {
     let (rect, _) = ui.allocate_exact_size(vec2(84.0, 52.0), Sense::hover());
     let p = ui.painter();
-    p.rect_filled(rect, 4, CANVAS);
-    p.rect_stroke(rect, 4, Stroke::new(1.0, LINE), StrokeKind::Inside);
+    p.rect_filled(rect, ui::soft_radius(4), ui::well());
+    p.rect_stroke(rect, ui::soft_radius(4), Stroke::new(1.0, ui::edge()), StrokeKind::Inside);
     let card = vec2(22.0, 13.0);
     for (corner, anchor) in [
         (Corner::TopLeft, rect.left_top() + vec2(5.0, 5.0)),
@@ -1643,20 +1687,22 @@ fn chip(ui: &mut egui::Ui, binding: &str, failed: bool) -> ChipAction {
     let x_resp = ui.interact(x_rect, resp.id.with("x"), Sense::click());
     let hovered = resp.hovered() || x_resp.hovered();
     let p = ui.painter();
+    let radius = ui::control_radius(rect.height(), 5.0);
     if hovered {
-        p.rect_filled(rect, 5, HOVER);
+        p.rect_filled(rect, radius, ui::hover_fill());
     }
     if failed {
-        p.rect_stroke(rect, 5, Stroke::new(1.0, DANGER), StrokeKind::Inside);
+        p.rect_stroke(rect, radius, Stroke::new(1.0, DANGER), StrokeKind::Inside);
     }
     // keycaps
     let mut x = rect.left() + 5.0;
     for g in galleys {
         let cap = Rect::from_min_size(pos2(x, rect.center().y - 9.5), vec2(g.size().x + 12.0, 19.0));
-        p.rect_filled(cap, 4, CANVAS);
-        p.rect_stroke(cap, 4, Stroke::new(1.0, if failed { DANGER } else { LINE }), StrokeKind::Inside);
+        let edge = if failed { DANGER } else { ui::edge() };
+        p.rect_filled(cap, ui::soft_radius(4).min(6), ui::well());
+        p.rect_stroke(cap, ui::soft_radius(4).min(6), Stroke::new(1.0, edge), StrokeKind::Inside);
         // a slightly thicker bottom edge, like a real key
-        p.hline(cap.x_range().shrink(3.0), cap.bottom() - 0.5, Stroke::new(1.0, if failed { DANGER } else { LINE }));
+        p.hline(cap.x_range().shrink(5.0), cap.bottom() - 0.5, Stroke::new(1.0, edge));
         let col = if failed { DANGER } else { TEXT };
         p.galley(cap.center() - g.size() / 2.0, g, col);
         x = cap.right() + 4.0;
@@ -1680,8 +1726,9 @@ fn recording_chip(ui: &mut egui::Ui, now: f64) {
     let (rect, _) = ui.allocate_exact_size(vec2(galley.size().x + 18.0, 26.0), Sense::hover());
     let t = ((now * 4.0).sin() as f32) * 0.5 + 0.5;
     let p = ui.painter();
-    p.rect_filled(rect, 3, CANVAS);
-    p.rect_stroke(rect, 3, Stroke::new(1.0, theme::lerp_color(LINE, ACCENT, t)), StrokeKind::Inside);
+    let radius = ui::control_radius(rect.height(), 3.0);
+    p.rect_filled(rect, radius, ui::well());
+    p.rect_stroke(rect, radius, Stroke::new(1.0, theme::lerp_color(ui::edge(), ACCENT, t)), StrokeKind::Inside);
     p.galley(pos2(rect.left() + 10.0, rect.center().y - galley.size().y / 2.0), galley, ACCENT);
 }
 
@@ -1690,13 +1737,34 @@ fn add_button(ui: &mut egui::Ui) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
     let p = ui.painter();
     let h = resp.hovered();
-    if h {
-        p.rect_filled(rect, 3, HOVER);
+    if theme::glass() {
+        // a round glass button
+        p.circle_filled(rect.center(), 13.0, if h { ui::plate() } else { ui::hover_fill() });
+        p.circle_stroke(rect.center(), 12.5, Stroke::new(1.0, ui::edge()));
+    } else {
+        if h {
+            p.rect_filled(rect, 3, HOVER);
+        }
+        let pts = dashed(rect.shrink(0.5));
+        p.extend(egui::Shape::dashed_line(&pts, Stroke::new(1.0, if h { DIM } else { LINE }), 4.0, 3.0));
     }
-    let pts = dashed(rect.shrink(0.5));
-    p.extend(egui::Shape::dashed_line(&pts, Stroke::new(1.0, if h { DIM } else { LINE }), 4.0, 3.0));
     p.galley(rect.center() - galley.size() / 2.0, galley, if h { TEXT } else { DIM });
     resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(t("+ добавить"))
+}
+
+/// "update to 0.3.4" at the bottom of the sidebar: a row like the sections,
+/// quiet, with the download arrow.
+fn update_row(ui: &mut egui::Ui, version: &str) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
+    let h = ui.ctx().animate_bool_with_time(resp.id.with("hover"), resp.hovered(), 0.08);
+    let p = ui.painter();
+    let radius = ui::control_radius(rect.height(), 7.0);
+    p.rect_filled(rect, radius, theme::lerp_color(ui::plate(), ui::hover_fill().gamma_multiply(2.6), h));
+    let icon = Rect::from_center_size(pos2(rect.left() + 17.0, rect.center().y), vec2(15.0, 15.0));
+    icons::paint(p, icon, Icon::Save, 15.0, ACCENT);
+    let g = p.layout_no_wrap(lf!("обновить до {version}", "update to {version}"), font(12.5), TEXT);
+    p.galley(pos2(rect.left() + 34.0, rect.center().y - g.size().y / 2.0), g, TEXT);
+    resp.on_hover_cursor(CursorIcon::PointingHand)
 }
 
 fn dashed(r: Rect) -> Vec<egui::Pos2> {
@@ -1753,6 +1821,14 @@ impl eframe::App for HomeApp {
                 return;
             }
         }
+        // other processes change these (a capture ends the walkthrough, the
+        // loupe and the pen remember their last setting): never write them
+        // back stale
+        let disk = self.shared.config();
+        self.cfg.tour_done = disk.tour_done;
+        self.cfg.loupe_cell = disk.loupe_cell;
+        self.cfg.editor_color = disk.editor_color;
+        self.cfg.editor_width = disk.editor_width;
         self.nav(ui);
         self.content(ui);
         chrome::frame_border(&ctx);

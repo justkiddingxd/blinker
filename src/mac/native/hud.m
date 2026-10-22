@@ -105,6 +105,24 @@ void *bk_panel_new(int click_through, bk_panel_cb cb, void *ctx) {
     return (__bridge_retained void *)p;
 }
 
+/// macOS 26: a pane of Liquid Glass under the panel's picture, `radius`
+/// points round, sized with the panel.
+void bk_panel_glass(void *pp, double radius) {
+    if (@available(macOS 26.0, *)) {
+        BKPanel *p = (__bridge BKPanel *)pp;
+        bk_on_main(^{
+            NSView *content = p.contentView;
+            NSView *frame = content.superview;
+            if (!frame) return;
+            NSGlassEffectView *glass = [[NSGlassEffectView alloc] initWithFrame:frame.bounds];
+            glass.style = NSGlassEffectViewStyleRegular;
+            glass.cornerRadius = radius;
+            glass.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+            [frame addSubview:glass positioned:NSWindowBelow relativeTo:content];
+        });
+    }
+}
+
 /// New picture (premultiplied RGBA, `w × h` px) at (x, y) top-left global
 /// points; the panel is `w / scale` points wide.
 void bk_panel_set_image(void *pp, const uint8_t *rgba, int w, int h, double x, double y, double scale) {

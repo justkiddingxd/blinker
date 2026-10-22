@@ -229,6 +229,7 @@ fn paint_pill() {
             paused: st.clock.is_paused(),
             clock: st.shown.elapsed().as_secs_f32(),
             hover: st.hover,
+            glass: false,
         };
         if let Some(pm) = draw_pill(&look, st.scale) {
             unsafe { present(st.pill, &pm, st.pill_pos) };

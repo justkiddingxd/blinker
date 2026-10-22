@@ -204,7 +204,7 @@ fn menu_item(ui: &mut egui::Ui, icon: Icon, label: &str) -> bool {
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width().max(180.0), 28.0), egui::Sense::click());
     let h = resp.hovered();
     if h {
-        ui.painter().rect_filled(rect, 3, HOVER);
+        ui.painter().rect_filled(rect, crate::ui::soft_radius(3), crate::ui::hover_fill());
     }
     let ir = Rect::from_center_size(pos2(rect.left() + 16.0, rect.center().y), vec2(16.0, 16.0));
     crate::icons::paint(ui.painter(), ir, icon, 14.0, if h { ACCENT } else { DIM });

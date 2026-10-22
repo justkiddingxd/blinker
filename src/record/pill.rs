@@ -98,6 +98,9 @@ pub(crate) struct PillLook {
     /// Seconds since the pill appeared (drives the slow breathing of the dot).
     pub clock: f32,
     pub hover: Option<Btn>,
+    /// A pane of Liquid Glass lies under the picture (macOS 26): the card
+    /// only tints it.
+    pub glass: bool,
 }
 
 /// Pill size and the x ranges of its pause and stop buttons at scale `s`.
@@ -124,8 +127,12 @@ pub(crate) fn draw_pill(look: &PillLook, s: f32) -> Option<sk::Pixmap> {
     // the card
     let radius = 12.0 * s;
     if let Some(bg) = theme::rounded_rect_path(0.5, 0.5, w - 1.0, h - 1.0, radius) {
-        fill(&mut pm, Some(bg.clone()), Color32::from_rgba_unmultiplied(0x1C, 0x1C, 0x1A, 250));
-        pm.stroke_path(&bg, &paint_of(theme::LINE_HI), &line, id, None);
+        if look.glass {
+            fill(&mut pm, Some(bg), Color32::from_rgba_unmultiplied(0x1C, 0x1C, 0x1A, 90));
+        } else {
+            fill(&mut pm, Some(bg.clone()), Color32::from_rgba_unmultiplied(0x1C, 0x1C, 0x1A, 250));
+            pm.stroke_path(&bg, &paint_of(theme::LINE_HI), &line, id, None);
+        }
     }
 
     // the chip: tinted red while recording, amber while paused

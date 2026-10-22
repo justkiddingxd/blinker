@@ -213,9 +213,32 @@ pub fn run_window<A: eframe::App + 'static>(
     centered: bool,
     make: impl FnOnce(&eframe::CreationContext<'_>) -> A + 'static,
 ) {
+    run_with(shared, viewport, centered, eframe::Renderer::Glow, make);
+}
+
+/// `run_window` for a window people move around in (settings, history):
+/// drawn with Metal / DirectX, which keep up with 120 Hz screens. OpenGL
+/// stops at 60 on a Mac and judders there; it stays for the windows that
+/// have to open instantly (the capture overlay, the card).
+pub fn run_smooth_window<A: eframe::App + 'static>(
+    shared: &Arc<Shared>,
+    viewport: egui::ViewportBuilder,
+    centered: bool,
+    make: impl FnOnce(&eframe::CreationContext<'_>) -> A + 'static,
+) {
+    run_with(shared, viewport, centered, eframe::Renderer::Wgpu, make);
+}
+
+fn run_with<A: eframe::App + 'static>(
+    shared: &Arc<Shared>,
+    viewport: egui::ViewportBuilder,
+    centered: bool,
+    renderer: eframe::Renderer,
+    make: impl FnOnce(&eframe::CreationContext<'_>) -> A + 'static,
+) {
     let options = eframe::NativeOptions {
         viewport,
-        renderer: eframe::Renderer::Glow,
+        renderer,
         run_and_return: true,
         centered,
         persist_window: false,

@@ -150,6 +150,36 @@ pub fn poll_pressed() -> Option<Combo> {
     None
 }
 
+/// Whether `binding` was pressed in this frame of an egui window (the keys
+/// of a capture's actions, read by the overlay itself).
+pub fn pressed(input: &eframe::egui::InputState, binding: &str) -> bool {
+    use eframe::egui::{Event, Key};
+    let Some(c) = parse(binding) else { return false };
+    let Some(name) = key_name(c.vk) else { return false };
+    let name = match name.strip_prefix("Num") {
+        Some(d) if d.len() == 1 => format!("Numpad{d}"),
+        _ => name,
+    };
+    let Some(key) = Key::from_name(&name) else { return false };
+    let want = |m: u32| c.mods & m != 0;
+    // the Windows key never reaches egui
+    if cfg!(windows) && want(MOD_WIN) {
+        return false;
+    }
+    let m = input.modifiers;
+    let cmd = if cfg!(target_os = "macos") { m.mac_cmd == want(MOD_WIN) } else { true };
+    if m.alt == want(MOD_ALT) && m.shift == want(MOD_SHIFT) && m.ctrl == want(MOD_CONTROL) && cmd && input.key_pressed(key) {
+        return true;
+    }
+    // ctrl / cmd + c, x, v reach egui as copy, cut and paste events, before
+    // (or instead of) the key press
+    let command = if cfg!(target_os = "macos") { c.mods == MOD_WIN } else { c.mods == MOD_CONTROL };
+    command
+        && input.events.iter().any(|e| {
+            matches!((key, e), (Key::C, Event::Copy) | (Key::X, Event::Cut) | (Key::V, Event::Paste(_)))
+        })
+}
+
 pub fn is_backspace(c: Combo) -> bool {
     c.mods == 0 && c.vk == VK_BACK as u32
 }

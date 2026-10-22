@@ -2,6 +2,38 @@
 
 Each version's section becomes its release notes on GitHub (`.github/workflows/release.yml` takes the part under `## <version>`).
 
+## 0.3.4
+
+**Мак: Liquid Glass везде (macOS 26)**
+- Окна настроек, истории и редакторов теперь из матового стекла: под ними размыто видно рабочий стол, сайдбар и заголовки — отдельные стеклянные панели.
+- Выделение в меню, переключатели и кнопки стали капсулами, карточки настроек полупрозрачными.
+- Стеклянные: подсказки знакомства, «что нового», уведомления в окне, диалоги, выпадающие списки, меню и плашка записи.
+
+**Везде**
+- Окна настроек и истории идут на 120 Гц: на Metal (мак) и DirectX (Windows) вместо OpenGL, который на маке упирался в 60 и дёргался.
+- Клавиши действий в захвате (копировать, сохранить, править, закрепить, красивый снимок, загрузить) можно поменять в «горячие клавиши → в захвате». Подсказки на кнопках показывают твои клавиши.
+- Плашка в переключателях (язык, кодек, качество…) плавно переезжает к выбранному варианту.
+- Знакомство показывается один раз, даже если его включили снова руками или закрыли захват через Esc. Работает и в мгновенном режиме.
+- Меньше места между разделами в меню настроек.
+- Новая версия предлагается тихой строкой «обновить до …» внизу меню вместо яркой кнопки; проверка обновлений — в «система».
+- Выбор звука снимка — в одну строку, громкость и проценты выровнены, ползунки новые: тонкая дорожка и круглая ручка.
+
+---
+
+**Mac: Liquid Glass everywhere (macOS 26)**
+- The settings, history and editor windows are frosted glass: the desktop shows through, blurred, and the sidebar and title bars are panes of glass floating in them.
+- The menu selection, switches and buttons are capsules, the settings cards are see-through.
+- Glass: the walkthrough's bubbles, "what's new", in-window notes, dialogs, dropdowns, menus and the recording pill.
+
+**Everywhere**
+- The settings and history windows run at 120 Hz: drawn with Metal (Mac) and DirectX (Windows) instead of OpenGL, which stopped at 60 and juddered on a Mac.
+- The keys of a capture's actions (copy, save, edit, pin, pretty shot, upload) can be changed in "hotkeys → in a capture". The buttons' tips show your keys.
+- The plate of a switch (language, codec, quality…) glides to the chosen option.
+- The walkthrough shows once, even when turned on again by hand or when the capture is closed with Esc. It works in instant mode too.
+- Less space between the sections of the settings menu.
+- A new version is offered by a quiet "update to …" row at the bottom of the menu instead of a bright button; checking by hand is on the "system" page.
+- The capture sound is picked in one row, the volume and its percent line up, and the sliders are new: a thin track and a round knob.
+
 ## 0.3.3
 
 - «Выход» в трее закрывает всё: открытые настройки, историю, редакторы и закреплённые снимки. Раньше они оставались висеть после выхода. Закрыть blinker можно и командой `blinker --quit`.

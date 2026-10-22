@@ -315,6 +315,19 @@ pub struct Config {
     pub hotkey_pause: Vec<String>,
     #[serde(deserialize_with = "one_or_many")]
     pub hotkey_replay: Vec<String>,
+    // Keys of the actions on a selected area: read inside a capture only.
+    #[serde(deserialize_with = "one_or_many")]
+    pub key_copy: Vec<String>,
+    #[serde(deserialize_with = "one_or_many")]
+    pub key_save: Vec<String>,
+    #[serde(deserialize_with = "one_or_many")]
+    pub key_edit: Vec<String>,
+    #[serde(deserialize_with = "one_or_many")]
+    pub key_pin: Vec<String>,
+    #[serde(deserialize_with = "one_or_many")]
+    pub key_beauty: Vec<String>,
+    #[serde(deserialize_with = "one_or_many")]
+    pub key_upload: Vec<String>,
     pub autostart: bool,
     pub editor_color: [u8; 4],
     pub editor_width: f32,
@@ -410,6 +423,12 @@ impl Default for Config {
             hotkey_record_gif: Vec::new(),
             hotkey_pause: default_keys(&["Ctrl+Alt+P"], &["Ctrl+Opt+P"]),
             hotkey_replay: default_keys(&["Ctrl+Alt+PrintScreen"], &["Opt+Shift+Cmd+7"]),
+            key_copy: default_keys(&["Ctrl+C"], &["Cmd+C"]),
+            key_save: default_keys(&["Ctrl+S"], &["Cmd+S"]),
+            key_edit: vec!["E".into()],
+            key_pin: vec!["P".into()],
+            key_beauty: vec!["B".into()],
+            key_upload: vec!["U".into()],
             autostart: false,
             editor_color: [0xE3, 0xB3, 0x41, 255],
             editor_width: 4.0,
@@ -528,7 +547,69 @@ impl HotkeyAction {
     }
 }
 
+/// An action on a selected area, with keys pressed inside a capture (not
+/// system-wide: they don't take the keys away from other apps).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CaptureKey {
+    Copy,
+    Save,
+    Edit,
+    Pin,
+    Beauty,
+    Upload,
+}
+
+impl CaptureKey {
+    pub const ALL: [CaptureKey; 6] =
+        [CaptureKey::Copy, CaptureKey::Save, CaptureKey::Edit, CaptureKey::Pin, CaptureKey::Beauty, CaptureKey::Upload];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CaptureKey::Copy => crate::i18n::t("копировать"),
+            CaptureKey::Save => crate::i18n::t("сохранить"),
+            CaptureKey::Edit => crate::i18n::t("править"),
+            CaptureKey::Pin => crate::i18n::t("закрепить поверх окон"),
+            CaptureKey::Beauty => crate::i18n::t("красивый снимок"),
+            CaptureKey::Upload => crate::i18n::t("загрузить и скопировать ссылку"),
+        }
+    }
+
+    pub fn desc(self) -> &'static str {
+        match self {
+            CaptureKey::Copy => crate::i18n::l("и enter", "and enter"),
+            _ => "",
+        }
+    }
+}
+
 impl Config {
+    pub fn capture_keys(&self, k: CaptureKey) -> &Vec<String> {
+        match k {
+            CaptureKey::Copy => &self.key_copy,
+            CaptureKey::Save => &self.key_save,
+            CaptureKey::Edit => &self.key_edit,
+            CaptureKey::Pin => &self.key_pin,
+            CaptureKey::Beauty => &self.key_beauty,
+            CaptureKey::Upload => &self.key_upload,
+        }
+    }
+
+    pub fn capture_keys_mut(&mut self, k: CaptureKey) -> &mut Vec<String> {
+        match k {
+            CaptureKey::Copy => &mut self.key_copy,
+            CaptureKey::Save => &mut self.key_save,
+            CaptureKey::Edit => &mut self.key_edit,
+            CaptureKey::Pin => &mut self.key_pin,
+            CaptureKey::Beauty => &mut self.key_beauty,
+            CaptureKey::Upload => &mut self.key_upload,
+        }
+    }
+
+    /// The first key of a capture action as shown in tips ("cmd s"), or "".
+    pub fn capture_hint(&self, k: CaptureKey) -> String {
+        self.capture_keys(k).first().map(|b| crate::hotkey::display_parts(b).join(" ")).unwrap_or_default()
+    }
+
     pub fn bindings(&self, a: HotkeyAction) -> &Vec<String> {
         match a {
             HotkeyAction::Region => &self.hotkey_region,

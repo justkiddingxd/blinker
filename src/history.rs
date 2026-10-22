@@ -197,14 +197,15 @@ pub fn run(shared: &Arc<Shared>, tab: Tab) {
         .with_transparent(theme::glass());
     let viewport = chrome::style(viewport);
     let shared2 = shared.clone();
-    runtime::run_window(shared, viewport, true, move |cc| {
+    runtime::run_smooth_window(shared, viewport, true, move |cc| {
         let hwnd = win::hwnd_of(cc);
         if let Some(h) = hwnd {
             win::style_borderless(h);
             chrome::place_window_buttons(h, BAR_H);
             #[cfg(target_os = "macos")]
             if theme::glass() {
-                win::window_glass(h, (7.0, 7.0, SIZE.0 - 14.0, BAR_H - 10.0), 16.0, 0x161615);
+                win::window_backdrop(h, 0x161615, crate::home::GLASS_TINT);
+                win::window_glass(h, (7.0, 7.0, SIZE.0 - 14.0, BAR_H - 10.0), 18.0, 0);
             }
             win::force_foreground(h);
         }
@@ -738,7 +739,9 @@ impl eframe::App for HistoryApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         self.top_bar(ui);
-        egui::CentralPanel::no_frame().frame(egui::Frame::new().fill(BG)).show(ui, |ui| {
+        // on glass the list is clear: the frosted window shows through
+        let fill = if theme::glass() { Color32::TRANSPARENT } else { BG };
+        egui::CentralPanel::no_frame().frame(egui::Frame::new().fill(fill)).show(ui, |ui| {
             self.content = ui.max_rect();
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 egui::Frame::new().inner_margin(egui::Margin { left: 22, right: 22, top: 14, bottom: 22 }).show(ui, |ui| {

@@ -510,6 +510,12 @@ pub fn window_glass(hwnd: HWND, rect: (f32, f32, f32, f32), radius: f32, bg: u32
     unsafe { ffi::bk_window_glass(hwnd, rect.0 as f64, rect.1 as f64, rect.2 as f64, rect.3 as f64, radius as f64, bg) != 0 }
 }
 
+/// The whole window as frosted glass: the desktop shows through, blurred,
+/// under `tint` (0x00RRGGBB) of `alpha`; the egui view has to stay clear.
+pub fn window_backdrop(hwnd: HWND, tint: u32, alpha: f32) -> bool {
+    unsafe { ffi::bk_window_backdrop(hwnd, tint, alpha as f64) != 0 }
+}
+
 /// The system window buttons from `x` on, centered on `cy` points from the top.
 pub fn window_buttons_at(hwnd: HWND, x: f32, cy: f32) {
     unsafe { ffi::bk_window_buttons_at(hwnd, x as f64, cy as f64) };

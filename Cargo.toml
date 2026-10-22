@@ -1,6 +1,6 @@
 [package]
 name = "blinker"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2024"
 description = "Fast, quiet screenshot and screen recording tool for Windows and macOS"
 license = "GPL-3.0-only"
@@ -14,7 +14,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 dirs = "7.0.0"
 gif = "0.14.2"
 drag = "2.1.1"
-eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts"] }
+eframe = { version = "0.37.0", default-features = false, features = ["glow", "wgpu", "default_fonts"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 raw-window-handle = "0.6.2"
 rfd = "0.17.2"

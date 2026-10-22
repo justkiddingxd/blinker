@@ -699,10 +699,10 @@ impl VideoApp {
         let h = 16.0 + 40.0 + 8.0 + MARK_H + 4.0 + STRIP_H + 10.0 + self.tracks.len() as f32 * (TRACK_H + 4.0) + 12.0;
         egui::Panel::bottom("timeline")
             .exact_size(h)
-            .frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin { left: 14, right: 16, top: 10, bottom: 12 }))
+            .frame(egui::Frame::new().fill(ui::pane_fill()).inner_margin(egui::Margin { left: 14, right: 16, top: 10, bottom: 12 }))
             .show(ui, |ui| {
                 let r = ui.max_rect();
-                ui.painter().hline(egui::Rangef::new(r.left() - 14.0, r.right() + 16.0), r.top() - 10.5, Stroke::new(1.0, LINE));
+                ui.painter().hline(egui::Rangef::new(r.left() - 14.0, r.right() + 16.0), r.top() - 10.5, Stroke::new(1.0, ui::hairline()));
                 self.transport(ui);
                 ui.add_space(8.0);
                 let lane_top = ui.cursor().top();
@@ -824,10 +824,7 @@ impl VideoApp {
         let mut close = false;
         let id = egui::Id::unique("marker-editor");
         egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).show(ui.ctx(), |ui| {
-            egui::Frame::new()
-                .fill(PANEL)
-                .stroke(Stroke::new(1.0, LINE))
-                .corner_radius(5)
+            ui::float_frame(5)
                 .inner_margin(egui::Margin::same(10))
                 .show(ui, |ui| {
                     ui.set_width(w - 20.0);
@@ -948,7 +945,7 @@ impl VideoApp {
         sc.spacing_mut().item_spacing.x = 6.0;
         sc.add_enabled_ui(!muted, |ui| {
             let mut v = self.tracks[i].gain.volume;
-            let resp = ui.add(egui::Slider::new(&mut v, 0.0..=2.0).show_value(false));
+            let resp = ui::slider(ui, &mut v, 0.0..=2.0, 0.0);
             ui.label(egui::RichText::new(format!("{:.0}%", v * 100.0)).font(mono(10.5)).color(FAINT));
             if resp.changed() {
                 self.tracks[i].gain.volume = v;
@@ -1149,8 +1146,7 @@ impl VideoApp {
         let p = ui.painter().clone();
         p.rect_filled(rect, 0, Color32::from_black_alpha(150));
         let card = Rect::from_center_size(rect.center(), vec2(360.0, 104.0));
-        p.rect_filled(card, 4, PANEL);
-        p.rect_stroke(card, 4, Stroke::new(1.0, LINE), StrokeKind::Inside);
+        ui::paint_float(&p, card, 4, 1.0);
         if let Some(e) = &engine {
             p.text(card.left_bottom() + vec2(16.0, -27.0), Align2::LEFT_CENTER, e, mono(10.5), FAINT);
         }
@@ -1173,8 +1169,7 @@ impl VideoApp {
         let Some(done) = &self.done else { return };
         let card = Rect::from_min_size(r.right_bottom() - vec2(16.0 + 380.0, 16.0 + 50.0), vec2(380.0, 50.0));
         let p = ui.painter().clone();
-        p.rect_filled(card, 4, PANEL);
-        p.rect_stroke(card, 4, Stroke::new(1.0, LINE), StrokeKind::Inside);
+        ui::paint_float(&p, card, 4, 1.0);
         p.text(pos2(card.left() + 14.0, card.center().y), Align2::LEFT_CENTER, &done.text, font_medium(13.0), TEXT);
         let path = done.path.clone();
         let mut close = false;
@@ -1335,7 +1330,7 @@ fn gif_estimate(width: u32, info: &MediaInfo, fps: u32, secs: f64) -> u64 {
 
 fn sep(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(vec2(9.0, 30.0), Sense::hover());
-    ui.painter().vline(rect.center().x, rect.shrink2(vec2(0.0, 6.0)).y_range(), Stroke::new(1.0, LINE));
+    ui.painter().vline(rect.center().x, rect.shrink2(vec2(0.0, 6.0)).y_range(), Stroke::new(1.0, ui::hairline()));
 }
 
 fn caption(ui: &mut egui::Ui, text: &str) {
@@ -1346,7 +1341,7 @@ fn menu_item(ui: &mut egui::Ui, icon: Icon, label: &str) -> bool {
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width().max(230.0), 28.0), Sense::click());
     let h = resp.hovered();
     if h {
-        ui.painter().rect_filled(rect, 3, HOVER);
+        ui.painter().rect_filled(rect, ui::soft_radius(3), ui::hover_fill());
     }
     let ir = Rect::from_center_size(pos2(rect.left() + 16.0, rect.center().y), vec2(16.0, 16.0));
     icons::paint(ui.painter(), ir, icon, 14.0, if h { ACCENT } else { DIM });

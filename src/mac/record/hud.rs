@@ -80,6 +80,10 @@ impl Hud {
         let pill_pos = pill_position(area, monitor, pill_size, s);
         let frame_panel = if frame { unsafe { ffi::bk_panel_new(1, on_panel, std::ptr::null_mut()) } } else { std::ptr::null_mut() };
         let pill = unsafe { ffi::bk_panel_new(0, on_panel, std::ptr::null_mut()) };
+        if crate::theme::glass() {
+            // the card's radius (see `draw_pill`), in points
+            unsafe { ffi::bk_panel_glass(pill, 12.0) };
+        }
         if !frame_panel.is_null()
             && let Some(mut pm) = sk::Pixmap::new(frame_r.w.max(1) as u32, frame_r.h.max(1) as u32)
         {
@@ -142,6 +146,7 @@ fn paint_pill() {
         paused: st.clock.is_paused(),
         clock: st.shown.elapsed().as_secs_f32(),
         hover: st.hover,
+        glass: crate::theme::glass(),
     };
     if let Some(pm) = draw_pill(&look, st.scale) {
         present(st.pill, &pm, st.pill_pos, st.scale);
