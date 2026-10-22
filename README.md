@@ -151,7 +151,7 @@ X-Blinker-Markers: <percent-encoded [{"t": 12.5, "text": "…"}]>   (videos with
 | `overlay.rs` · `toast.rs` · `home.rs` · `editor/` | windows |
 | `record/` | recording: Windows Graphics Capture, WASAPI, Media Foundation, the HUD |
 | `vedit/` · `media.rs` | video editor, MP4/GIF export, reading files |
-| `demo.rs` | `--demo <dir> [en\|ru] [record]`: plays the animations above off-screen and saves their frames |
+| `demo.rs` · `scripts/demos.sh` | `--demo <dir> [en\|ru] [record\|replay]` plays the animations above off-screen and saves their frames; the script makes the GIFs here and the site's videos (on a Mac, the Mac ones) |
 | `server/` | the server of [post.blinker.cool](https://post.blinker.cool) (`scripts/deploy-post.sh root@SERVER` puts it there) |
 | `sharex.rs` | bringing over ShareX settings |
 | `site/` | [blinker.cool](https://blinker.cool): downloads and the Mac guide (static; a push to `main` deploys it, `.github/workflows/site.yml`) |

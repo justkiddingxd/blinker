@@ -151,7 +151,7 @@ X-Blinker-Markers: <percent-encoded [{"t": 12.5, "text": "…"}]>   (видео 
 | `overlay.rs` · `toast.rs` · `home.rs` · `editor/` | окна |
 | `record/` | запись: Windows Graphics Capture, WASAPI, Media Foundation, плашка |
 | `vedit/` · `media.rs` | редактор видео, экспорт MP4/GIF, чтение файлов |
-| `demo.rs` | `--demo <папка> [en\|ru] [record]`: проигрывает анимации сверху вне экрана и сохраняет кадры |
+| `demo.rs` · `scripts/demos.sh` | `--demo <папка> [en\|ru] [record\|replay]` проигрывает анимации сверху вне экрана и сохраняет кадры; скрипт делает из них GIF для README и видео для сайта (на маке маковские) |
 | `server/` | сервер [post.blinker.cool](https://post.blinker.cool) (на сервер его кладёт `scripts/deploy-post.sh root@SERVER`) |
 | `sharex.rs` | перенос настроек из ShareX |
 | `site/` | [blinker.cool](https://blinker.cool): скачивание и гайд для мака (статика; пуш в `main` сам выкладывает её на сервер, `.github/workflows/site.yml`) |

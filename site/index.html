@@ -113,7 +113,7 @@ html[data-away] .away { display: block; }
 .dots button { width: 7px; height: 7px; padding: 0; border: 0; border-radius: 50%; background: var(--line-hi); cursor: pointer; }
 .dots button[aria-pressed="true"] { background: var(--accent); }
 .screen { position: relative; background: var(--canvas); touch-action: pan-y; }
-.screen img { display: block; width: 100%; height: auto; aspect-ratio: 1000 / 640; }
+.screen video { display: block; width: 100%; height: auto; aspect-ratio: 1000 / 640; background: #161615; }
 .arrow {
   position: absolute; top: 50%; width: 38px; height: 38px; margin-top: -19px; display: grid; place-items: center;
   border: 1px solid rgba(255, 255, 255, .12); border-radius: 50%; cursor: pointer; color: var(--text);
@@ -249,7 +249,7 @@ footer .grow { flex: 1; }
           </div>
         </div>
         <div class="screen" id="screen">
-          <img id="demo-img" src="assets/demo-ru.gif?v=__V__" alt="" width="1000" height="640">
+          <video id="demo-img" src="assets/demo-ru.mp4?v=__V__" width="1000" height="640" autoplay muted loop playsinline preload="auto"></video>
           <button type="button" class="arrow prev" data-step="-1" aria-label="←"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
           <button type="button" class="arrow next" data-step="1" aria-label="→"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
         </div>
@@ -572,6 +572,13 @@ footer .grow { flex: 1; }
   // the deploy puts the commit here: new animations get new addresses, so
   // Cloudflare's week-long cache can't serve the old ones
   var V = "__V__";
+  // Mac visitors see the Mac app (assets/*-mac.mp4) while it's there
+  var noMacDemos = false;
+  // a 60 fps video of the demo (scripts/demos.sh records them)
+  function demoSrc(d) {
+    var mac = os === "mac" && !noMacDemos;
+    return "assets/" + DEMOS[d] + "-" + lang + (mac ? "-mac" : "") + ".mp4?v=" + V;
+  }
   var lang, os, demo = 0, release = null;
   function t(k) {
     return (T[lang] && T[lang][k]) || RU[k] || "";
@@ -625,9 +632,13 @@ footer .grow { flex: 1; }
       el.hidden = +el.getAttribute("data-cap") !== demo;
     });
     document.getElementById("count").textContent = demo + 1 + " / " + DEMOS.length;
-    var img = document.getElementById("demo-img");
-    var src = "assets/" + DEMOS[demo] + "-" + lang + ".gif?v=" + V;
-    if (img.getAttribute("src") !== src) img.setAttribute("src", src);
+    var video = document.getElementById("demo-img");
+    var src = demoSrc(demo);
+    if (video.getAttribute("src") !== src) {
+      video.setAttribute("src", src);
+      var playing = video.play();
+      if (playing && playing.catch) playing.catch(function () {});
+    }
     document.title = lang === "ru" ? "blinker · скриншоты и запись экрана" : "blinker · screenshots and screen recording";
 
     var dl = document.getElementById("dl-main");
@@ -687,6 +698,14 @@ footer .grow { flex: 1; }
     if (Math.abs(dx) > 40) step(dx < 0 ? 1 : -1);
   });
 
+  // no Mac videos (yet): the Windows ones
+  document.getElementById("demo-img").addEventListener("error", function () {
+    if (!noMacDemos && /-mac\.mp4/.test(this.getAttribute("src") || "")) {
+      noMacDemos = true;
+      render();
+    }
+  });
+
   lang = pickLang();
   var found = detectOS();
   os = found || "mac";
@@ -695,7 +714,13 @@ footer .grow { flex: 1; }
 
   // the other demos load once the page is up, so a tab switches at once
   window.addEventListener("load", function () {
-    DEMOS.slice(1).forEach(function (d) { new Image().src = "assets/" + d + "-" + lang + ".gif?v=" + V; });
+    DEMOS.forEach(function (_, d) {
+      if (d === demo) return;
+      var l = document.createElement("link");
+      l.rel = "prefetch";
+      l.href = demoSrc(d);
+      document.head.appendChild(l);
+    });
   });
 
   // what's released: the site's own version.json (written by every release),

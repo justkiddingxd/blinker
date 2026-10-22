@@ -153,20 +153,25 @@ pub fn button_h(ui: &mut Ui, label: &str, kind: Kind, height: f32) -> Response {
 /// One option of a small choice ("png / webp / jpeg"): the chosen one sits
 /// on a raised plate.
 pub fn filter(ui: &mut Ui, label: &str, on: bool) -> Response {
-    // The options of one choice share a layout: its first option this frame
+    // The options of one choice sit side by side: its first option this frame
     // keeps a slot under them for the plate, which glides to the chosen one.
-    let key = ui.scope_id().with("filter-plate");
+    // Options right after the previous one belong to its choice; anything in
+    // between (a separator, a button) starts another choice with its own plate.
     let pass = ui.ctx().cumulative_pass_nr();
-    let slot = match ui.data(|d| d.get_temp::<(u64, egui::layers::ShapeIdx)>(key)) {
-        Some((p, idx)) if p == pass => idx,
-        _ => {
-            let idx = ui.painter().add(egui::Shape::Noop);
-            ui.data_mut(|d| d.insert_temp(key, (pass, idx)));
-            idx
+    let run_key = ui.scope_id().with("filter-run");
+    let at = ui.cursor().min;
+    let (group, slot) = match ui.data(|d| d.get_temp::<(u64, u32, egui::Pos2, egui::layers::ShapeIdx)>(run_key)) {
+        Some((p, g, end, idx)) if p == pass && (at - end).length() < 1.0 => (g, idx),
+        last => {
+            let g = last.filter(|(p, ..)| *p == pass).map_or(0, |(_, g, ..)| g + 1);
+            (g, ui.painter().add(egui::Shape::Noop))
         }
     };
+    let key = ui.scope_id().with(("filter-plate", group));
     let galley = ui.painter().layout_no_wrap(label.to_owned(), font(12.5), Color32::PLACEHOLDER);
     let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 22.0, 28.0), Sense::click());
+    // where the next option of this choice would start
+    ui.data_mut(|d| d.insert_temp(run_key, (pass, group, ui.cursor().min, slot)));
     let h = hover_t(ui, &resp);
     let p = ui.painter();
     let radius = control_radius(rect.height(), 6.0);
