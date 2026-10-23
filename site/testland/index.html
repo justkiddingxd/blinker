@@ -1,0 +1,1217 @@
+<!doctype html>
+<html lang="ru" data-os="mac">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>blinker · скриншоты, запись экрана и монтаж</title>
+<meta name="description" content="Скриншоты, запись экрана и монтаж коротких видео для macOS и Windows. Бесплатно, с открытым кодом, без аккаунтов.">
+<meta name="robots" content="noindex">
+<meta property="og:title" content="blinker">
+<meta property="og:description" content="Скриншоты, запись экрана и монтаж коротких видео для macOS и Windows.">
+<meta property="og:image" content="https://blinker.cool/assets/logo.png">
+<meta name="theme-color" content="#161615">
+<meta name="color-scheme" content="dark">
+<link rel="icon" type="image/png" href="../assets/logo.png">
+<style>
+@font-face { font-family: "Fira Sans"; font-weight: 400; font-display: swap; src: url("../assets/fonts/FiraSans-Regular.ttf") format("truetype"); }
+@font-face { font-family: "Fira Sans"; font-weight: 500; font-display: swap; src: url("../assets/fonts/FiraSans-Medium.ttf") format("truetype"); }
+@font-face { font-family: "Fira Sans"; font-weight: 600; font-display: swap; src: url("../assets/fonts/FiraSans-SemiBold.ttf") format("truetype"); }
+@font-face { font-family: "Fira Mono"; font-weight: 400; font-display: swap; src: url("../assets/fonts/FiraMono-Regular.ttf") format("truetype"); }
+
+/* the app's "Graphite" palette, and the colors of its editor's lanes */
+:root {
+  --bg: #161615;
+  --panel: #1c1c1a;
+  --panel2: #20201e;
+  --canvas: #121211;
+  --line: #2b2b28;
+  --line-soft: #232321;
+  --line-hi: #3a3a36;
+  --text: #e6e4de;
+  --text2: #b9b6ad;
+  --dim: #9a978e;
+  --faint: #6e6c66;
+  --accent: #d8d5cd;
+  --accent-hi: #f1eee7;
+  --on-accent: #161615;
+  --red: #e5484d;
+  --blue: #8fb4e8;
+  --violet: #c99be6;
+  --green: #7fcf9a;
+  --amber: #ffbe50;
+  --r: 14px;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 400 16px/1.6 "Fira Sans", -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+a { color: var(--text); text-decoration-color: var(--faint); text-underline-offset: 3px; }
+a:hover { text-decoration-color: var(--accent); }
+code, kbd, .mono { font-family: "Fira Mono", ui-monospace, Menlo, monospace; }
+code { font-size: .88em; }
+kbd {
+  display: inline-block; padding: 0 7px; border: 1px solid var(--line-hi); border-bottom-width: 2px;
+  border-radius: 6px; background: var(--canvas); color: var(--text); font-size: .82em; line-height: 1.6; white-space: nowrap;
+}
+.wrap { max-width: 1160px; margin: 0 auto; padding: 0 24px; }
+@media (max-width: 600px) { .wrap { padding: 0 16px; } }
+html[data-os="mac"] .only-win, html[data-os="win"] .only-mac { display: none !important; }
+svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ------------------------------------------------------------------ header */
+header {
+  position: sticky; top: 0; z-index: 20;
+  background: rgba(22, 22, 21, .78); backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  border-bottom: 1px solid transparent; transition: border-color .2s;
+}
+header.scrolled { border-bottom-color: var(--line-soft); }
+header .wrap { display: flex; align-items: center; gap: 20px; height: 60px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 17px; text-decoration: none; }
+.brand img { width: 28px; height: 28px; border-radius: 7px; }
+nav { margin-left: auto; display: flex; align-items: center; gap: 22px; font-size: 15px; }
+nav a { color: var(--dim); text-decoration: none; transition: color .15s; }
+nav a:hover { color: var(--text); }
+.btn-sm {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 999px;
+  background: var(--accent); color: var(--on-accent) !important; font-weight: 500; font-size: 14px; text-decoration: none;
+  transition: background .15s, transform .15s;
+}
+.btn-sm:hover { background: var(--accent-hi); transform: translateY(-1px); }
+@media (max-width: 860px) { nav .hide-md { display: none; } }
+@media (max-width: 520px) { nav .hide-sm { display: none; } }
+
+.seg { display: inline-flex; padding: 2px; gap: 2px; background: var(--canvas); border: 1px solid var(--line); border-radius: 999px; }
+.seg button {
+  background: none; border: 0; border-radius: 999px; color: var(--dim); cursor: pointer;
+  font: 500 13px "Fira Sans", sans-serif; padding: 4px 11px; line-height: 1.4; transition: color .15s, background .15s;
+}
+.seg button:hover { color: var(--text); }
+.seg button[aria-pressed="true"] { background: var(--line-hi); color: var(--text); }
+
+/* ------------------------------------------------------------------ hero */
+.hero { position: relative; padding: 72px 0 24px; }
+.hero::before {
+  /* soft light behind the footage */
+  content: ""; position: absolute; inset: -120px 0 auto auto; width: 70%; height: 720px; pointer-events: none;
+  background: radial-gradient(closest-side, rgba(216, 213, 205, .10), transparent 70%);
+}
+.hero .grid { position: relative; display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 56px; align-items: center; }
+@media (max-width: 960px) { .hero { padding-top: 40px; } .hero .grid { grid-template-columns: minmax(0, 1fr); gap: 40px; } }
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px 4px 6px; margin-bottom: 22px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--dim); font-size: 13px; text-decoration: none;
+}
+.eyebrow b { background: var(--accent); color: var(--on-accent); border-radius: 999px; padding: 0 8px; font-weight: 600; font-size: 12px; }
+.eyebrow:hover { border-color: var(--line-hi); color: var(--text); }
+h1 { font-weight: 600; font-size: clamp(38px, 5.2vw, 64px); line-height: 1.02; letter-spacing: -0.025em; margin: 0 0 22px; }
+h1 .soft { color: var(--faint); }
+.lead { color: var(--text2); font-size: 18px; line-height: 1.55; margin: 0 0 30px; max-width: 520px; }
+.get { display: flex; align-items: center; gap: 12px 18px; flex-wrap: wrap; }
+.dl {
+  display: inline-flex; align-items: center; gap: 13px; padding: 13px 22px 13px 18px;
+  border-radius: 14px; background: var(--accent); color: var(--on-accent); text-decoration: none;
+  box-shadow: 0 10px 30px rgba(216, 213, 205, .12), inset 0 1px 0 rgba(255, 255, 255, .5);
+  transition: background .15s, transform .15s, box-shadow .15s;
+}
+.dl:hover { background: var(--accent-hi); transform: translateY(-2px); box-shadow: 0 16px 40px rgba(216, 213, 205, .18), inset 0 1px 0 rgba(255, 255, 255, .5); }
+.dl svg { width: 24px; height: 24px; flex: none; }
+.dl b { display: block; font-weight: 600; font-size: 16px; line-height: 1.3; }
+.dl small { display: block; font-size: 13px; opacity: .7; line-height: 1.3; }
+.other { color: var(--faint); font-size: 14px; }
+.other a { color: var(--dim); }
+.away { display: none; margin: 0 0 18px; color: var(--dim); font-size: 15px; }
+html[data-away] .away { display: block; }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 26px 0 0; padding: 0; list-style: none; }
+.pills li { display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px; border-radius: 999px; border: 1px solid var(--line-soft); color: var(--dim); font-size: 13px; }
+.pills svg { color: var(--text2); width: 14px; height: 14px; }
+.meta { margin: 14px 0 0; color: var(--faint); font-size: 13px; }
+.meta a { color: var(--dim); }
+@media (max-width: 600px) { .dl { width: 100%; } }
+
+/* the footage */
+.reel { margin: 0; min-width: 0; }
+.reel .tabs { display: flex; justify-content: center; margin-bottom: 14px; }
+.window {
+  border: 1px solid var(--line); border-radius: 14px; background: var(--panel); overflow: hidden;
+  box-shadow: 0 40px 100px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255, 255, 255, .02) inset;
+}
+.window .bar { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 14px; border-bottom: 1px solid var(--line-soft); }
+.lights { display: flex; gap: 7px; }
+.lights i { width: 11px; height: 11px; border-radius: 50%; background: var(--line-hi); }
+.window .bar .title { color: var(--faint); font-size: 13px; margin: 0 auto; display: flex; align-items: center; gap: 8px; padding-right: 46px; }
+.window .bar .title img { width: 15px; height: 15px; border-radius: 4px; }
+.screen { position: relative; background: var(--canvas); touch-action: pan-y; }
+.screen video { display: block; width: 100%; height: auto; aspect-ratio: 1000 / 640; background: var(--bg); }
+.reel figcaption { margin-top: 14px; padding: 0 4px; font-size: 14px; color: var(--dim); min-height: 3em; text-align: center; }
+.reel figcaption b { color: var(--text); font-weight: 500; }
+
+/* ------------------------------------------------------------------ facts */
+.facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-top: 64px; background: var(--line-soft); border: 1px solid var(--line-soft); border-radius: var(--r); overflow: hidden; }
+.fact { background: var(--bg); padding: 22px 22px 20px; }
+.fact b { display: block; font-size: 28px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; }
+.fact span { display: block; color: var(--dim); font-size: 14px; margin-top: 6px; line-height: 1.45; }
+@media (max-width: 820px) { .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ------------------------------------------------------------------ sections */
+section { padding: 120px 0 0; }
+.kicker { display: inline-flex; align-items: center; gap: 10px; color: var(--faint); font-size: 13px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 14px; }
+.kicker::before { content: ""; width: 18px; height: 1px; background: var(--line-hi); }
+h2 { font-weight: 600; font-size: clamp(30px, 3.6vw, 44px); line-height: 1.08; letter-spacing: -0.02em; margin: 0 0 14px; }
+.sub { color: var(--dim); font-size: 17px; margin: 0 0 40px; max-width: 640px; }
+
+/* the category index */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 56px; }
+.chips a {
+  display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px;
+  background: var(--panel); border: 1px solid var(--line-soft); color: var(--text2); text-decoration: none; font-size: 14px;
+  transition: border-color .15s, color .15s, transform .15s;
+}
+.chips a:hover { border-color: var(--line-hi); color: var(--text); transform: translateY(-1px); }
+.chips a i { width: 8px; height: 8px; border-radius: 50%; }
+
+/* a category: its words on one side, its picture on the other */
+.cat { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 56px; align-items: center; padding: 56px 0; border-top: 1px solid var(--line-soft); scroll-margin-top: 70px; }
+.cat:nth-of-type(even) .words { order: 2; }
+@media (max-width: 900px) { .cat { grid-template-columns: minmax(0, 1fr); gap: 28px; } .cat:nth-of-type(even) .words { order: 0; } }
+.num { font-family: "Fira Mono", monospace; font-size: 13px; color: var(--faint); display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.num i { width: 8px; height: 8px; border-radius: 50%; }
+.cat h3 { font-weight: 600; font-size: clamp(26px, 2.8vw, 34px); line-height: 1.12; letter-spacing: -0.015em; margin: 0 0 14px; }
+.cat .words > p { color: var(--text2); font-size: 16.5px; margin: 0 0 22px; }
+.list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.list li { display: flex; gap: 12px; align-items: flex-start; padding: 9px 0; border-top: 1px solid var(--line-soft); color: var(--dim); font-size: 15px; line-height: 1.5; }
+.list li:first-child { border-top: 0; }
+.list li svg { margin-top: 3px; color: var(--text2); }
+.list li b { color: var(--text); font-weight: 500; }
+.list kbd { font-size: 12px; }
+
+/* the pictures: a stage like a window of the app */
+.stage {
+  position: relative; border-radius: 18px; border: 1px solid var(--line); overflow: hidden; min-height: 340px;
+  background:
+    radial-gradient(120% 80% at 80% 0%, rgba(255, 255, 255, .045), transparent 60%),
+    linear-gradient(180deg, var(--panel), var(--canvas));
+  box-shadow: 0 30px 80px rgba(0, 0, 0, .35);
+}
+.stage::after { /* a fine grid, like a canvas */
+  content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .5;
+  background-image: linear-gradient(var(--line-soft) 1px, transparent 1px), linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
+  background-size: 28px 28px; mask-image: radial-gradient(80% 70% at 50% 40%, #000, transparent);
+  -webkit-mask-image: radial-gradient(80% 70% at 50% 40%, #000, transparent);
+}
+.stage > * { position: relative; z-index: 1; }
+.tag { position: absolute; z-index: 2; font-size: 12px; color: var(--dim); background: rgba(22, 22, 21, .8); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
+
+/* 01: a selection over a page, the tools under it */
+.v-shot { display: grid; place-items: center; padding: 36px 28px; }
+.page { width: 100%; max-width: 440px; border-radius: 10px; background: #e9e6df; padding: 18px 20px; position: relative; overflow: hidden; }
+.page i { display: block; height: 8px; border-radius: 4px; background: #c9c5bb; margin: 9px 0; }
+.page i.h { height: 13px; width: 55%; background: #8d897f; margin-bottom: 14px; }
+.page i.s { width: 70%; }
+.page i.m { width: 85%; }
+.sel {
+  position: absolute; left: 14%; top: 34%; width: 64%; height: 44%;
+  box-shadow: 0 0 0 999px rgba(10, 10, 9, .55); border: 1px dashed rgba(216, 213, 205, .9);
+  animation: sel 6s ease-in-out infinite;
+}
+.sel::before, .sel::after { content: ""; position: absolute; width: 14px; height: 14px; border: 2.5px solid var(--accent); }
+.sel::before { left: -3px; top: -3px; border-right: 0; border-bottom: 0; }
+.sel::after { right: -3px; bottom: -3px; border-left: 0; border-top: 0; }
+.sel .size { position: absolute; left: -1px; top: -28px; font: 12px "Fira Mono", monospace; color: var(--text); background: rgba(18, 18, 17, .9); border-radius: 5px; padding: 2px 7px; white-space: nowrap; }
+.sel .step { position: absolute; width: 22px; height: 22px; border-radius: 50%; background: var(--red); color: #fff; font: 600 12px/22px "Fira Sans"; text-align: center; box-shadow: 0 2px 8px rgba(0, 0, 0, .3); }
+.sel .blur { position: absolute; left: 10%; bottom: 14%; width: 38%; height: 14px; border-radius: 4px; background: repeating-linear-gradient(90deg, #b8b3a8 0 6px, #a9a498 6px 12px); filter: blur(2.5px); }
+.sel svg { position: absolute; left: 30%; top: 22%; width: 34%; height: 50%; overflow: visible; }
+@keyframes sel { 0%, 100% { width: 64%; height: 44%; } 50% { width: 70%; height: 48%; } }
+.tools { display: flex; gap: 3px; padding: 4px; margin-top: 14px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(0, 0, 0, .4); }
+.tools span { width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; color: var(--text2); }
+.tools span.on { background: var(--accent); color: var(--on-accent); }
+
+/* 02: the recording pill over a playing game, the replay beside it */
+.v-video { display: grid; grid-template-rows: 1fr auto; padding: 22px; gap: 16px; }
+.game { border-radius: 12px; min-height: 190px; position: relative; overflow: hidden;
+  background: radial-gradient(60% 90% at 30% 110%, #3c5a46, transparent 70%), radial-gradient(50% 70% at 90% 0%, #5a3f2a, transparent 70%), linear-gradient(160deg, #1f2a2a, #121815); }
+.game .hud { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 14px; border-radius: 999px;
+  background: rgba(22, 22, 21, .82); border: 1px solid rgba(255, 255, 255, .1); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); font: 13px "Fira Mono", monospace; }
+.rec { width: 9px; height: 9px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 0 rgba(229, 72, 77, .6); animation: pulse 1.6s ease-out infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(229, 72, 77, .55); } 80%, 100% { box-shadow: 0 0 0 9px rgba(229, 72, 77, 0); } }
+.hud .b { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 255, 255, .07); color: var(--text2); }
+.game .click { position: absolute; left: 62%; top: 32%; width: 26px; height: 26px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .85); animation: ripple 2.4s ease-out infinite; }
+@keyframes ripple { 0% { transform: scale(.4); opacity: 1; } 70%, 100% { transform: scale(1.6); opacity: 0; } }
+.game .keys { position: absolute; left: 14px; top: 14px; display: flex; gap: 4px; }
+.game .keys kbd { background: rgba(18, 18, 17, .82); }
+.wave { display: flex; align-items: center; gap: 2px; height: 46px; padding: 0 4px; }
+.wave i { flex: 1; border-radius: 2px; background: var(--text2); opacity: .55; min-height: 2px; }
+.tracks { display: grid; gap: 8px; }
+.track { display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: center; gap: 10px; font-size: 12px; color: var(--dim); }
+.track:last-child .wave i { background: var(--blue); }
+
+/* 03: the editor's timeline */
+.v-edit { padding: 22px; display: grid; gap: 12px; }
+.preview { display: grid; grid-template-columns: minmax(0, 1fr) 132px; gap: 12px; }
+.frame { border-radius: 10px; min-height: 150px; position: relative; overflow: hidden; background: linear-gradient(150deg, #2a2620, #171614 60%), #1a1918; }
+.frame .t { position: absolute; left: 50%; top: 30%; transform: translateX(-50%); font-weight: 600; font-size: 20px; color: #fff; text-shadow: 0 2px 10px rgba(0, 0, 0, .5); white-space: nowrap; animation: pop 4s ease-in-out infinite; }
+@keyframes pop { 0%, 8% { transform: translateX(-50%) scale(.6); opacity: 0; } 18%, 80% { transform: translateX(-50%) scale(1); opacity: 1; } 92%, 100% { opacity: 0; } }
+.frame .cap { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); background: rgba(0, 0, 0, .7); color: #fff; padding: 3px 10px; border-radius: 6px; font-weight: 600; font-size: 13px; letter-spacing: .02em; white-space: nowrap; }
+.phone { border-radius: 14px; border: 1px solid var(--line-hi); background: #0f0f0e; display: grid; place-items: center; position: relative; overflow: hidden; }
+.phone::before { content: ""; position: absolute; inset: 0; background: linear-gradient(150deg, #2a2620, #171614 60%); filter: blur(10px); opacity: .7; }
+.phone span { position: relative; width: 100%; aspect-ratio: 16 / 10; background: linear-gradient(150deg, #3a3329, #1d1b18); }
+.phone b { position: absolute; top: 8px; font: 500 11px "Fira Mono", monospace; color: var(--dim); }
+.timeline { position: relative; border-radius: 10px; background: var(--canvas); border: 1px solid var(--line-soft); padding: 10px 10px 10px 74px; display: grid; gap: 6px; overflow: hidden; }
+.lane { position: relative; height: 18px; }
+.lane > span.n { position: absolute; left: -66px; top: 0; font-size: 11px; color: var(--faint); line-height: 18px; }
+.blk { position: absolute; top: 0; height: 18px; border-radius: 4px; font-size: 10.5px; line-height: 18px; padding: 0 6px; color: var(--on-accent); white-space: nowrap; overflow: hidden; }
+.strip { position: absolute; inset: 0; border-radius: 4px; background: repeating-linear-gradient(90deg, #3a3329 0 34px, #2c2822 34px 36px); }
+.speed { position: absolute; left: 52%; width: 22%; top: 0; height: 18px; background: rgba(255, 190, 80, .18); border-left: 1px solid rgba(255, 190, 80, .5); border-right: 1px solid rgba(255, 190, 80, .5); }
+.speed b { position: absolute; left: 4px; top: 2px; height: 14px; line-height: 14px; padding: 0 5px; border-radius: 3px; background: var(--amber); color: var(--on-accent); font: 600 10px "Fira Sans"; }
+.playhead { position: absolute; top: 4px; bottom: 4px; left: 74px; width: 2px; background: var(--accent); border-radius: 1px; animation: play 8s linear infinite; }
+@keyframes play { from { transform: translateX(0); } to { transform: translateX(calc(var(--w, 400px) - 84px)); } }
+
+/* 04: a QR code found, and words read off a picture */
+.v-read { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 22px; align-items: center; }
+@media (max-width: 560px) { .v-read { grid-template-columns: minmax(0, 1fr); } }
+.qrbox { display: grid; justify-items: center; gap: 14px; }
+.qr { position: relative; width: 124px; height: 124px; padding: 10px; background: #fff; border-radius: 6px; }
+.qr svg { width: 100%; height: 100%; display: block; }
+.qr .br { position: absolute; inset: -12px; animation: close 3.2s cubic-bezier(.2, .9, .3, 1.2) infinite; }
+.qr .br i { position: absolute; width: 22px; height: 22px; border: 3px solid var(--accent); }
+.qr .br i:nth-child(1) { left: 0; top: 0; border-right: 0; border-bottom: 0; border-top-left-radius: 4px; }
+.qr .br i:nth-child(2) { right: 0; top: 0; border-left: 0; border-bottom: 0; border-top-right-radius: 4px; }
+.qr .br i:nth-child(3) { left: 0; bottom: 0; border-right: 0; border-top: 0; border-bottom-left-radius: 4px; }
+.qr .br i:nth-child(4) { right: 0; bottom: 0; border-left: 0; border-top: 0; border-bottom-right-radius: 4px; }
+@keyframes close { 0% { inset: -34px; opacity: 0; } 18%, 85% { inset: -12px; opacity: 1; } 100% { inset: -12px; opacity: 0; } }
+.qr .sweep { position: absolute; left: 10px; right: 10px; height: 2px; background: var(--accent); box-shadow: 0 -18px 24px rgba(216, 213, 205, .35); animation: sweep 3.2s ease-out infinite; }
+@keyframes sweep { 0%, 10% { top: 10px; opacity: 0; } 15% { opacity: 1; } 45% { top: 112px; opacity: 1; } 55%, 100% { top: 112px; opacity: 0; } }
+.qrcard { display: flex; align-items: center; gap: 10px; padding: 7px 7px 7px 9px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line-hi); box-shadow: 0 10px 30px rgba(0, 0, 0, .45); }
+.qrcard .tile { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: rgba(216, 213, 205, .15); color: var(--accent); }
+.qrcard .w b { display: block; font-size: 13px; font-weight: 500; line-height: 1.25; }
+.qrcard .w span { display: block; font-size: 11px; color: var(--dim); line-height: 1.25; }
+.go { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 12px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+.ocr { border-radius: 12px; overflow: hidden; border: 1px solid var(--line); background: var(--panel); }
+.ocr .head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line-soft); font-size: 12px; color: var(--dim); }
+.ocr .head .dot { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: rgba(216, 213, 205, .15); color: var(--accent); }
+.ocr .head b { color: var(--text); font-weight: 500; }
+.ocr .pic { position: relative; padding: 14px 12px 16px; background: linear-gradient(160deg, #3b3a36, #262522); display: grid; gap: 7px; }
+.ocr .pic span { justify-self: start; padding: 1px 7px; border-radius: 5px; background: #181817; border: 1px solid var(--line); font-size: 12.5px; color: var(--text); opacity: 0; animation: line 6s ease-out infinite; }
+.ocr .pic span:nth-child(2) { animation-delay: .12s; }
+.ocr .pic span:nth-child(3) { animation-delay: .24s; }
+.ocr .pic span:nth-child(4) { animation-delay: .36s; }
+@keyframes line { 0% { opacity: 0; transform: translateY(5px); } 8%, 90% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+
+/* 05: a link in a chat that plays */
+.v-share { padding: 26px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-content: center; }
+@media (max-width: 560px) { .v-share { padding: 16px 14px 120px; } .v-share .ava { display: none; } .embed .vid { width: 100%; } .stage { min-height: 0; } }
+.msg { display: flex; gap: 10px; align-items: flex-start; max-width: 420px; min-width: 0; }
+.msg .bubble { min-width: 0; }
+.msg.me { margin-left: auto; flex-direction: row-reverse; }
+.ava { width: 32px; height: 32px; border-radius: 50%; flex: none; background: linear-gradient(135deg, #5d6b8a, #2d3546); }
+.msg.me .ava { background: linear-gradient(135deg, #8a7a5d, #463d2d); }
+.bubble { border-radius: 14px; background: var(--panel2); border: 1px solid var(--line-soft); padding: 9px 12px; font-size: 14px; color: var(--text2); }
+.bubble a { color: var(--blue); text-decoration: none; font-size: 13.5px; }
+.embed { margin-top: 8px; border-left: 3px solid var(--accent); border-radius: 6px; background: var(--canvas); padding: 8px; display: grid; gap: 6px; }
+.embed small { color: var(--faint); font-size: 11.5px; }
+.embed .vid { position: relative; aspect-ratio: 16 / 9; width: 260px; max-width: 100%; border-radius: 6px; overflow: hidden; background: radial-gradient(60% 90% at 30% 110%, #3c5a46, transparent 70%), linear-gradient(160deg, #1f2a2a, #121815); }
+.embed .vid::after { content: ""; position: absolute; left: 50%; top: 50%; width: 38px; height: 38px; margin: -19px 0 0 -19px; border-radius: 50%; background: rgba(0, 0, 0, .55) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 7v10l8-5z' fill='%23fff'/%3E%3C/svg%3E") center/20px no-repeat; }
+.toast { position: absolute; left: 18px; bottom: 18px; z-index: 2; width: 150px; border-radius: 10px; overflow: hidden; background: var(--panel); border: 1px solid var(--line-hi); box-shadow: 0 14px 40px rgba(0, 0, 0, .5); animation: toast 7s ease-in-out infinite; }
+.toast .img { height: 72px; background: linear-gradient(150deg, #e9e6df, #c9c5bb); }
+.toast span { display: block; padding: 5px 8px; font-size: 11px; color: var(--dim); }
+@keyframes toast { 0%, 4% { transform: translateY(16px); opacity: 0; } 10%, 70% { transform: none; opacity: 1; } 78%, 100% { transform: translateY(16px); opacity: 0; } }
+
+/* 06: the tray menu, laid out by dragging */
+.v-tray { display: grid; place-items: center; padding: 30px 22px; }
+.menu { width: 300px; max-width: 100%; border-radius: 12px; background: var(--bg); border: 1px solid var(--line-hi); padding: 10px; box-shadow: 0 24px 60px rgba(0, 0, 0, .5); }
+.menu h6 { margin: 2px 4px 6px; font-size: 11px; font-weight: 500; color: var(--faint); }
+.mt { display: flex; gap: 4px; margin-bottom: 8px; }
+.mt > span { width: 52px; height: 52px; border-radius: 9px; background: var(--panel2); display: grid; place-items: center; align-content: center; gap: 3px; font-size: 10.5px; color: var(--dim); }
+.mt > span svg { color: var(--text2); }
+.mt small { font-size: 10.5px; }
+.mt > span.drag { background: var(--panel); border: 1px solid var(--accent); transform: rotate(-4deg) translateY(-6px); box-shadow: 0 10px 20px rgba(0, 0, 0, .5); animation: drag 3.6s ease-in-out infinite; }
+@keyframes drag { 0%, 15% { transform: none; border-color: transparent; box-shadow: none; } 30%, 70% { transform: translate(58px, -6px) rotate(-4deg); border-color: var(--accent); box-shadow: 0 10px 20px rgba(0, 0, 0, .5); } 85%, 100% { transform: translate(58px, 0); border-color: transparent; box-shadow: none; } }
+.ml { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
+.ml div { display: flex; align-items: center; gap: 10px; padding: 6px 6px; border-radius: 6px; font-size: 12.5px; color: var(--text); }
+.ml div em { margin-left: auto; font-style: normal; font: 10.5px "Fira Mono", monospace; color: var(--faint); }
+.ml div svg { color: var(--text2); width: 14px; height: 14px; }
+.ml hr { border: 0; border-top: 1px solid var(--line); margin: 4px 6px; }
+
+/* ------------------------------------------------------------------ privacy */
+.band { margin-top: 120px; border-radius: 22px; border: 1px solid var(--line); padding: 48px; position: relative; overflow: hidden;
+  background: radial-gradient(80% 120% at 0% 0%, rgba(127, 207, 154, .07), transparent 60%), radial-gradient(70% 120% at 100% 100%, rgba(143, 180, 232, .07), transparent 60%), var(--panel); }
+.band h2 { max-width: 640px; }
+.band .cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; margin-top: 30px; }
+.band .cols b { display: flex; align-items: center; gap: 9px; font-weight: 500; margin-bottom: 6px; }
+.band .cols p { margin: 0; color: var(--dim); font-size: 15px; }
+@media (max-width: 820px) { .band { padding: 30px 22px; } .band .cols { grid-template-columns: minmax(0, 1fr); } }
+
+/* ------------------------------------------------------------------ install */
+.inst { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 40px; align-items: start; }
+@media (max-width: 900px) { .inst { grid-template-columns: minmax(0, 1fr); } }
+.inst-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 32px; }
+.inst-head .sub { margin: 0; }
+.guide { counter-reset: step; }
+.stp { position: relative; padding: 0 0 26px 52px; }
+.stp::before { counter-increment: step; content: counter(step); position: absolute; left: 0; top: 0; width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; font-weight: 600; font-size: 14px; background: var(--panel); border: 1px solid var(--line); color: var(--text); }
+.stp::after { content: ""; position: absolute; left: 16px; top: 38px; bottom: 6px; width: 1px; background: var(--line); }
+.stp:last-child::after { display: none; }
+.stp h4 { margin: 3px 0 4px; font-weight: 600; font-size: 16.5px; }
+.stp p { margin: 0 0 8px; color: var(--dim); }
+.stp p b { color: var(--text); font-weight: 500; }
+.cmd { display: flex; align-items: center; gap: 10px; background: var(--canvas); border: 1px solid var(--line); border-radius: 10px; padding: 8px 8px 8px 14px; margin: 6px 0 10px; }
+.cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; color: var(--text); font-size: 13.5px; }
+.cmd button { flex: none; background: var(--line); color: var(--text); border: 0; border-radius: 7px; font: 500 13px "Fira Sans", sans-serif; padding: 5px 11px; cursor: pointer; }
+.cmd button:hover { background: var(--line-hi); }
+.side { display: grid; gap: 16px; }
+.card { border-radius: var(--r); background: var(--panel); border: 1px solid var(--line-soft); padding: 18px 20px; }
+.card h5 { margin: 0 0 8px; font-size: 13px; font-weight: 500; color: var(--faint); letter-spacing: .04em; text-transform: uppercase; }
+.card p { margin: 0; color: var(--dim); font-size: 15px; }
+.card p b { color: var(--text); font-weight: 500; }
+details { border-top: 1px solid var(--line-soft); }
+details:first-of-type { border-top: 0; }
+summary { cursor: pointer; padding: 11px 0; font-weight: 500; font-size: 15px; list-style: none; display: flex; justify-content: space-between; gap: 12px; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "+"; color: var(--faint); font-family: "Fira Mono", monospace; transition: transform .2s; }
+details[open] summary::after { transform: rotate(45deg); }
+details > div { padding: 0 0 12px; color: var(--dim); font-size: 14.5px; }
+details > div p { margin: 0 0 8px; }
+
+/* ------------------------------------------------------------------ hotkeys */
+.keys { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 720px) { .keys { grid-template-columns: minmax(0, 1fr); } }
+.key { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 18px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line-soft); color: var(--text2); font-size: 15px; }
+.key kbd { font-size: 13px; }
+
+/* ------------------------------------------------------------------ the end */
+.cta { margin-top: 130px; text-align: center; padding: 72px 24px; border-radius: 26px; border: 1px solid var(--line); position: relative; overflow: hidden;
+  background: radial-gradient(60% 100% at 50% 0%, rgba(216, 213, 205, .09), transparent 70%), var(--panel); }
+.cta img { width: 72px; height: 72px; border-radius: 18px; box-shadow: 0 20px 50px rgba(0, 0, 0, .5); margin-bottom: 22px; }
+.cta h2 { margin-bottom: 12px; }
+.cta p { color: var(--dim); margin: 0 auto 28px; max-width: 520px; font-size: 17px; }
+.cta .get { justify-content: center; }
+footer { margin-top: 80px; border-top: 1px solid var(--line-soft); color: var(--faint); font-size: 14px; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; padding-top: 24px; padding-bottom: 44px; align-items: center; }
+footer a { color: var(--dim); text-decoration: none; }
+footer a:hover { color: var(--text); }
+footer .grow { flex: 1; }
+
+/* things come up as they scroll in */
+.up { opacity: 0; transform: translateY(18px); transition: opacity .7s ease, transform .7s cubic-bezier(.2, .8, .2, 1); }
+.up.in { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .up { opacity: 1; transform: none; }
+}
+</style>
+</head>
+<body>
+<!-- line icons, as in the app -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-region" viewBox="0 0 16 16"><path d="M1.5 5V1.5H5M11 1.5h3.5V5M14.5 11v3.5H11M5 14.5H1.5V11"/></symbol>
+  <symbol id="i-screen" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="9" rx="1.5"/><path d="M5.5 14h5"/></symbol>
+  <symbol id="i-window" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M1.5 5.5h13"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 16 16"><path d="M3 13 13 3M7 3h6v6"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 16 16"><path d="M2.5 12 4.5 9l2 2L9 6l2 2 2.5-4"/></symbol>
+  <symbol id="i-text" viewBox="0 0 16 16"><path d="M3 3.5h10M8 3.5v10"/></symbol>
+  <symbol id="i-blur" viewBox="0 0 16 16"><rect x="2.5" y="4.5" width="11" height="7" rx="1"/><path d="M4.5 6.5h7M4.5 8h7M4.5 9.5h7"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-1h-8v8h1"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 16 16"><path d="M9.5 2.5 13.5 6.5 10 9l-.5 3-6-6 3-.5zM6 10l-3.5 3.5"/></symbol>
+  <symbol id="i-rec" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="2.2" fill="currentColor"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 16 16"><path d="M3 5.5A5.5 5.5 0 1 1 2.5 9M3 2.5v3h3"/></symbol>
+  <symbol id="i-gif" viewBox="0 0 16 16"><rect x="1.5" y="3.5" width="13" height="9" rx="1.5"/><path d="M5 10V6h2M5 8h1.5M9 6v4M11 10V6h2"/></symbol>
+  <symbol id="i-mouse" viewBox="0 0 16 16"><path d="M4 2.5v10.5l2.8-2.7 2 3.9 1.8-.9-2-3.8 3.7-.2z"/></symbol>
+  <symbol id="i-cut" viewBox="0 0 16 16"><circle cx="4.5" cy="11.5" r="2"/><circle cx="11.5" cy="11.5" r="2"/><path d="M6 10 12.5 2.5M10 10 3.5 2.5"/></symbol>
+  <symbol id="i-sub" viewBox="0 0 16 16"><rect x="1.5" y="3.5" width="13" height="9" rx="1.5"/><path d="M4 8.5h3M8.5 8.5H12M4 10.5h6"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 16 16"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2"/></symbol>
+  <symbol id="i-music" viewBox="0 0 16 16"><path d="M6 12V3.5l7-1.5V10.5"/><circle cx="4.5" cy="12" r="1.8"/><circle cx="11.5" cy="10.5" r="1.8"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 16 16"><rect x="4.5" y="1.5" width="7" height="13" rx="1.5"/><path d="M7 12.5h2"/></symbol>
+  <symbol id="i-zoom" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5l3.5 3.5M5 7h4M7 5v4"/></symbol>
+  <symbol id="i-scan" viewBox="0 0 16 16"><path d="M1.5 5V1.5H5M11 1.5h3.5V5M14.5 11v3.5H11M5 14.5H1.5V11M4.5 6h7M4.5 8.5h7M4.5 11h4"/></symbol>
+  <symbol id="i-qr" viewBox="0 0 16 16"><rect x="2" y="2" width="4.5" height="4.5" rx=".8"/><rect x="9.5" y="2" width="4.5" height="4.5" rx=".8"/><rect x="2" y="9.5" width="4.5" height="4.5" rx=".8"/><path d="M9.5 9.5h1.5v1.5M14 9.5V11M9.5 14h1.5M12.5 12.5H14V14"/></symbol>
+  <symbol id="i-pipette" viewBox="0 0 16 16"><path d="M2.5 13.5 3 11.5l6-6M7 4.5l4.5 4.5"/><path d="M10.2 5.8 12.4 3.6a1.6 1.6 0 0 1 2.3 2.3L12.5 8"/></symbol>
+  <symbol id="i-link" viewBox="0 0 16 16"><path d="M7 9a3 3 0 0 0 4.2 0l2.3-2.3a3 3 0 0 0-4.2-4.2L8.2 3.6"/><path d="M9 7a3 3 0 0 0-4.2 0L2.5 9.3a3 3 0 0 0 4.2 4.2l1.1-1.1"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 16 16"><path d="M8 10.5V2.5M4.5 6 8 2.5 11.5 6M2.5 10.5v3h11v-3"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 16 16"><path d="M2.5 3.5h11v7.5H7L4 13.5V11H2.5z"/></symbol>
+  <symbol id="i-server" viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="4.5" rx="1"/><rect x="2" y="9" width="12" height="4.5" rx="1"/><path d="M4.5 4.75h.01M4.5 11.25h.01"/></symbol>
+  <symbol id="i-frame" viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="2"/><rect x="4.5" y="4.5" width="7" height="7" rx="1"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="4" height="4" rx=".8"/><rect x="9.5" y="2.5" width="4" height="4" rx=".8"/><path d="M2.5 10h11M2.5 13h8"/></symbol>
+  <symbol id="i-keys" viewBox="0 0 16 16"><path d="M2.5 5.5h11M2.5 10.5h11M5.5 2.5v11M10.5 2.5v11"/></symbol>
+  <symbol id="i-game" viewBox="0 0 16 16"><path d="M5 5.5h6a3.5 3.5 0 0 1 3.3 4.6l-.4 1.2a1.5 1.5 0 0 1-2.6.4L10 10H6l-1.3 1.7a1.5 1.5 0 0 1-2.6-.4l-.4-1.2A3.5 3.5 0 0 1 5 5.5z"/><path d="M5 7v2M4 8h2"/></symbol>
+  <symbol id="i-update" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v3h-3"/></symbol>
+  <symbol id="i-move" viewBox="0 0 16 16"><path d="M2.5 8h11M10 4.5 13.5 8 10 11.5"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></symbol>
+  <symbol id="i-code" viewBox="0 0 16 16"><path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/></symbol>
+  <symbol id="i-user" viewBox="0 0 16 16"><circle cx="8" cy="5.5" r="2.8"/><path d="M2.8 14a5.2 5.2 0 0 1 10.4 0"/></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 16 16"><path d="M5.5 3.5v9M10.5 3.5v9"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 16 16"><path d="M2.5 4.5v8h11V6h-6L6 4.5z"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 16 16"><path d="M2 4.5h7M12 4.5h2M2 11.5h2M7 11.5h7M10.5 3v3M5.5 10v3"/></symbol>
+  <symbol id="i-history" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/></symbol>
+</svg>
+
+<header id="hdr">
+  <div class="wrap">
+    <a class="brand" href="#top"><img src="../assets/logo.png" alt="">blinker</a>
+    <nav>
+      <a class="hide-md" href="#features" data-t="nav_features">возможности</a>
+      <a class="hide-md" href="#install" data-t="nav_install">установка</a>
+      <a class="hide-md" href="#keys" data-t="nav_keys">клавиши</a>
+      <a class="hide-sm" href="https://github.com/justkiddingxd/blinker">GitHub</a>
+      <div class="seg" role="group" aria-label="language">
+        <button type="button" data-lang="ru" aria-pressed="true">ru</button>
+        <button type="button" data-lang="en" aria-pressed="false">en</button>
+      </div>
+      <a class="btn-sm hide-sm" href="#get" data-t="nav_get">скачать</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <div class="hero">
+    <div class="wrap grid">
+      <div>
+        <a class="eyebrow" href="https://github.com/justkiddingxd/blinker/releases/latest"><b id="ver-pill">0.4.1</b><span data-t="eyebrow">редактор видео, текст с экрана и QR-коды</span></a>
+        <h1 data-t="h1">Снял. Отметил. <span class="soft">Отправил.</span></h1>
+        <p class="lead" data-t="lead">Скриншоты, запись экрана и монтаж коротких видео для macOS и Windows. Живёт в трее, срабатывает с одной клавиши и не просит ни аккаунта, ни подписки.</p>
+        <p class="away" data-t="away">blinker работает на macOS и Windows. Открой эту страницу на компьютере или скачай нужную версию:</p>
+        <div class="get" id="get">
+          <a class="dl" data-dl href="https://github.com/justkiddingxd/blinker/releases/latest/download/Blinker.dmg">
+            <svg class="only-mac" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.37 12.46c-.02-2.2 1.8-3.26 1.88-3.31-1.02-1.5-2.62-1.7-3.19-1.72-1.36-.14-2.65.8-3.34.8-.69 0-1.75-.78-2.88-.76-1.48.02-2.85.86-3.61 2.19-1.54 2.67-.39 6.62 1.11 8.79.73 1.06 1.6 2.25 2.75 2.21 1.1-.04 1.52-.71 2.85-.71 1.33 0 1.71.71 2.87.69 1.19-.02 1.94-1.08 2.66-2.15.84-1.23 1.19-2.42 1.21-2.48-.03-.01-2.32-.89-2.34-3.53zM14.18 6c.61-.74 1.02-1.76.91-2.78-.88.04-1.94.59-2.57 1.32-.56.65-1.06 1.69-.92 2.69.98.08 1.98-.5 2.58-1.23z"/></svg>
+            <svg class="only-win" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5.1 10.4 4v7.2H3V5.1zm8.3-1.2L21 2.5v8.7h-9.7V3.9zM3 12.6h7.4v7.3L3 18.9v-6.3zm8.3 0H21v8.9l-9.7-1.4v-7.5z"/></svg>
+            <span><b class="only-mac" data-t="dl_mac">Скачать для macOS</b><b class="only-win" data-t="dl_win">Скачать для Windows</b><small data-dl-meta></small></span>
+          </a>
+          <span class="other">
+            <a class="only-mac" href="#" data-switch="win" data-t="other_win">или для Windows</a>
+            <a class="only-win" href="#" data-switch="mac" data-t="other_mac">или для macOS</a>
+          </span>
+        </div>
+        <ul class="pills">
+          <li><svg class="i"><use href="#i-check"/></svg><span data-t="pill_free">бесплатно</span></li>
+          <li><svg class="i"><use href="#i-code"/></svg><span data-t="pill_open">открытый код</span></li>
+          <li><svg class="i"><use href="#i-user"/></svg><span data-t="pill_noacc">без регистрации</span></li>
+          <li><svg class="i"><use href="#i-lock"/></svg><span data-t="pill_local">всё на твоём компьютере</span></li>
+        </ul>
+      </div>
+
+      <figure class="reel">
+        <div class="tabs">
+          <div class="seg" role="group" aria-label="demo">
+            <button type="button" data-demo="0" data-t="tab_shot">снимок</button>
+            <button type="button" data-demo="1" data-t="tab_rec">запись</button>
+            <button type="button" data-demo="2" data-t="tab_replay">повтор</button>
+          </div>
+        </div>
+        <div class="window">
+          <div class="bar">
+            <span class="lights"><i></i><i></i><i></i></span>
+            <span class="title"><img src="../assets/logo.png" alt="">blinker</span>
+          </div>
+          <div class="screen" id="screen">
+            <video id="demo" src="../assets/demo-ru.mp4?v=__V__" width="1000" height="640" autoplay muted loop playsinline preload="auto"></video>
+          </div>
+        </div>
+        <figcaption>
+          <span data-cap="0"><b data-t="cap_shot_h">Снимок области.</b> <span data-t="cap_shot">Выделил, поставил стрелку и номера шагов, размыл почту, скопировал.</span></span>
+          <span data-cap="1" hidden><b data-t="cap_rec_h">Запись экрана.</b> <span data-t="cap_rec">Выделил область, записал с таймером, остановил — видео уже в папке.</span></span>
+          <span data-cap="2" hidden><b data-t="cap_replay_h">Повтор.</b> <span data-t="cap_replay">Что-то случилось на экране — нажал</span> <kbd class="only-mac">⌥⇧⌘7</kbd><kbd class="only-win">Ctrl+Alt+PrtSc</kbd><span data-t="cap_replay2">, и последние секунды уже стали видео.</span></span>
+        </figcaption>
+      </figure>
+    </div>
+
+    <div class="wrap">
+      <div class="facts up">
+        <div class="fact"><b data-t="fact1_h">13 МБ</b><span data-t="fact1">один файл: скачал, открыл, работает</span></div>
+        <div class="fact"><b data-t="fact2_h">до 240 fps</b><span data-t="fact2">запись на видеокарте, без рывков в игре</span></div>
+        <div class="fact"><b data-t="fact3_h">0 аккаунтов</b><span data-t="fact3">ни регистрации, ни подписки, ни рекламы</span></div>
+        <div class="fact"><b data-t="fact4_h">офлайн</b><span data-t="fact4">текст и речь распознаются прямо на компьютере</span></div>
+      </div>
+    </div>
+  </div>
+
+  <section id="features">
+    <div class="wrap">
+      <div class="kicker" data-t="feat_k">возможности</div>
+      <h2 data-t="feat_h">Всё, чтобы показать экран.</h2>
+      <p class="sub" data-t="feat_sub">От быстрого снимка с подписью до шортса с субтитрами — без того, чтобы открывать ещё пять программ.</p>
+      <div class="chips">
+        <a href="#c-shots"><i style="background:var(--accent)"></i><span data-t="c1_k">снимки</span></a>
+        <a href="#c-video"><i style="background:var(--red)"></i><span data-t="c2_k">видео</span></a>
+        <a href="#c-edit"><i style="background:var(--violet)"></i><span data-t="c3_k">редактор видео</span></a>
+        <a href="#c-read"><i style="background:var(--blue)"></i><span data-t="c4_k">текст и QR</span></a>
+        <a href="#c-share"><i style="background:var(--green)"></i><span data-t="c5_k">отправка</span></a>
+        <a href="#c-yours"><i style="background:var(--amber)"></i><span data-t="c6_k">под себя</span></a>
+      </div>
+
+      <!-- 01 -->
+      <article class="cat up" id="c-shots">
+        <div class="words">
+          <div class="num"><i style="background:var(--accent)"></i>01 · <span data-t="c1_k">снимки</span></div>
+          <h3 data-t="c1_h">Экран замирает — выделяй без спешки.</h3>
+          <p data-t="c1">Нажал клавишу, и картинка застыла: всплывающее меню не исчезнет, видео не убежит. Лупа показывает каждый пиксель, клик по окну берёт только его, а по его части — например, страницу без вкладок браузера.</p>
+          <ul class="list">
+            <li><svg class="i"><use href="#i-arrow"/></svg><span data-t="c1_l1"><b>Разметка до снимка.</b> Стрелки, номера шагов, маркер и текст прямо на выделении.</span></li>
+            <li><svg class="i"><use href="#i-blur"/></svg><span data-t="c1_l2"><b>Размытие одним движением.</b> Почта, пароли и номера карт не попадут в чат.</span></li>
+            <li><svg class="i"><use href="#i-pin"/></svg><span data-t="c1_l3"><b>Закрепить поверх окон.</b> Снимок висит рядом, пока переписываешь из него.</span></li>
+            <li><svg class="i"><use href="#i-frame"/></svg><span data-t="c1_l4"><b>Красивый снимок.</b> Скриншот на мягком фоне с тенью — сразу для соцсетей.</span></li>
+          </ul>
+        </div>
+        <div class="stage v-shot" aria-hidden="true">
+          <div class="page">
+            <i class="h"></i><i></i><i class="m"></i><i class="s"></i><i></i><i class="m"></i><i class="s"></i><i></i>
+            <div class="sel">
+              <span class="size mono">640 × 360</span>
+              <svg viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M5 90 L88 14" stroke="#e5484d" stroke-width="5" vector-effect="non-scaling-stroke" fill="none" stroke-linecap="round"/><path d="M64 12 L90 12 L88 38" stroke="#e5484d" stroke-width="5" vector-effect="non-scaling-stroke" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="step" style="left:8%;top:12%">1</span>
+              <span class="step" style="left:80%;top:8%">2</span>
+              <span class="blur"></span>
+            </div>
+          </div>
+          <div class="tools">
+            <span class="on"><svg class="i"><use href="#i-arrow"/></svg></span>
+            <span><svg class="i"><use href="#i-pen"/></svg></span>
+            <span><svg class="i"><use href="#i-text"/></svg></span>
+            <span><svg class="i"><use href="#i-blur"/></svg></span>
+            <span><svg class="i"><use href="#i-pin"/></svg></span>
+            <span><svg class="i"><use href="#i-copy"/></svg></span>
+          </div>
+        </div>
+      </article>
+
+      <!-- 02 -->
+      <article class="cat up" id="c-video">
+        <div class="words">
+          <div class="num"><i style="background:var(--red)"></i>02 · <span data-t="c2_k">видео</span></div>
+          <h3 data-t="c2_h">Запись, которая не тормозит игру.</h3>
+          <p data-t="c2">Кодирует видеокарта, а не процессор, поэтому запись идёт с частотой экрана — хоть 144, хоть 240 кадров. Звук системы и микрофон ложатся на разные дорожки: потом можно приглушить игру и оставить голос.</p>
+          <ul class="list">
+            <li><svg class="i"><use href="#i-repeat"/></svg><span data-t="c2_l1"><b>Повтор.</b> Последние минуты экрана всегда в памяти: случилось что-то — одна клавиша, и это уже видео.</span></li>
+            <li><svg class="i"><use href="#i-mouse"/></svg><span data-t="c2_l2"><b>Клики и сочетания в кадре.</b> Зрителю видно, куда ты нажал, — удобно для инструкций.</span></li>
+            <li><svg class="i"><use href="#i-gif"/></svg><span data-t="c2_l3"><b>GIF без конвертеров.</b> Свой кодировщик: одна палитра и только изменившиеся участки — гифки получаются лёгкими.</span></li>
+            <li><svg class="i"><use href="#i-game"/></svg><span data-t="c2_l4"><b>Клипы по играм.</b> Запись во время игры сама называется по ней и ложится в её папку.</span></li>
+          </ul>
+        </div>
+        <div class="stage v-video" aria-hidden="true">
+          <div class="game">
+            <div class="keys"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>B</kbd></div>
+            <span class="click"></span>
+            <div class="hud"><span class="rec"></span><span>00:42</span><span class="b"><svg class="i"><use href="#i-pause"/></svg></span><span class="b"><svg class="i"><use href="#i-stop"/></svg></span></div>
+          </div>
+          <div class="tracks">
+            <div class="track"><span data-t="v_sys">звук системы</span><div class="wave" data-wave="1"></div></div>
+            <div class="track"><span data-t="v_mic">микрофон</span><div class="wave" data-wave="2"></div></div>
+          </div>
+        </div>
+      </article>
+
+      <!-- 03 -->
+      <article class="cat up" id="c-edit">
+        <div class="words">
+          <div class="num"><i style="background:var(--violet)"></i>03 · <span data-t="c3_k">редактор видео</span></div>
+          <h3 data-t="c3_h">Смонтируй шортс, не открывая CapCut.</h3>
+          <p data-t="c3">Разрежь запись, выкинь лишнее, ускорь скучный кусок — голос при этом не запищит. Переведи в 9:16 для Shorts, Reels и TikTok, добавь подписи и музыку и сохрани в MP4 или GIF.</p>
+          <ul class="list">
+            <li><svg class="i"><use href="#i-mic"/></svg><span data-t="c3_l1"><b>Субтитры из речи.</b> Whisper слушает видео прямо на компьютере и расставляет текст по времени.</span></li>
+            <li><svg class="i"><use href="#i-sub"/></svg><span data-t="c3_l2"><b>Текст с анимацией.</b> Проявление, всплытие, печать по буквам — заголовки и реакции двигаются по кадру мышкой.</span></li>
+            <li><svg class="i"><use href="#i-music"/></svg><span data-t="c3_l3"><b>Музыка и картинки.</b> Подложи трек с затуханием в конце, налепи стикер или логотип.</span></li>
+            <li><svg class="i"><use href="#i-zoom"/></svg><span data-t="c3_l4"><b>Приближение и плавный наезд.</b> Камера медленно приближается к главному, как в коротких видео.</span></li>
+          </ul>
+        </div>
+        <div class="stage v-edit" aria-hidden="true">
+          <div class="preview">
+            <div class="frame"><span class="t" data-t="v_title">вот это поворот</span><span class="cap" data-t="v_cap">СМОТРИ СЮДА</span></div>
+            <div class="phone"><b>9:16</b><span></span></div>
+          </div>
+          <div class="timeline" id="tl">
+            <div class="lane"><span class="n" data-t="v_l_text">текст</span><span class="blk" style="left:6%;width:26%;background:var(--blue)" data-t="v_title">вот это поворот</span></div>
+            <div class="lane"><span class="n" data-t="v_l_pic">картинка</span><span class="blk" style="left:40%;width:18%;background:var(--violet)">logo.png</span></div>
+            <div class="lane"><span class="n" data-t="v_l_video">видео</span><span class="strip"></span><span class="speed"><b>2×</b></span></div>
+            <div class="lane"><span class="n" data-t="v_l_sub">субтитры</span><span class="blk" style="left:2%;width:20%;background:var(--accent)" data-t="v_s1">смотри сюда</span><span class="blk" style="left:24%;width:24%;background:var(--accent)" data-t="v_s2">и вот тут</span><span class="blk" style="left:62%;width:26%;background:var(--accent)" data-t="v_s3">готово</span></div>
+            <div class="lane"><span class="n" data-t="v_l_music">музыка</span><span class="blk" style="left:0;width:96%;background:var(--green)">track.mp3</span></div>
+            <span class="playhead"></span>
+          </div>
+        </div>
+      </article>
+
+      <!-- 04 -->
+      <article class="cat up" id="c-read">
+        <div class="words">
+          <div class="num"><i style="background:var(--blue)"></i>04 · <span data-t="c4_k">текст и QR</span></div>
+          <h3 data-t="c4_h">Всё, что на экране, можно скопировать.</h3>
+          <p data-t="c4">Текст из видео, с картинки или из программы, где его не выделить: выдели область, и он ляжет поверх неё живыми строками. Сразу весь в буфере, а любую строку можно скопировать отдельно.</p>
+          <ul class="list">
+            <li><svg class="i"><use href="#i-scan"/></svg><span data-t="c4_l1"><b>PaddleOCR.</b> Русский, английский, украинский и белорусский вперемешку, даже мелкий текст тёмных интерфейсов.</span></li>
+            <li><svg class="i"><use href="#i-qr"/></svg><span data-t="c4_l2"><b>QR-коды сами находятся.</b> Под каждым — куда он ведёт и кнопка «перейти». Телефон доставать не нужно.</span></li>
+            <li><svg class="i"><use href="#i-pipette"/></svg><span data-t="c4_l3"><b>Пипетка.</b> Экран замирает, лупа у курсора, клик — и цвет в буфере в hex.</span></li>
+          </ul>
+        </div>
+        <div class="stage v-read" aria-hidden="true">
+          <div class="qrbox">
+            <div class="qr"><svg id="qr" viewBox="0 0 25 25" shape-rendering="crispEdges"></svg><span class="br"><i></i><i></i><i></i><i></i></span><span class="sweep"></span></div>
+            <div class="qrcard"><span class="tile"><svg class="i"><use href="#i-link"/></svg></span><span class="w"><b>blinker.cool</b><span>/update</span></span><span class="go"><span data-t="v_go">перейти</span><svg class="i" style="width:13px;height:13px"><use href="#i-arrow"/></svg></span></div>
+          </div>
+          <div class="ocr">
+            <div class="head"><span class="dot"><svg class="i" style="width:13px;height:13px"><use href="#i-scan"/></svg></span><span><b data-t="v_ocr_h">текст с картинки</b><br><span data-t="v_ocr_s">4 строки · всё уже в буфере</span></span></div>
+            <div class="pic"><span data-t="v_o1">Заказ №4815 оплачен</span><span data-t="v_o2">Итого: 12 990 ₽</span><span>support@shop.example</span><span data-t="v_o3">Доставка в среду</span></div>
+          </div>
+        </div>
+      </article>
+
+      <!-- 05 -->
+      <article class="cat up" id="c-share">
+        <div class="words">
+          <div class="num"><i style="background:var(--green)"></i>05 · <span data-t="c5_k">отправка</span></div>
+          <h3 data-t="c5_h">Ссылка вместо файла.</h3>
+          <p data-t="c5">Снимок или запись улетает на сервер, а в буфере уже ссылка: вставь её в чат. Видео по ссылке играет прямо в Discord и Telegram, без скачивания.</p>
+          <ul class="list">
+            <li><svg class="i"><use href="#i-upload"/></svg><span data-t="c5_l1"><b>post.blinker.cool без регистрации.</b> Файлы живут три дня, видео — до 100 МБ, загруженное можно удалить.</span></li>
+            <li><svg class="i"><use href="#i-server"/></svg><span data-t="c5_l2"><b>Свой сервер или ShareX.</b> Подключи свой адрес или загрузчик .sxcu — zipline, xbackbone и другие.</span></li>
+            <li><svg class="i"><use href="#i-chat"/></svg><span data-t="c5_l3"><b>Карточка после снимка.</b> Превью в углу экрана: перетащи его прямо в чат или в папку.</span></li>
+            <li><svg class="i"><use href="#i-history"/></svg><span data-t="c5_l4"><b>История.</b> Все снимки, записи и загрузки в одном окне, по дням, с фильтром по играм.</span></li>
+          </ul>
+        </div>
+        <div class="stage v-share" aria-hidden="true">
+          <div class="msg"><span class="ava"></span><div class="bubble" data-t="v_m1">покажи, где у тебя это включается?</div></div>
+          <div class="msg me"><span class="ava"></span><div class="bubble"><a href="#" tabindex="-1">post.blinker.cool/v/7Kq2</a><div class="embed"><small>post.blinker.cool · 0:12</small><div class="vid"></div></div></div></div>
+          <div class="toast"><div class="img"></div><span>png · 1280 × 720 · 214 КБ</span></div>
+        </div>
+      </article>
+
+      <!-- 06 -->
+      <article class="cat up" id="c-yours">
+        <div class="words">
+          <div class="num"><i style="background:var(--amber)"></i>06 · <span data-t="c6_k">под себя</span></div>
+          <h3 data-t="c6_h">Настраивается под твои руки.</h3>
+          <p data-t="c6">Клавиши, папки, меню, поведение после снимка — blinker подстраивается, а не заставляет переучиваться. Переехать с ShareX можно одной кнопкой.</p>
+          <ul class="list">
+            <li><svg class="i"><use href="#i-menu"/></svg><span data-t="c6_l1"><b>Меню трея собирается мышкой.</b> Перетащи нужные действия в плитки или список, лишнее — убери.</span></li>
+            <li><svg class="i"><use href="#i-keys"/></svg><span data-t="c6_l2"><b>Любые сочетания.</b> На одно действие можно несколько, занятые подсвечиваются красным.</span></li>
+            <li><svg class="i"><use href="#i-game"/></svg><span data-t="c6_l3"><b>Статус в Discord.</b> Друзья видят, что ты клипаешь, и в какой игре.</span></li>
+            <li><svg class="i"><use href="#i-update"/></svg><span data-t="c6_l4"><b>Обновляется сам.</b> Тихо, в фоне и никогда — посреди записи.</span></li>
+          </ul>
+        </div>
+        <div class="stage v-tray" aria-hidden="true">
+          <div class="menu">
+            <h6 data-t="v_t_shot">скриншот</h6>
+            <div class="mt">
+              <span><svg class="i"><use href="#i-region"/></svg><small data-t="v_t_area">область</small></span>
+              <span class="drag"><svg class="i"><use href="#i-scan"/></svg><small data-t="v_t_text">текст</small></span>
+              <span><svg class="i"><use href="#i-window"/></svg><small data-t="v_t_win">окно</small></span>
+            </div>
+            <h6 data-t="v_t_video">видео</h6>
+            <div class="mt">
+              <span><svg class="i"><use href="#i-rec"/></svg><small data-t="v_t_area">область</small></span>
+              <span><svg class="i"><use href="#i-screen"/></svg><small data-t="v_t_screen">экран</small></span>
+              <span><svg class="i"><use href="#i-gif"/></svg><small>gif</small></span>
+            </div>
+            <div class="ml">
+              <div><svg class="i"><use href="#i-repeat"/></svg><span data-t="v_t_replay">сохранить повтор</span><em class="only-win">Ctrl+Alt+PrtSc</em><em class="only-mac">⌥⇧⌘7</em></div>
+              <div><svg class="i"><use href="#i-pipette"/></svg><span data-t="v_t_pick">пипетка</span><em class="only-win">Ctrl+Alt+C</em><em class="only-mac">⌃⌥⌘C</em></div>
+              <hr>
+              <div><svg class="i"><use href="#i-folder"/></svg><span data-t="v_t_folder">папка со снимками</span></div>
+              <div><svg class="i"><use href="#i-settings"/></svg><span data-t="v_t_settings">настройки</span></div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <div class="band up">
+        <div class="kicker" data-t="priv_k">приватность</div>
+        <h2 data-t="priv_h">Твой экран остаётся твоим.</h2>
+        <div class="cols">
+          <div><b><svg class="i"><use href="#i-lock"/></svg><span data-t="priv1_h">Ничего не уходит само</span></b><p data-t="priv1">Снимки и записи лежат в твоей папке. В сеть файл попадёт, только если ты нажал «загрузить».</p></div>
+          <div><b><svg class="i"><use href="#i-scan"/></svg><span data-t="priv2_h">Распознавание офлайн</span></b><p data-t="priv2">Текст с экрана и субтитры из речи считаются на твоём компьютере. Модели скачиваются один раз и только по кнопке.</p></div>
+          <div><b><svg class="i"><use href="#i-code"/></svg><span data-t="priv3_h">Открытый код</span></b><p data-t="priv3">Весь blinker — на GitHub под GPL-3.0. Можно проверить, собрать самому и поднять свой сервер для ссылок.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap">
+      <div class="inst-head">
+        <div>
+          <div class="kicker" data-t="inst_k">установка</div>
+          <h2 data-t="inst_h">Пара минут, один раз.</h2>
+          <p class="sub only-mac" data-t="mac_sub">blinker не подписан платным сертификатом Apple, поэтому при первом запуске macOS его придержит. Это нормально: вот как пропустить.</p>
+          <p class="sub only-win" data-t="win_sub">Один файл, ставить ничего не нужно.</p>
+        </div>
+        <div class="seg" role="group" aria-label="system">
+          <button type="button" data-os="mac">macOS</button>
+          <button type="button" data-os="win">Windows</button>
+        </div>
+      </div>
+
+      <div class="inst only-mac">
+        <div class="guide">
+          <div class="stp"><h4 data-t="m1_h">Перенеси в «Программы»</h4><p data-t="m1">Открой <b>Blinker.dmg</b> и перетащи <b>Blinker</b> на ярлык <b>Программы</b> в том же окне.</p></div>
+          <div class="stp"><h4 data-t="m2_h">Открой и нажми «Готово»</h4><p data-t="m2">macOS скажет, что не может проверить программу. Нажми <b>Готово</b>, не «Переместить в корзину».</p></div>
+          <div class="stp"><h4 data-t="m3_h">Разреши запуск</h4><p data-t="m3"><b>Системные настройки → Конфиденциальность и безопасность</b>, внизу строка про Blinker: <b>Всё равно открыть</b>. Или одной командой в Терминале:</p>
+            <div class="cmd"><code>xattr -dr com.apple.quarantine /Applications/Blinker.app</code><button type="button" data-copy data-t="copy">скопировать</button></div></div>
+          <div class="stp"><h4 data-t="m4_h">Дай доступ к экрану</h4><p data-t="m4">blinker попросит запись экрана сам: <b>Открыть Системные настройки</b> и включить Blinker в <b>Запись экрана и системного звука</b>. Потом перезапусти его из строки меню.</p></div>
+          <div class="stp"><h4 data-t="m5_h">Готово</h4><p data-t="m5"><kbd>⇧⌘2</kbd> область, <kbd>⇧⌘1</kbd> весь экран, <kbd>⇧⌘7</kbd> запись.</p></div>
+        </div>
+        <div class="side">
+          <div class="card"><h5 data-t="side_h">потом</h5><p data-t="mac_note">Микрофон и мониторинг ввода blinker попросит, когда они впервые понадобятся. <b>Обновляется</b> он сам, разрешения при этом сохраняются.</p></div>
+          <div class="card"><h5 data-t="t_h">если что-то не так</h5>
+            <details><summary data-t="t1_h">macOS пишет, что Blinker повреждён</summary><div><p data-t="t1">Так macOS называет программы без подписи Apple. Выполни в Терминале и открой снова:</p><div class="cmd"><code>xattr -dr com.apple.quarantine /Applications/Blinker.app</code><button type="button" data-copy data-t="copy">скопировать</button></div></div></details>
+            <details><summary data-t="t2_h">Доступ включён, а экрана нет</summary><div><p data-t="t2">macOS запомнила разрешение для старой сборки. Выйди из blinker, сбрось его и включи снова:</p><div class="cmd"><code>tccutil reset ScreenCapture app.blinker</code><button type="button" data-copy data-t="copy">скопировать</button></div></div></details>
+            <details><summary data-t="t3_h">Сочетание клавиш не срабатывает</summary><div><p data-t="t3">Его заняла другая программа. В настройках, раздел «горячие клавиши», занятые подсвечены красным — задай другое.</p></div></details>
+          </div>
+        </div>
+      </div>
+
+      <div class="inst only-win">
+        <div class="guide">
+          <div class="stp"><h4 data-t="w1_h">Скачай и запусти</h4><p data-t="w1">Открой <b>blinker.exe</b>. Положи его куда удобно — blinker сам добавится в меню «Пуск».</p></div>
+          <div class="stp"><h4 data-t="w2_h">Пропусти SmartScreen</h4><p data-t="w2">Если Windows предупредит о неподписанной программе: <b>Подробнее → Выполнить в любом случае</b>.</p></div>
+          <div class="stp"><h4 data-t="w3_h">Готово</h4><p data-t="w3">blinker живёт в трее. <kbd>PrtSc</kbd> область, <kbd>Ctrl+Shift+PrtSc</kbd> запись.</p></div>
+        </div>
+        <div class="side">
+          <div class="card"><h5 data-t="side_h">потом</h5><p data-t="win_note">Распознавание текста попросит скачать модель (13 МБ) при первом использовании. <b>Обновляется</b> blinker сам, тихо и не во время записи.</p></div>
+          <div class="card"><h5 data-t="t_h">если что-то не так</h5>
+            <details><summary data-t="w_prt_h">PrtSc открывает «Ножницы»</summary><div><p data-t="w_prt">Выключи <b>Параметры → Специальные возможности → Клавиатура → Использовать клавишу Print Screen для запуска функции создания фрагмента экрана</b>.</p></div></details>
+            <details><summary data-t="w_nv_h">Пишет «Press Alt+Z to open NVIDIA Overlay»</summary><div><p data-t="w_nv">Оверлей NVIDIA принимает blinker за игру. Как выключить надпись — в настройках blinker, раздел «интеграции».</p></div></details>
+            <details><summary data-t="t3_h">Сочетание клавиш не срабатывает</summary><div><p data-t="t3">Его заняла другая программа. В настройках, раздел «горячие клавиши», занятые подсвечены красным — задай другое.</p></div></details>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="keys">
+    <div class="wrap">
+      <div class="inst-head">
+        <div>
+          <div class="kicker" data-t="keys_k">клавиши</div>
+          <h2 data-t="keys_h">Под пальцами.</h2>
+          <p class="sub" data-t="keys_sub">Так стоит сразу после установки. Любое сочетание меняется в настройках.</p>
+        </div>
+        <div class="seg" role="group" aria-label="system">
+          <button type="button" data-os="mac">macOS</button>
+          <button type="button" data-os="win">Windows</button>
+        </div>
+      </div>
+      <div class="keys up">
+        <div class="key"><span data-t="k1">снимок области</span><kbd class="only-mac">⇧⌘2</kbd><kbd class="only-win">PrtSc</kbd></div>
+        <div class="key"><span data-t="k2">весь экран</span><kbd class="only-mac">⇧⌘1</kbd><kbd class="only-win">Ctrl+PrtSc</kbd></div>
+        <div class="key"><span data-t="k3">повторить область</span><kbd class="only-mac">⌥⇧⌘2</kbd><kbd class="only-win">Shift+PrtSc</kbd></div>
+        <div class="key"><span data-t="k4">запись, ещё раз — стоп</span><kbd class="only-mac">⇧⌘7</kbd><kbd class="only-win">Ctrl+Shift+PrtSc</kbd></div>
+        <div class="key"><span data-t="k5">пауза записи</span><kbd class="only-mac">⌃⌥P</kbd><kbd class="only-win">Ctrl+Alt+P</kbd></div>
+        <div class="key"><span data-t="k6">сохранить повтор</span><kbd class="only-mac">⌥⇧⌘7</kbd><kbd class="only-win">Ctrl+Alt+PrtSc</kbd></div>
+        <div class="key"><span data-t="k7">распознать текст</span><kbd class="only-mac">⌃⌥⌘T</kbd><kbd class="only-win">Ctrl+Alt+T</kbd></div>
+        <div class="key"><span data-t="k8">пипетка</span><kbd class="only-mac">⌃⌥⌘C</kbd><kbd class="only-win">Ctrl+Alt+C</kbd></div>
+      </div>
+
+      <div class="cta up">
+        <img src="../assets/logo.png" alt="">
+        <h2 data-t="cta_h">Попробуй — это один файл.</h2>
+        <p data-t="cta">Не понравится — просто удали. Ни аккаунта, ни следов в системе.</p>
+        <div class="get">
+          <a class="dl" data-dl href="https://github.com/justkiddingxd/blinker/releases/latest/download/Blinker.dmg">
+            <svg class="only-mac" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.37 12.46c-.02-2.2 1.8-3.26 1.88-3.31-1.02-1.5-2.62-1.7-3.19-1.72-1.36-.14-2.65.8-3.34.8-.69 0-1.75-.78-2.88-.76-1.48.02-2.85.86-3.61 2.19-1.54 2.67-.39 6.62 1.11 8.79.73 1.06 1.6 2.25 2.75 2.21 1.1-.04 1.52-.71 2.85-.71 1.33 0 1.71.71 2.87.69 1.19-.02 1.94-1.08 2.66-2.15.84-1.23 1.19-2.42 1.21-2.48-.03-.01-2.32-.89-2.34-3.53zM14.18 6c.61-.74 1.02-1.76.91-2.78-.88.04-1.94.59-2.57 1.32-.56.65-1.06 1.69-.92 2.69.98.08 1.98-.5 2.58-1.23z"/></svg>
+            <svg class="only-win" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5.1 10.4 4v7.2H3V5.1zm8.3-1.2L21 2.5v8.7h-9.7V3.9zM3 12.6h7.4v7.3L3 18.9v-6.3zm8.3 0H21v8.9l-9.7-1.4v-7.5z"/></svg>
+            <span><b class="only-mac" data-t="dl_mac">Скачать для macOS</b><b class="only-win" data-t="dl_win">Скачать для Windows</b><small data-dl-meta></small></span>
+          </a>
+          <span class="other">
+            <a class="only-mac" href="#" data-switch="win" data-t="other_win">или для Windows</a>
+            <a class="only-win" href="#" data-switch="mac" data-t="other_mac">или для macOS</a>
+          </span>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span class="grow">blinker · <span data-t="license">открытый код, GPL-3.0</span></span>
+    <a href="https://github.com/justkiddingxd/blinker">GitHub</a>
+    <a href="https://discord.gg/Dy4pUDEV8x">Discord</a>
+    <a href="https://github.com/justkiddingxd/blinker/releases" data-t="releases">все версии</a>
+    <a href="https://github.com/justkiddingxd/blinker/issues" data-t="issues">сообщить о проблеме</a>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+  var REPO = "justkiddingxd/blinker";
+  var ASSET = { mac: "Blinker.dmg", win: "blinker.exe" };
+
+  var T = {
+    en: {
+      nav_features: "features",
+      nav_install: "install",
+      nav_keys: "hotkeys",
+      nav_get: "download",
+      eyebrow: "video editor, text from the screen and QR codes",
+      h1: "Capture. Mark up. <span class=\"soft\">Send.</span>",
+      lead: "Screenshots, screen recording and short-video editing for macOS and Windows. It lives in the tray, fires on a single key and asks for no account and no subscription.",
+      away: "blinker runs on macOS and Windows. Open this page on a computer or download the version you need:",
+      dl_mac: "Download for macOS",
+      dl_win: "Download for Windows",
+      dl_mac_meta: "macOS 14 or newer",
+      dl_win_meta: "Windows 10 / 11 · one .exe",
+      other_win: "or for Windows",
+      other_mac: "or for macOS",
+      pill_free: "free",
+      pill_open: "open source",
+      pill_noacc: "no sign-up",
+      pill_local: "everything on your computer",
+      tab_shot: "screenshot",
+      tab_rec: "recording",
+      tab_replay: "replay",
+      cap_shot_h: "Area capture.",
+      cap_shot: "Select, add an arrow and numbered steps, blur the email, copy.",
+      cap_rec_h: "Screen recording.",
+      cap_rec: "Select an area, record with a timer, stop — the video is already in the folder.",
+      cap_replay_h: "Instant replay.",
+      cap_replay: "Something happened on screen — press",
+      cap_replay2: ", and the last seconds are already a video.",
+      fact1_h: "13 MB",
+      fact1: "one file: download, open, done",
+      fact2_h: "up to 240 fps",
+      fact2: "recorded on the GPU, no stutter in games",
+      fact3_h: "0 accounts",
+      fact3: "no sign-up, no subscription, no ads",
+      fact4_h: "offline",
+      fact4: "text and speech are read on your computer",
+      feat_k: "features",
+      feat_h: "Everything for showing your screen.",
+      feat_sub: "From a quick shot with a note to a short with subtitles — without opening five more apps.",
+      c1_k: "screenshots",
+      c2_k: "video",
+      c3_k: "video editor",
+      c4_k: "text and QR",
+      c5_k: "sharing",
+      c6_k: "your way",
+      c1_h: "The screen freezes — take your time.",
+      c1: "Press the key and the picture holds still: a pop-up menu won't vanish, a video won't run off. The loupe shows every pixel, a click on a window takes just that window, and on a part of it — say, the page without the browser's tabs.",
+      c1_l1: "<b>Mark up before you capture.</b> Arrows, numbered steps, marker and text right on the selection.",
+      c1_l2: "<b>Blur in one stroke.</b> Emails, passwords and card numbers stay out of the chat.",
+      c1_l3: "<b>Pin on top of other windows.</b> The shot stays beside you while you copy from it.",
+      c1_l4: "<b>Beauty shot.</b> The screenshot on a soft background with a shadow — ready for social media.",
+      c2_h: "Recording that doesn't slow your game.",
+      c2: "The graphics card encodes, not the processor, so recording keeps up with your display — 144 or 240 frames alike. System sound and the microphone go on separate tracks: later you can quiet the game and keep the voice.",
+      c2_l1: "<b>Instant replay.</b> The last minutes of your screen are always in memory: something happened — one key, and it's a video.",
+      c2_l2: "<b>Clicks and key combos on screen.</b> Viewers see where you pressed — handy for how-tos.",
+      c2_l3: "<b>GIFs without converters.</b> Its own encoder: one palette and only the changed parts — the GIFs come out light.",
+      c2_l4: "<b>Clips by game.</b> A recording made while you play is named after the game and goes into its folder.",
+      v_sys: "system sound",
+      v_mic: "microphone",
+      c3_h: "Cut a short without opening CapCut.",
+      c3: "Cut the recording, throw out the dull parts, speed up a boring piece — the voice won't squeak. Turn it 9:16 for Shorts, Reels and TikTok, add captions and music, and save an MP4 or a GIF.",
+      c3_l1: "<b>Subtitles from speech.</b> Whisper listens to the video right on your computer and times the text.",
+      c3_l2: "<b>Animated text.</b> Fade, pop, typing letter by letter — titles and reactions are dragged around the frame.",
+      c3_l3: "<b>Music and pictures.</b> Lay a track under it with a fade at the end, stick on a sticker or a logo.",
+      c3_l4: "<b>Zoom and a slow push-in.</b> The camera slowly closes in on what matters, as short videos do.",
+      v_title: "plot twist",
+      v_cap: "LOOK HERE",
+      v_l_text: "text",
+      v_l_pic: "picture",
+      v_l_video: "video",
+      v_l_sub: "subtitles",
+      v_l_music: "music",
+      v_s1: "look here",
+      v_s2: "and here",
+      v_s3: "done",
+      c4_h: "Anything on screen can be copied.",
+      c4: "Text in a video, on a picture or in an app that won't let you select it: select the area, and it lies on top as live lines. All of it is on the clipboard already, and any line can be copied on its own.",
+      c4_l1: "<b>PaddleOCR.</b> Russian, English, Ukrainian and Belarusian mixed together, even the small print of dark interfaces.",
+      c4_l2: "<b>QR codes are found by themselves.</b> Under each one: where it leads, and an “open” button. No need to grab your phone.",
+      c4_l3: "<b>Color picker.</b> The screen freezes, the loupe sits at the pointer, a click — and the color is on the clipboard as hex.",
+      v_go: "open",
+      v_ocr_h: "text from the picture",
+      v_ocr_s: "4 lines · all on the clipboard",
+      v_o1: "Order #4815 is paid",
+      v_o2: "Total: $129.90",
+      v_o3: "Delivery on Wednesday",
+      c5_h: "A link instead of a file.",
+      c5: "A shot or a recording flies to a server, and the link is already on your clipboard: paste it into the chat. A video link plays right in Discord and Telegram, nothing to download.",
+      c5_l1: "<b>post.blinker.cool, no sign-up.</b> Files live three days, videos up to 100 MB, uploads can be deleted.",
+      c5_l2: "<b>Your own server or ShareX.</b> Plug in your address or an .sxcu uploader — zipline, xbackbone and the like.",
+      c5_l3: "<b>A card after each shot.</b> A preview in the corner of the screen: drag it straight into a chat or a folder.",
+      c5_l4: "<b>History.</b> Every shot, recording and upload in one window, by day, filtered by game if you like.",
+      v_m1: "where do you turn that on?",
+      c6_h: "Fits your hands.",
+      c6: "Keys, folders, the menu, what happens after a shot — blinker adapts instead of making you relearn. Moving over from ShareX takes one button.",
+      c6_l1: "<b>Build the tray menu with the mouse.</b> Drag the actions you need into the tiles or the list, take out the rest.",
+      c6_l2: "<b>Any key combos.</b> Several per action if you like; taken ones are outlined in red.",
+      c6_l3: "<b>Discord status.</b> Friends see you're clipping, and in which game.",
+      c6_l4: "<b>Updates itself.</b> Quietly, in the background, and never in the middle of a recording.",
+      v_t_shot: "screenshot",
+      v_t_area: "area",
+      v_t_text: "text",
+      v_t_win: "window",
+      v_t_video: "video",
+      v_t_screen: "screen",
+      v_t_replay: "save the replay",
+      v_t_pick: "color picker",
+      v_t_folder: "captures folder",
+      v_t_settings: "settings",
+      priv_k: "privacy",
+      priv_h: "Your screen stays yours.",
+      priv1_h: "Nothing leaves on its own",
+      priv1: "Shots and recordings sit in your folder. A file goes online only when you press “upload”.",
+      priv2_h: "Recognition offline",
+      priv2: "Text from the screen and subtitles from speech are worked out on your computer. The models download once, and only when you ask.",
+      priv3_h: "Open source",
+      priv3: "All of blinker is on GitHub under GPL-3.0. Check it, build it yourself, run your own server for links.",
+      inst_k: "install",
+      inst_h: "A couple of minutes, once.",
+      mac_sub: "blinker isn't signed with a paid Apple certificate, so macOS holds it back the first time. That's expected: here's how to let it through.",
+      win_sub: "One file, nothing to install.",
+      m1_h: "Move it to Applications",
+      m1: "Open <b>Blinker.dmg</b> and drag <b>Blinker</b> onto the <b>Applications</b> shortcut in the same window.",
+      m2_h: "Open it and press Done",
+      m2: "macOS says it can't verify the app. Press <b>Done</b>, not “Move to Trash”.",
+      m3_h: "Allow it to run",
+      m3: "<b>System Settings → Privacy &amp; Security</b>, the line about Blinker at the bottom: <b>Open Anyway</b>. Or one command in Terminal:",
+      m4_h: "Give it the screen",
+      m4: "blinker asks to record the screen itself: <b>Open System Settings</b> and turn Blinker on under <b>Screen &amp; System Audio Recording</b>. Then restart it from the menu bar.",
+      m5_h: "Done",
+      m5: "<kbd>⇧⌘2</kbd> area, <kbd>⇧⌘1</kbd> whole screen, <kbd>⇧⌘7</kbd> recording.",
+      side_h: "later",
+      mac_note: "blinker asks for the microphone and Input Monitoring the first time they're needed. It <b>updates</b> itself, and the permissions stay.",
+      win_note: "Text recognition asks to download its model (13 MB) the first time. blinker <b>updates</b> itself, quietly and never while recording.",
+      copy: "copy",
+      copied: "copied",
+      t_h: "if something is off",
+      t1_h: "macOS says Blinker is damaged",
+      t1: "That's what macOS calls apps without an Apple signature. Run this in Terminal and open it again:",
+      t2_h: "Access is on, yet no screen",
+      t2: "macOS remembers the permission for an older build. Quit blinker, reset it and allow it again:",
+      t3_h: "A hotkey does nothing",
+      t3: "Another app has it. In settings, under hotkeys, taken ones are outlined in red — pick another.",
+      w1_h: "Download and run it",
+      w1: "Open <b>blinker.exe</b>. Keep it wherever you like — blinker adds itself to the Start menu.",
+      w2_h: "Get past SmartScreen",
+      w2: "If Windows warns about an unsigned app: <b>More info → Run anyway</b>.",
+      w3_h: "Done",
+      w3: "blinker lives in the tray. <kbd>PrtSc</kbd> area, <kbd>Ctrl+Shift+PrtSc</kbd> recording.",
+      w_prt_h: "PrtSc opens the Snipping Tool",
+      w_prt: "Turn off <b>Settings → Accessibility → Keyboard → Use the Print Screen key to open screen capture</b>.",
+      w_nv_h: "It says “Press Alt+Z to open NVIDIA Overlay”",
+      w_nv: "The NVIDIA overlay takes blinker for a game. How to quiet the note: blinker's settings, under integrations.",
+      keys_k: "hotkeys",
+      keys_h: "Under your fingers.",
+      keys_sub: "This is how it's set right after install. Any combo can be changed in settings.",
+      k1: "area",
+      k2: "whole screen",
+      k3: "repeat the last area",
+      k4: "record, again to stop",
+      k5: "pause recording",
+      k6: "save the replay",
+      k7: "read text",
+      k8: "color picker",
+      cta_h: "Try it — it's one file.",
+      cta: "Don't like it — just delete it. No account, no traces in the system.",
+      license: "open source, GPL-3.0",
+      releases: "all versions",
+      issues: "report a problem",
+      size: "{s} MB"
+    }
+  };
+
+  // the Russian text is the page itself
+  var RU = {};
+  document.querySelectorAll("[data-t]").forEach(function (el) {
+    var k = el.getAttribute("data-t");
+    if (!(k in RU)) RU[k] = el.innerHTML;
+  });
+  RU.dl_mac_meta = "macOS 14 и новее";
+  RU.dl_win_meta = "Windows 10 / 11 · один .exe";
+  RU.copied = "скопировано";
+  RU.size = "{s} МБ";
+  T.ru = RU;
+
+  var DEMOS = ["demo", "record", "replay"];
+  // the deploy puts the commit here: new videos get new addresses past the cache
+  var V = "__V__";
+  var noMacDemos = false;
+  var lang, os, demo = 0, release = null;
+  function t(k) { return (T[lang] && T[lang][k]) || RU[k] || ""; }
+  function demoSrc(d) {
+    var mac = os === "mac" && !noMacDemos;
+    return "../assets/" + DEMOS[d] + "-" + lang + (mac ? "-mac" : "") + ".mp4?v=" + V;
+  }
+
+  function pickLang() {
+    try {
+      var saved = localStorage.getItem("blinker-lang");
+      if (saved === "ru" || saved === "en") return saved;
+    } catch (e) {}
+    var langs = navigator.languages || [navigator.language || "en"];
+    for (var i = 0; i < langs.length; i++) if (/^(ru|uk|be|kk)\b/i.test(langs[i])) return "ru";
+    return "en";
+  }
+
+  // the visitor's system: "mac", "win", or null (a phone, Linux)
+  function detectOS() {
+    var p = ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "").toLowerCase();
+    var ua = navigator.userAgent || "";
+    if (/iphone|ipad|ipod|android/i.test(ua)) return null;
+    if (/mac/.test(p) && navigator.maxTouchPoints > 1) return null;
+    if (/mac/.test(p) || /Mac OS X/.test(ua)) return "mac";
+    if (/win/.test(p) || /Windows/.test(ua)) return "win";
+    return null;
+  }
+
+  function render() {
+    var root = document.documentElement;
+    root.lang = lang;
+    root.setAttribute("data-os", os);
+    document.querySelectorAll("[data-t]").forEach(function (el) {
+      var k = el.getAttribute("data-t");
+      if (k in T[lang]) el.innerHTML = T[lang][k];
+    });
+    document.querySelectorAll("[data-lang]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-lang") === lang)); });
+    document.querySelectorAll("button[data-os]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-os") === os)); });
+    document.querySelectorAll("[data-demo]").forEach(function (b) { b.setAttribute("aria-pressed", String(+b.getAttribute("data-demo") === demo)); });
+    document.querySelectorAll("[data-cap]").forEach(function (el) { el.hidden = +el.getAttribute("data-cap") !== demo; });
+    var video = document.getElementById("demo");
+    var src = demoSrc(demo);
+    if (video.getAttribute("src") !== src) {
+      video.setAttribute("src", src);
+      var playing = video.play();
+      if (playing && playing.catch) playing.catch(function () {});
+    }
+    document.title = lang === "ru" ? "blinker · скриншоты, запись экрана и монтаж" : "blinker · screenshots, screen recording and editing";
+    var a = release && release.assets && release.assets[ASSET[os]];
+    var href = a ? a.url : "https://github.com/" + REPO + "/releases/latest/download/" + ASSET[os];
+    var meta = t(os === "mac" ? "dl_mac_meta" : "dl_win_meta");
+    if (a && a.size) {
+      var mb = (a.size / 1048576).toFixed(1).replace(/\.0$/, "");
+      meta += " · " + t("size").replace("{s}", lang === "ru" ? mb.replace(".", ",") : mb);
+    }
+    document.querySelectorAll("[data-dl]").forEach(function (el) { el.href = href; });
+    document.querySelectorAll("[data-dl-meta]").forEach(function (el) { el.textContent = meta; });
+    if (release) document.getElementById("ver-pill").textContent = release.version;
+  }
+
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-lang], button[data-os], [data-switch], [data-demo], [data-copy]");
+    if (!b) return;
+    if (b.hasAttribute("data-lang")) {
+      lang = b.getAttribute("data-lang");
+      try { localStorage.setItem("blinker-lang", lang); } catch (err) {}
+    } else if (b.hasAttribute("data-switch")) {
+      e.preventDefault();
+      os = b.getAttribute("data-switch");
+    } else if (b.hasAttribute("data-os")) {
+      os = b.getAttribute("data-os");
+    } else if (b.hasAttribute("data-demo")) {
+      demo = +b.getAttribute("data-demo");
+    } else {
+      var code = b.parentNode.querySelector("code").textContent;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(code).then(function () {
+          b.textContent = t("copied");
+          setTimeout(function () { b.textContent = t("copy"); }, 1600);
+        }, function () {});
+      }
+      return;
+    }
+    render();
+  });
+
+  // the footage: ← → on the keyboard, a swipe on a phone
+  function step(d) { demo = (demo + d + DEMOS.length) % DEMOS.length; render(); }
+  document.addEventListener("keydown", function (e) {
+    if (e.altKey || e.ctrlKey || e.metaKey || /input|textarea|select/i.test(e.target.tagName)) return;
+    if (e.key === "ArrowLeft") step(-1);
+    else if (e.key === "ArrowRight") step(1);
+  });
+  var screen = document.getElementById("screen"), x0 = null;
+  screen.addEventListener("touchstart", function (e) { x0 = e.touches[0].clientX; }, { passive: true });
+  screen.addEventListener("touchend", function (e) {
+    if (x0 === null) return;
+    var dx = e.changedTouches[0].clientX - x0;
+    x0 = null;
+    if (Math.abs(dx) > 40) step(dx < 0 ? 1 : -1);
+  });
+  document.getElementById("demo").addEventListener("error", function () {
+    if (!noMacDemos && /-mac\.mp4/.test(this.getAttribute("src") || "")) { noMacDemos = true; render(); }
+  });
+
+  // the pictures: sound waves and a QR code, drawn once
+  var seed = 7;
+  function rnd() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
+  document.querySelectorAll("[data-wave]").forEach(function (w) {
+    var quiet = w.getAttribute("data-wave") === "2";
+    for (var i = 0; i < 64; i++) {
+      var bar = document.createElement("i");
+      var h = quiet ? (i > 18 && i < 40 ? 20 + rnd() * 60 : 4 + rnd() * 8) : 25 + Math.abs(Math.sin(i * .35)) * 55 + rnd() * 20;
+      bar.style.height = Math.min(100, h) + "%";
+      w.appendChild(bar);
+    }
+  });
+  (function qr() {
+    var svg = document.getElementById("qr"), n = 25, cells = "";
+    function finder(x, y) {
+      cells += '<path d="M' + x + ' ' + y + 'h7v7h-7z M' + (x + 1) + ' ' + (y + 1) + 'v5h5v-5z" fill-rule="evenodd"/>';
+      cells += '<rect x="' + (x + 2) + '" y="' + (y + 2) + '" width="3" height="3"/>';
+    }
+    finder(0, 0); finder(n - 7, 0); finder(0, n - 7);
+    for (var y = 0; y < n; y++) for (var x = 0; x < n; x++) {
+      var inFinder = (x < 8 && y < 8) || (x > n - 9 && y < 8) || (x < 8 && y > n - 9);
+      if (!inFinder && rnd() > .52) cells += '<rect x="' + x + '" y="' + y + '" width="1" height="1"/>';
+    }
+    svg.innerHTML = '<g fill="#161615">' + cells + "</g>";
+  })();
+  // the playhead runs the timeline's width
+  var tl = document.getElementById("tl");
+  function tlWidth() { tl.style.setProperty("--w", tl.clientWidth + "px"); }
+  tlWidth();
+  window.addEventListener("resize", tlWidth);
+
+  // things come up as they scroll in; the header gets its line once scrolled
+  if ("IntersectionObserver" in window) {
+    var io = new IntersectionObserver(function (es) {
+      es.forEach(function (e) { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } });
+    }, { rootMargin: "0px 0px -10% 0px" });
+    document.querySelectorAll(".up").forEach(function (el) { io.observe(el); });
+  } else {
+    document.querySelectorAll(".up").forEach(function (el) { el.classList.add("in"); });
+  }
+  var hdr = document.getElementById("hdr");
+  window.addEventListener("scroll", function () { hdr.classList.toggle("scrolled", window.scrollY > 8); }, { passive: true });
+
+  lang = pickLang();
+  var found = detectOS();
+  os = found || "mac";
+  if (!found) document.documentElement.setAttribute("data-away", "");
+  render();
+
+  window.addEventListener("load", function () {
+    DEMOS.forEach(function (_, d) {
+      if (d === demo) return;
+      var l = document.createElement("link");
+      l.rel = "prefetch";
+      l.href = demoSrc(d);
+      document.head.appendChild(l);
+    });
+  });
+
+  // what's released: the site's own version.json, else GitHub's API
+  function fromGitHub() {
+    return fetch("https://api.github.com/repos/" + REPO + "/releases/latest", { headers: { Accept: "application/vnd.github+json" } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d || !d.tag_name) return null;
+        var assets = {};
+        (d.assets || []).forEach(function (a) { assets[a.name] = { url: a.browser_download_url, size: a.size }; });
+        return { version: d.tag_name.replace(/^v/, ""), assets: assets };
+      });
+  }
+  fetch("../version.json", { cache: "no-cache" })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) { return d && d.version && d.assets ? d : fromGitHub(); }, fromGitHub)
+    .then(function (d) { if (d) { release = d; render(); } })
+    .catch(function () {});
+})();
+</script>
+</body>
+</html>

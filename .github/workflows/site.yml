@@ -34,7 +34,7 @@ jobs:
           chmod 600 ~/.ssh/site
           printf '%s\n' "$SITE_KNOWN_HOSTS" > ~/.ssh/known_hosts
           # the animations' addresses carry the commit (see V in index.html)
-          sed -i "s/__V__/${GITHUB_SHA::8}/g" site/index.html
+          sed -i "s/__V__/${GITHUB_SHA::8}/g" site/index.html site/testland/index.html
           # version.json comes from the release workflow, not from the repository
           rsync -rltz --delete --exclude .DS_Store --exclude version.json \
             -e "ssh -i $HOME/.ssh/site -o IdentitiesOnly=yes -o BatchMode=yes" \
