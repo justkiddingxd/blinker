@@ -83,6 +83,8 @@ fi
 # works the same on CI; it lives in its own venv under target/
 DMGBUILD=target/dmgbuild/bin/dmgbuild
 if [ ! -x "$DMGBUILD" ]; then
+    # a half-made one (a failed pip) is made again
+    rm -rf target/dmgbuild
     python3 -m venv target/dmgbuild
     target/dmgbuild/bin/pip install --quiet --disable-pip-version-check dmgbuild==1.6.7
 fi

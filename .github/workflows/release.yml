@@ -84,6 +84,11 @@ jobs:
           printf '%s' "$BLINKER_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/blinker-signing.p12"
           scripts/macos-signing.sh import "$RUNNER_TEMP/blinker-signing.p12"
           rm -f "$RUNNER_TEMP/blinker-signing.p12"
+      # dmgbuild's venv on a released Python: the runner's newest one may
+      # come without a working pip (3.15's ensurepip failed on v0.4.1)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
       - name: Build
         run: UNIVERSAL=1 scripts/macos-app.sh
       - uses: actions/upload-artifact@v4
