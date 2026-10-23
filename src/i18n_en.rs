@@ -287,6 +287,7 @@
     ("стрелка", "arrow"),
     ("стрелка  2 · с shift — дугой", "arrow  2 · with shift: curved"),
     ("прямоугольник  0", "rectangle  0"),
+    ("круг  o · с shift — ровный", "ellipse  o · with shift, a circle"),
     ("текст", "text"),
     ("текст  9", "text  9"),
     ("текст с фоном  8", "text with background  8"),

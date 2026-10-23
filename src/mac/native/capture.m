@@ -104,6 +104,38 @@ int bk_ocr(const uint8_t *rgba, int w, int h, void *ctx, bk_ocr_cb cb) {
     }
 }
 
+/// The QR codes in an RGBA picture (Vision, as the iPhone's camera reads
+/// them): `cb` per code with its text and its box as fractions of the
+/// picture, origin top left. Returns how many, -1 when Vision failed.
+int bk_qr(const uint8_t *rgba, int w, int h, void *ctx, bk_ocr_cb cb) {
+    @autoreleasepool {
+        CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+        CGContextRef bc = CGBitmapContextCreate((void *)rgba, w, h, 8, (size_t)w * 4, cs, (CGBitmapInfo)kCGImageAlphaPremultipliedLast);
+        CGImageRef img = bc ? CGBitmapContextCreateImage(bc) : NULL;
+        int n = -1;
+        if (img) {
+            VNDetectBarcodesRequest *req = [VNDetectBarcodesRequest new];
+            req.symbologies = @[ VNBarcodeSymbologyQR ];
+            VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:img options:@{}];
+            NSError *err = nil;
+            if ([handler performRequests:@[ req ] error:&err]) {
+                n = 0;
+                for (VNBarcodeObservation *o in req.results) {
+                    NSString *s = o.payloadStringValue;
+                    if (s.length == 0) continue;
+                    CGRect b = o.boundingBox;  // fractions, origin bottom left
+                    cb(ctx, s.UTF8String, b.origin.x, 1.0 - b.origin.y - b.size.height, b.size.width, b.size.height);
+                    n++;
+                }
+            }
+            CGImageRelease(img);
+        }
+        if (bc) CGContextRelease(bc);
+        CGColorSpaceRelease(cs);
+        return n;
+    }
+}
+
 /// The Accessibility permission (for parts of windows); `prompt`: ask for
 /// it (System Settings opens on the list).
 int bk_ax_trusted(int prompt) {

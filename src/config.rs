@@ -393,6 +393,11 @@ pub struct Config {
     pub autostart: bool,
     pub editor_color: [u8; 4],
     pub editor_width: f32,
+    /// Each drawing tool's own size in a capture (its name: thickness or text
+    /// size; missing: `editor_width`).
+    pub tool_widths: std::collections::BTreeMap<String, f32>,
+    /// 1 once the drawing sizes were set back to 4 for everyone (0.4.2).
+    pub widths_reset: u32,
     /// Loupe cell size in points; 0 hides the loupe (mouse wheel while selecting).
     pub loupe_cell: f32,
     pub toast_corner: Corner,
@@ -507,6 +512,8 @@ impl Default for Config {
             autostart: false,
             editor_color: [0xE3, 0xB3, 0x41, 255],
             editor_width: 4.0,
+            tool_widths: Default::default(),
+            widths_reset: 0,
             loupe_cell: 9.0,
             toast_corner: Corner::BottomRight,
             toast_seconds: 4.0,
@@ -842,12 +849,19 @@ pub fn load() -> Config {
         cfg.tour_done = true;
     }
     cfg.tray_menu = std::mem::take(&mut cfg.tray_menu).fixed();
+    // 0.4.2: every drawing tool starts at size 4, whatever was set before
+    let reset = cfg.widths_reset < 1;
+    if reset {
+        cfg.editor_width = 4.0;
+        cfg.tool_widths.clear();
+        cfg.widths_reset = 1;
+    }
     // a new install has nothing new to tell; an update from a version
     // without this field does
     if fresh {
         cfg.seen_version = env!("CARGO_PKG_VERSION").to_string();
     }
-    if migrate_save_dir(&mut cfg) || fresh {
+    if migrate_save_dir(&mut cfg) || fresh || reset {
         save(&cfg);
     }
     crate::i18n::apply(&cfg.lang);

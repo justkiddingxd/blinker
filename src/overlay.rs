@@ -200,6 +200,7 @@ impl OverlayApp {
             out,
             toolbar_rect: None,
             notice: None,
+            size_shown: None,
             last_pointer: None,
             keys_down: [false; 2],
             t0: -1.0,
@@ -226,6 +227,7 @@ impl OverlayApp {
             clicked_window: None,
             whole_window: false,
             bar_pos: None,
+            bar_trip: None,
             hover_shape: None,
             picked: None,
             demo,
@@ -236,6 +238,7 @@ impl OverlayApp {
             tour,
             palette_open: false,
             glass: None,
+            glass_img: None,
         }
     }
 
@@ -346,6 +349,7 @@ enum Tool {
     Region,
     Arrow,
     Rect,
+    Ellipse,
     Pen,
     Highlight,
     Steps,
@@ -355,11 +359,35 @@ enum Tool {
     Text,
 }
 
+/// A tool's name for its remembered size.
+fn tool_key(tool: Tool) -> &'static str {
+    match tool {
+        Tool::Region => "region",
+        Tool::Arrow => "arrow",
+        Tool::Rect => "rect",
+        Tool::Ellipse => "ellipse",
+        Tool::Pen => "pen",
+        Tool::Highlight => "marker",
+        Tool::Steps => "steps",
+        Tool::Blur => "blur",
+        Tool::Redact => "redact",
+        Tool::TextBox => "text-plate",
+        Tool::Text => "text",
+    }
+}
+
+/// Dark or light, whichever reads on `c`.
+fn contrast_on(c: Color32) -> Color32 {
+    let l = 0.299 * c.r() as f32 + 0.587 * c.g() as f32 + 0.114 * c.b() as f32;
+    if l > 150.0 { Color32::from_rgb(22, 22, 21) } else { Color32::WHITE }
+}
+
 /// Tools in toolbar order, with their keys (the rectangle came later: 0).
-const TOOLS: [(Tool, Icon, &str, Key); 10] = [
+const TOOLS: [(Tool, Icon, &str, Key); 11] = [
     (Tool::Region, Icon::Region, "выделение области  1", Key::Num1),
     (Tool::Arrow, Icon::Arrow, "стрелка  2 · с shift — дугой", Key::Num2),
     (Tool::Rect, Icon::Rect, "прямоугольник  0", Key::Num0),
+    (Tool::Ellipse, Icon::Ellipse, "круг  o · с shift — ровный", Key::O),
     (Tool::Pen, Icon::Pen, "карандаш  3", Key::Num3),
     (Tool::Highlight, Icon::Marker, "маркер  4", Key::Num4),
     (Tool::Steps, Icon::Counter, "шаги  5", Key::Num5),
@@ -460,21 +488,86 @@ struct Qr {
 /// The QR codes in `img` (looked for in the background when a capture opens).
 fn find_qr(img: &RgbaImage) -> Vec<Qr> {
     let gray = image::DynamicImage::ImageRgba8(img.clone()).to_luma8();
+    let (w, h) = gray.dimensions();
+    let mut out: Vec<Qr> = Vec::new();
+    let mut add = |rect: Rect, text: &str| {
+        let text = text.trim();
+        let same = |q: &Qr| q.text == text && q.rect.expand(8.0).intersects(rect);
+        if !text.is_empty() && !out.iter().any(same) {
+            out.push(Qr { rect, text: text.to_string() });
+        }
+    };
+    // a Mac reads them with Vision first, as its camera does
+    #[cfg(target_os = "macos")]
+    for (text, rect) in vision_qr(img) {
+        add(rect, &text);
+    }
+    // ZXing (rxing): small, tilted, colored and light-on-dark codes; a second
+    // look at twice the size finds the tiny ones in thumbnails
+    let mut zxing = |luma: Vec<u8>, w: u32, h: u32, k: f32| {
+        use rxing::multi::MultipleBarcodeReader;
+        let mut hints = rxing::DecodeHints::default().with(rxing::DecodeHintValue::TryHarder(true)).with(rxing::DecodeHintValue::AlsoInverted(true));
+        // the generic reader, which cuts the picture up around what it finds
+        // (its points: the code's corners), then the one made for several QR
+        // codes at once (its points: the finder patterns' middles, about a
+        // sixth of the code in from its edges)
+        let mut found: Vec<(rxing::RXingResult, f32)> = Vec::new();
+        if let Ok(src) = rxing::Luma8LuminanceSource::new(luma.clone(), w, h) {
+            let mut bitmap = rxing::BinaryBitmap::new(rxing::common::HybridBinarizer::new(src));
+            let multi = rxing::multi::qrcode::QRCodeMultiReader::default().decode_multiple_with_hints(&mut bitmap, &hints).unwrap_or_default();
+            found.extend(rxing::helpers::detect_multiple_in_luma_with_hints(luma, w, h, &mut hints).unwrap_or_default().into_iter().map(|r| (r, 0.0)));
+            found.extend(multi.into_iter().map(|r| (r, 0.16)));
+        }
+        for (r, grow) in found {
+            if *r.getBarcodeFormat() != rxing::BarcodeFormat::QR_CODE {
+                continue;
+            }
+            let pts = r.getPoints();
+            if pts.is_empty() {
+                continue;
+            }
+            let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for p in pts {
+                (x0, y0, x1, y1) = (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y));
+            }
+            let grow = (x1 - x0).max(y1 - y0) * grow;
+            let rect = Rect::from_min_max(pos2(x0 - grow, y0 - grow), pos2(x1 + grow, y1 + grow));
+            add(Rect::from_min_max(pos2(rect.min.x / k, rect.min.y / k), pos2(rect.max.x / k, rect.max.y / k)), r.getText());
+        }
+    };
+    zxing(gray.as_raw().clone(), w, h, 1.0);
+    if w.max(h) <= 2600 {
+        let big = image::imageops::resize(&gray, w * 2, h * 2, image::imageops::FilterType::Triangle);
+        zxing(big.into_raw(), w * 2, h * 2, 2.0);
+    }
+    // and rqrr, which reads some that ZXing passes over
     let mut prepared = rqrr::PreparedImage::prepare(gray);
-    let mut out = Vec::new();
     for grid in prepared.detect_grids() {
         let Ok((_, text)) = grid.decode() else { continue };
-        let text = text.trim().to_string();
-        if text.is_empty() {
-            continue;
-        }
         let xs = grid.bounds.iter().map(|p| p.x as f32);
         let ys = grid.bounds.iter().map(|p| p.y as f32);
         let (x0, x1) = (xs.clone().fold(f32::MAX, f32::min), xs.fold(f32::MIN, f32::max));
         let (y0, y1) = (ys.clone().fold(f32::MAX, f32::min), ys.fold(f32::MIN, f32::max));
-        out.push(Qr { rect: Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)), text });
+        add(Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)), &text);
     }
     out
+}
+
+/// The QR codes Vision finds in `img`: their text and place in its pixels.
+#[cfg(target_os = "macos")]
+fn vision_qr(img: &RgbaImage) -> Vec<(String, Rect)> {
+    use std::ffi::{CStr, c_char, c_void};
+    extern "C" fn found(ctx: *mut c_void, text: *const c_char, x: f64, y: f64, w: f64, h: f64) {
+        let out = unsafe { &mut *(ctx as *mut Vec<(String, f64, f64, f64, f64)>) };
+        let text = unsafe { CStr::from_ptr(text) }.to_string_lossy().into_owned();
+        out.push((text, x, y, w, h));
+    }
+    let mut raw: Vec<(String, f64, f64, f64, f64)> = Vec::new();
+    unsafe { win::ffi::bk_qr(img.as_raw().as_ptr(), img.width() as i32, img.height() as i32, &mut raw as *mut _ as *mut c_void, found) };
+    let (w, h) = (img.width() as f32, img.height() as f32);
+    raw.into_iter()
+        .map(|(t, x, y, bw, bh)| (t, Rect::from_min_size(pos2(x as f32 * w, y as f32 * h), vec2(bw as f32 * w, bh as f32 * h))))
+        .collect()
 }
 
 /// A link as the card shows it: the site, then the rest of the address.
@@ -512,6 +605,243 @@ fn qr_link(text: &str) -> Option<String> {
     }
 }
 
+/// A cryptocurrency network.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Chain {
+    Evm,
+    Btc,
+    Tron,
+    Solana,
+    Ton,
+    Ltc,
+    Doge,
+    Xrp,
+}
+
+/// A wallet address in a QR code (bare, or as a `bitcoin:`-style link): its
+/// network, the address, the amount asked for, and for EVM the chain's id.
+#[derive(Clone, PartialEq, Debug)]
+struct Wallet {
+    chain: Chain,
+    address: String,
+    amount: Option<String>,
+    chain_id: Option<u64>,
+}
+
+impl Wallet {
+    /// The network as the card names it (EVM by its chain when the link says).
+    fn network(&self) -> &'static str {
+        match self.chain {
+            Chain::Evm => match self.chain_id {
+                Some(56) => "BNB Chain",
+                Some(137) => "Polygon",
+                Some(8453) => "Base",
+                Some(42161) => "Arbitrum",
+                Some(10) => "Optimism",
+                Some(43114) => "Avalanche",
+                _ => "Ethereum · EVM",
+            },
+            Chain::Btc => "Bitcoin",
+            Chain::Tron => "TRON",
+            Chain::Solana => "Solana",
+            Chain::Ton => "TON",
+            Chain::Ltc => "Litecoin",
+            Chain::Doge => "Dogecoin",
+            Chain::Xrp => "XRP",
+        }
+    }
+
+    /// The coin's ticker, for the amount.
+    fn ticker(&self) -> &'static str {
+        match self.chain {
+            Chain::Evm => "ETH",
+            Chain::Btc => "BTC",
+            Chain::Tron => "TRX",
+            Chain::Solana => "SOL",
+            Chain::Ton => "TON",
+            Chain::Ltc => "LTC",
+            Chain::Doge => "DOGE",
+            Chain::Xrp => "XRP",
+        }
+    }
+
+    /// The address on the network's explorer.
+    fn explorer(&self) -> String {
+        let a = &self.address;
+        match self.chain {
+            Chain::Evm => {
+                let host = match self.chain_id {
+                    Some(56) => "bscscan.com",
+                    Some(137) => "polygonscan.com",
+                    Some(8453) => "basescan.org",
+                    Some(42161) => "arbiscan.io",
+                    Some(10) => "optimistic.etherscan.io",
+                    Some(43114) => "snowtrace.io",
+                    _ => "etherscan.io",
+                };
+                format!("https://{host}/address/{a}")
+            }
+            Chain::Btc => format!("https://mempool.space/address/{a}"),
+            Chain::Tron => format!("https://tronscan.org/#/address/{a}"),
+            Chain::Solana => format!("https://solscan.io/account/{a}"),
+            Chain::Ton => format!("https://tonviewer.com/{a}"),
+            Chain::Ltc => format!("https://litecoinspace.org/address/{a}"),
+            Chain::Doge => format!("https://blockchair.com/dogecoin/address/{a}"),
+            Chain::Xrp => format!("https://xrpscan.com/account/{a}"),
+        }
+    }
+
+    /// The address shortened in the middle: 0x12ab…9fc3.
+    fn short(&self) -> String {
+        let n = self.address.chars().count();
+        if n <= 16 {
+            return self.address.clone();
+        }
+        let head: String = self.address.chars().take(6).collect();
+        let tail: String = self.address.chars().skip(n - 4).collect();
+        format!("{head}…{tail}")
+    }
+}
+
+fn base58(s: &str) -> bool {
+    s.chars().all(|c| c.is_ascii_alphanumeric() && !"0OIl".contains(c))
+}
+
+/// The wallet a QR code holds, if it is one.
+fn wallet_of(text: &str) -> Option<Wallet> {
+    let t = text.trim();
+    // a link: "bitcoin:bc1…?amount=0.01", "ethereum:0x…@56", "ton://transfer/EQ…"
+    let (scheme, rest) = match t.split_once(':') {
+        Some((s, r)) if s.chars().all(|c| c.is_ascii_alphabetic()) && s.len() > 2 => (Some(s.to_ascii_lowercase()), r.trim_start_matches("//")),
+        _ => (None, t),
+    };
+    let rest = rest.strip_prefix("transfer/").unwrap_or(rest);
+    let (head, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let amount = query.split('&').find_map(|kv| kv.strip_prefix("amount=")).filter(|v| !v.is_empty()).map(|v| v.to_string());
+    // EIP-681: ethereum:0x…@chainId/function
+    let head = head.split('/').next().unwrap_or(head);
+    let (addr, chain_id) = match head.split_once('@') {
+        Some((a, id)) => (a, id.parse().ok()),
+        None => (head, None),
+    };
+    let addr = addr.trim();
+    let wallet = |chain| Some(Wallet { chain, address: addr.to_string(), amount: amount.clone(), chain_id });
+    let hex40 = addr.len() == 42 && addr.starts_with("0x") && addr[2..].chars().all(|c| c.is_ascii_hexdigit());
+    let lower = addr.to_ascii_lowercase();
+    let len = addr.len();
+    let by_shape = || {
+        if hex40 {
+            wallet(Chain::Evm)
+        } else if (lower.starts_with("bc1") && (14..=74).contains(&len) && lower[3..].chars().all(|c| c.is_ascii_alphanumeric()))
+            || ((addr.starts_with('1') || addr.starts_with('3')) && (26..=35).contains(&len) && base58(addr))
+        {
+            wallet(Chain::Btc)
+        } else if addr.starts_with('T') && len == 34 && base58(addr) {
+            wallet(Chain::Tron)
+        } else if (lower.starts_with("ltc1") && (14..=75).contains(&len)) || ((addr.starts_with('L') || addr.starts_with('M')) && (26..=35).contains(&len) && base58(addr)) {
+            wallet(Chain::Ltc)
+        } else if addr.starts_with('D') && len == 34 && base58(addr) {
+            wallet(Chain::Doge)
+        } else if addr.starts_with('r') && (25..=35).contains(&len) && base58(addr) {
+            wallet(Chain::Xrp)
+        } else if len == 48 && ["EQ", "UQ", "kQ", "0Q"].iter().any(|p| addr.starts_with(p)) && addr.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            wallet(Chain::Ton)
+        } else if (32..=44).contains(&len)
+            && base58(addr)
+            && addr.chars().any(|c| c.is_ascii_digit())
+            && addr.chars().any(|c| c.is_ascii_uppercase())
+            && addr.chars().any(|c| c.is_ascii_lowercase())
+        {
+            wallet(Chain::Solana)
+        } else {
+            None
+        }
+    };
+    match scheme.as_deref() {
+        // a link names its network itself
+        Some("ethereum") if hex40 => wallet(Chain::Evm),
+        Some("bitcoin") => wallet(Chain::Btc),
+        Some("tron") => wallet(Chain::Tron),
+        Some("solana") => wallet(Chain::Solana),
+        Some("ton") => wallet(Chain::Ton),
+        Some("litecoin") => wallet(Chain::Ltc),
+        Some("dogecoin") => wallet(Chain::Doge),
+        Some("xrpl" | "xrp" | "ripple") => wallet(Chain::Xrp),
+        Some(_) => None,
+        // a bare address goes by its shape (no spaces, nothing else around it)
+        None if !t.contains(char::is_whitespace) => by_shape(),
+        None => None,
+    }
+}
+
+/// The network's mark on its colors, in a card's tile `r`.
+fn paint_chain(p: &egui::Painter, r: Rect, chain: Chain) {
+    let c = r.center();
+    let white = Color32::WHITE;
+    let (bg, fg) = match chain {
+        Chain::Evm => (Color32::from_rgb(0x62, 0x7e, 0xea), white),
+        Chain::Btc => (Color32::from_rgb(0xf7, 0x93, 0x1a), white),
+        Chain::Tron => (Color32::from_rgb(0xeb, 0x00, 0x29), white),
+        Chain::Solana => (Color32::from_rgb(0x14, 0x14, 0x1c), white),
+        Chain::Ton => (Color32::from_rgb(0x00, 0x98, 0xea), white),
+        Chain::Ltc => (Color32::from_rgb(0x34, 0x5d, 0x9d), white),
+        Chain::Doge => (Color32::from_rgb(0xc2, 0xa6, 0x33), white),
+        Chain::Xrp => (Color32::from_rgb(0x23, 0x29, 0x2f), white),
+    };
+    p.circle_filled(c, r.width() / 2.0, bg);
+    let stroke = Stroke::new(1.8, fg);
+    let pt = |x: f32, y: f32| c + vec2(x, y);
+    match chain {
+        // the diamond: a top half, a bottom chevron
+        Chain::Evm => {
+            p.add(egui::Shape::convex_polygon(vec![pt(0.0, -10.0), pt(6.5, 0.5), pt(0.0, 4.0), pt(-6.5, 0.5)], fg, Stroke::NONE));
+            p.add(egui::Shape::convex_polygon(vec![pt(-6.5, 2.5), pt(0.0, 6.0), pt(6.5, 2.5), pt(0.0, 10.5)], fg.gamma_multiply(0.75), Stroke::NONE));
+        }
+        // a B with the two strokes through it
+        Chain::Btc => {
+            p.text(c + vec2(0.5, 0.5), egui::Align2::CENTER_CENTER, "B", font_semibold(19.0), fg);
+            for x in [-2.0, 2.0] {
+                p.line_segment([pt(x, -11.0), pt(x, -7.5)], Stroke::new(1.8, fg));
+                p.line_segment([pt(x, 7.5), pt(x, 11.0)], Stroke::new(1.8, fg));
+            }
+        }
+        // the triangle, its inner lines
+        Chain::Tron => {
+            let (a, b, d) = (pt(-8.5, -7.0), pt(9.0, -1.0), pt(-1.0, 10.0));
+            p.add(egui::Shape::closed_line(vec![a, b, d], stroke));
+            p.line_segment([a, pt(1.5, 0.5)], Stroke::new(1.4, fg));
+            p.line_segment([pt(1.5, 0.5), d], Stroke::new(1.4, fg));
+            p.line_segment([pt(1.5, 0.5), b], Stroke::new(1.4, fg));
+        }
+        // three slanted bars, purple to green
+        Chain::Solana => {
+            let cols = [Color32::from_rgb(0x99, 0x45, 0xff), Color32::from_rgb(0x58, 0x9c, 0xd0), Color32::from_rgb(0x14, 0xf1, 0x95)];
+            for (k, col) in cols.into_iter().enumerate() {
+                let y = -7.0 + k as f32 * 6.0;
+                let s = if k == 1 { -1.0 } else { 1.0 };
+                p.add(egui::Shape::convex_polygon(vec![pt(-8.0 + 2.0 * s, y), pt(9.0 + 2.0 * s, y), pt(8.0 - 2.0 * s, y + 3.6), pt(-9.0 - 2.0 * s, y + 3.6)], col, Stroke::NONE));
+            }
+        }
+        // the gem: a downward triangle, split down the middle
+        Chain::Ton => {
+            let (l, rr, b) = (pt(-8.5, -6.5), pt(8.5, -6.5), pt(0.0, 9.0));
+            p.add(egui::Shape::closed_line(vec![l, rr, b], stroke));
+            p.line_segment([pt(0.0, -6.5), b], stroke);
+        }
+        Chain::Ltc => {
+            p.text(c + vec2(0.5, 0.5), egui::Align2::CENTER_CENTER, "Ł", font_semibold(19.0), fg);
+        }
+        Chain::Doge => {
+            p.text(c + vec2(0.5, 0.5), egui::Align2::CENTER_CENTER, "Ð", font_semibold(19.0), fg);
+        }
+        // two arcs that cross: an X
+        Chain::Xrp => {
+            p.line_segment([pt(-7.5, -7.0), pt(7.5, 7.0)], stroke);
+            p.line_segment([pt(7.5, -7.0), pt(-7.5, 7.0)], stroke);
+        }
+    }
+}
+
 struct OverlayApp {
     /// QR codes on the screen, once found (under each: where it leads).
     qr: Arc<std::sync::Mutex<Option<Vec<Qr>>>>,
@@ -522,6 +852,8 @@ struct OverlayApp {
     /// macOS 26: a blurred copy of the screenshot the panels are made of,
     /// so they look like Liquid Glass over what's under them.
     glass: Option<TextureHandle>,
+    /// The same blurred quarter-size picture, to tell how light it is under a pane.
+    glass_img: Option<RgbaImage>,
     /// The colors are shown in the panel (after a click on the swatch).
     palette_open: bool,
     shared: Arc<Shared>,
@@ -543,6 +875,9 @@ struct OverlayApp {
     out: Rc<RefCell<Option<Output>>>,
     toolbar_rect: Option<Rect>,
     notice: Option<(String, f64)>,
+    /// When the wheel last changed the tool's size: its preview shows at
+    /// the pointer for a moment.
+    size_shown: Option<f64>,
     last_pointer: Option<Pos2>,
     /// Edge detection for keys polled directly when Windows withheld focus.
     keys_down: [bool; 2],
@@ -581,6 +916,8 @@ struct OverlayApp {
     whole_window: bool,
     /// Animated position of the tools panel (points).
     bar_pos: Option<Pos2>,
+    /// The bar crossing to another display: where it set off from, and when.
+    bar_trip: Option<(Pos2, f64)>,
     /// Annotation under the pointer (grab to move, Delete to remove).
     hover_shape: Option<u64>,
     picked: Option<u64>,
@@ -1270,6 +1607,16 @@ impl OverlayApp {
             self.paint_loupe(ctx, pt, px, ppp);
         }
 
+        if let (Some(at), Some(pt)) = (self.size_shown, pointer_pt) {
+            let age = (now - at) as f32;
+            if age > 1.1 {
+                self.size_shown = None;
+            } else {
+                self.paint_size_preview(ctx, pt, ppp, (1.0 - (age - 0.7) / 0.4).clamp(0.0, 1.0));
+                ctx.request_repaint();
+            }
+        }
+
         // transient notice (color copied)
         if let Some((text, at)) = &self.notice {
             if now - at > 1.4 {
@@ -1308,6 +1655,7 @@ impl OverlayApp {
         }
         let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("qr-frames")));
         let mut done = None;
+        let mut placed: Vec<Rect> = Vec::new();
         for (i, q) in found.iter().enumerate() {
             let r = Rect::from_min_max(pos2(q.rect.min.x / ppp, q.rect.min.y / ppp), pos2(q.rect.max.x / ppp, q.rect.max.y / ppp));
             let age = (age - i as f32 * 0.08).max(0.0);
@@ -1343,14 +1691,31 @@ impl OverlayApp {
             if card_t <= 0.0 {
                 continue;
             }
-            let link = qr_link(&q.text);
-            let (title, sub) = match &link {
-                Some(url) => split_link(url),
-                None => (crate::i18n::l("текст в qr-коде", "text in the qr code").to_string(), short(&q.text.replace(['\n', '\r'], " "), 46)),
+            let wallet = wallet_of(&q.text);
+            let link = if wallet.is_some() { None } else { qr_link(&q.text) };
+            let (title, sub) = match (&wallet, &link) {
+                (Some(w), _) => {
+                    let amount = w.amount.as_ref().map(|a| format!(" · {a} {}", w.ticker())).unwrap_or_default();
+                    (crate::i18n::l("криптокошелёк", "crypto wallet").to_string(), format!("{} · {}{amount}", w.network(), w.short()))
+                }
+                (None, Some(url)) => split_link(url),
+                (None, None) => (crate::i18n::l("текст в qr-коде", "text in the qr code").to_string(), short(&q.text.replace(['\n', '\r'], " "), 46)),
             };
-            let at = pos2(r.center().x, frame.bottom() + 12.0 + (1.0 - card_t) * 10.0);
-            if let Some(prev) = last.get(i) {
-                let size = prev.shrink(4.0).size();
+            // codes side by side: a card that would cover another one's goes
+            // under it (sizes from the last frame)
+            let size = last.get(i).map_or(vec2(300.0, 52.0), |r| r.shrink(4.0).size());
+            let mut at = pos2(r.center().x, frame.bottom() + 12.0 + (1.0 - card_t) * 10.0);
+            loop {
+                let rect = Rect::from_min_size(at - vec2(size.x / 2.0, 0.0), size);
+                match placed.iter().find(|p| p.expand(6.0).intersects(rect)) {
+                    Some(p) => at.y = p.bottom() + 8.0,
+                    None => {
+                        placed.push(rect);
+                        break;
+                    }
+                }
+            }
+            if last.get(i).is_some() {
                 self.paint_glass(ctx, Rect::from_min_size(at - vec2(size.x / 2.0, 0.0), size), card_t, ppp, &format!("qr-glass-{i}"), QR_RADIUS);
             }
             let glass = self.glass.is_some();
@@ -1375,8 +1740,13 @@ impl OverlayApp {
                             ui.spacing_mut().item_spacing.x = 10.0;
                             // the kind of code, on an accent tile
                             let (tile, _) = ui.allocate_exact_size(vec2(36.0, 36.0), egui::Sense::hover());
-                            ui.painter().rect_filled(tile, 10, ACCENT.gamma_multiply(0.15));
-                            crate::icons::paint(ui.painter(), Rect::from_center_size(tile.center(), Vec2::splat(18.0)), if link.is_some() { Icon::Link } else { Icon::Scan }, 15.0, ACCENT);
+                            match &wallet {
+                                Some(w) => paint_chain(ui.painter(), tile.shrink(2.0), w.chain),
+                                None => {
+                                    ui.painter().rect_filled(tile, 10, ACCENT.gamma_multiply(0.15));
+                                    crate::icons::paint(ui.painter(), Rect::from_center_size(tile.center(), Vec2::splat(18.0)), if link.is_some() { Icon::Link } else { Icon::Scan }, 15.0, ACCENT);
+                                }
+                            }
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 1.0;
                                 ui.set_max_width(250.0);
@@ -1390,8 +1760,16 @@ impl OverlayApp {
                             .on_hover_text(&q.text);
                             ui.add_space(4.0);
                             ui.spacing_mut().item_spacing.x = 4.0;
-                            match &link {
-                                Some(_) => {
+                            match (&wallet, &link) {
+                                (Some(_), _) => {
+                                    if ui::icon_button(ui, Icon::Link, crate::i18n::l("открыть в обозревателе", "open in the explorer"), 34.0, false, ui::Kind::Ghost).clicked() {
+                                        done = Some((i, true));
+                                    }
+                                    if qr_button(ui, crate::i18n::l("копировать", "copy"), Icon::Copy).on_hover_text(crate::i18n::l("копировать адрес", "copy the address")).clicked() {
+                                        done = Some((i, false));
+                                    }
+                                }
+                                (None, Some(_)) => {
                                     if ui::icon_button(ui, Icon::Copy, crate::i18n::l("копировать ссылку", "copy the link"), 34.0, false, ui::Kind::Ghost).clicked() {
                                         done = Some((i, false));
                                     }
@@ -1399,7 +1777,7 @@ impl OverlayApp {
                                         done = Some((i, true));
                                     }
                                 }
-                                None => {
+                                (None, None) => {
                                     if qr_button(ui, crate::i18n::l("копировать", "copy"), Icon::Copy).clicked() {
                                         done = Some((i, false));
                                     }
@@ -1412,6 +1790,16 @@ impl OverlayApp {
         }
         if let Some((i, open)) = done {
             let q = &found[i];
+            if let Some(w) = wallet_of(&q.text) {
+                // the address alone, or the address on its explorer
+                if open {
+                    win::open_url(&w.explorer());
+                } else {
+                    crate::output::copy_text(&w.address);
+                }
+                self.cancel(ctx);
+                return;
+            }
             match qr_link(&q.text) {
                 Some(url) if open => win::open_url(&url),
                 Some(url) => crate::output::copy_text(&url),
@@ -2060,7 +2448,12 @@ fn paint_viewfinder(painter: &egui::Painter, r: Rect, alpha: f32) {
 
 impl OverlayApp {
     fn shape_width(&self, ppp: f32) -> f32 {
-        (self.cfg.editor_width * ppp.max(1.0)).round()
+        (self.tool_width(self.tool) * ppp.max(1.0)).round()
+    }
+
+    /// `tool`'s own size (points): its thickness, or its text's.
+    fn tool_width(&self, tool: Tool) -> f32 {
+        self.cfg.tool_widths.get(tool_key(tool)).copied().unwrap_or(self.cfg.editor_width)
     }
 
     fn start_text(&mut self, p: Pos2, ppp: f32) {
@@ -2078,7 +2471,7 @@ impl OverlayApp {
         if text.is_empty() {
             return;
         }
-        let width = self.cfg.editor_width * self.last_ppp.max(1.0);
+        let width = self.tool_width(if t.plate { Tool::TextBox } else { Tool::Text }) * self.last_ppp.max(1.0);
         let kind = if t.plate { Kind::Text { pos: t.pos, text } } else { Kind::Label { pos: t.pos, text } };
         self.push_shape(kind, width.round());
     }
@@ -2109,10 +2502,11 @@ impl OverlayApp {
                     let id = self.push_shape(Kind::Pen { pts: vec![p] }, w);
                     self.drag = Drag::Draw { id, start: p };
                 }
-                Tool::Rect | Tool::Highlight | Tool::Blur | Tool::Redact => {
+                Tool::Rect | Tool::Ellipse | Tool::Highlight | Tool::Blur | Tool::Redact => {
                     let r = Rect::from_two_pos(p, p);
                     let kind = match self.tool {
                         Tool::Rect => Kind::Rect { r },
+                        Tool::Ellipse => Kind::Ellipse { r },
                         Tool::Highlight => Kind::Highlight { r },
                         Tool::Blur => Kind::Pixelate { r },
                         _ => Kind::Redact { r },
@@ -2146,9 +2540,18 @@ impl OverlayApp {
                                 pts.push(p);
                             }
                         }
-                        Kind::Rect { r } | Kind::Highlight { r } | Kind::Pixelate { r } | Kind::Redact { r } => {
-                            *r = Rect::from_two_pos(start, p).intersect(img)
+                        Kind::Rect { r } | Kind::Ellipse { r } => {
+                            // Shift: a square, a circle
+                            let end = if input.modifiers.shift {
+                                let d = p - start;
+                                let side = d.x.abs().max(d.y.abs());
+                                start + vec2(side * d.x.signum(), side * d.y.signum())
+                            } else {
+                                p
+                            };
+                            *r = Rect::from_two_pos(start, end).intersect(img)
                         }
+                        Kind::Highlight { r } | Kind::Pixelate { r } | Kind::Redact { r } => *r = Rect::from_two_pos(start, p).intersect(img),
                         _ => {}
                     }
                 }
@@ -2160,7 +2563,7 @@ impl OverlayApp {
             let min = 3.0 * ppp;
             let keep = self.shapes.iter().find(|s| s.id == id).is_some_and(|s| match &s.kind {
                 Kind::Arrow { a, b } | Kind::Curve { a, b, .. } => (*a - *b).length() > min,
-                Kind::Rect { r } | Kind::Highlight { r } | Kind::Pixelate { r } | Kind::Redact { r } => r.width() > min && r.height() > min,
+                Kind::Rect { r } | Kind::Ellipse { r } | Kind::Highlight { r } | Kind::Pixelate { r } | Kind::Redact { r } => r.width() > min && r.height() > min,
                 _ => true,
             });
             if !keep {
@@ -2177,7 +2580,7 @@ impl OverlayApp {
 
     /// Top bar: tools, colors, undo. Slides down with the overlay.
     fn tools_bar(&mut self, ctx: &egui::Context) {
-        let Some(mon) = self.bar_mon else { return };
+        let Some(mut mon) = self.bar_mon else { return };
         let closing = match self.phase {
             Phase::Closing { at } | Phase::Finishing { at } => ((ctx.input(|i| i.time) - at) / CLOSE).clamp(0.0, 1.0) as f32,
             _ => 0.0,
@@ -2193,6 +2596,20 @@ impl OverlayApp {
         // In instant mode the selection is copied the moment it's made: the
         // panel stays at the top instead of setting off after it.
         let mode = if self.record || self.cfg.instant_mode { crate::config::ToolsPos::Screen } else { self.cfg.tools_pos };
+        // at the top of the screen the bar goes to the display the pointer is
+        // on, gliding over as it does to a selection
+        let at_top = self.sel.is_none() || mode == crate::config::ToolsPos::Screen || self.phase == Phase::Selecting;
+        if at_top && let Some(p) = ctx.pointer_latest_pos() {
+            let c = self.snap.monitor_at((p.x * ppp) as i32, (p.y * ppp) as i32).rect;
+            let m = Rect::from_min_max(pos2(c.x as f32 / ppp, c.y as f32 / ppp + self.notch(c, ppp)), pos2(c.right() as f32 / ppp, c.bottom() as f32 / ppp));
+            if m != mon {
+                self.bar_mon = Some(m);
+                mon = m;
+                if let Some(from) = self.bar_pos {
+                    self.bar_trip = Some((from, ctx.input(|i| i.time)));
+                }
+            }
+        }
         let area = self
             .sel
             .filter(|_| mode != crate::config::ToolsPos::Screen && self.phase != Phase::Selecting)
@@ -2239,7 +2656,19 @@ impl OverlayApp {
         let cur = self.bar_pos.unwrap_or(target);
         let k = 1.0 - (-dt * 16.0).exp();
         let next = cur + (target - cur) * k;
-        let next = if (next - target).length() < 0.5 || self.cfg.instant_mode { target } else { next };
+        let mut next = if (next - target).length() < 0.5 || self.cfg.instant_mode { target } else { next };
+        // to another display: a trip of its own, eased in and out, so the
+        // way across is seen (the glide above covers it in a blink)
+        if let Some((from, at)) = self.bar_trip {
+            let u = ((ctx.input(|i| i.time) - at) / 0.45) as f32;
+            if u >= 1.0 {
+                self.bar_trip = None;
+                next = target;
+            } else {
+                let e = if u < 0.5 { 4.0 * u * u * u } else { 1.0 - (-2.0 * u + 2.0).powi(3) / 2.0 };
+                next = from + (target - from) * e;
+            }
+        }
         if next != target {
             ctx.request_repaint();
         }
@@ -2307,6 +2736,7 @@ impl OverlayApp {
             let small = image::imageops::resize(img, w, h, image::imageops::FilterType::Triangle);
             let blurred = image::imageops::blur(&small, 2.5);
             self.glass = Some(ctx.load_texture("glass", color_image(&blurred), TextureOptions::LINEAR));
+            self.glass_img = Some(blurred);
         }
         let Some(tex) = &self.glass else { return };
         let img = vec2(self.snap.image.width() as f32, self.snap.image.height() as f32);
@@ -2317,13 +2747,35 @@ impl OverlayApp {
             pos2(lens.max.x * ppp / img.x, lens.max.y * ppp / img.y),
         );
         let a = |v: f32| (v * alpha) as u8;
+        // how light it is under the pane (0..1): over a white page the glass
+        // darkens, as Apple's does, or the light icons on it would vanish
+        let light = self.glass_img.as_ref().map_or(0.0, |small| {
+            let k = small.width() as f32 / img.x;
+            let (x0, y0) = ((rect.min.x * ppp * k).max(0.0) as u32, (rect.min.y * ppp * k).max(0.0) as u32);
+            let (x1, y1) = (((rect.max.x * ppp * k) as u32).min(small.width()), ((rect.max.y * ppp * k) as u32).min(small.height()));
+            let (mut sum, mut n) = (0.0f32, 0u32);
+            for y in (y0..y1).step_by(2) {
+                for x in (x0..x1).step_by(2) {
+                    let px = small.get_pixel(x, y);
+                    sum += 0.2126 * px[0] as f32 + 0.7152 * px[1] as f32 + 0.0722 * px[2] as f32;
+                    n += 1;
+                }
+            }
+            if n == 0 { 0.0 } else { sum / n as f32 / 255.0 }
+        });
+        let bright = ((light - 0.42) / 0.4).clamp(0.0, 1.0);
         let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, Id::unique(id)));
         let r = egui::CornerRadius::same(radius);
-        p.add(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(a(80.0)) }.as_shape(rect, r));
+        p.add(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(a(80.0 + 50.0 * bright)) }.as_shape(rect, r));
         p.add(egui::epaint::RectShape::filled(rect, r, Color32::WHITE.gamma_multiply(alpha)).with_texture(tex.id(), uv));
-        // dark enough for the icons, light enough to see through
-        p.rect_filled(rect, r, Color32::from_rgba_unmultiplied(18, 18, 17, a(78.0)));
-        p.rect_filled(rect, r, Color32::from_white_alpha(a(10.0)));
+        // dark enough for the icons, light enough to see through; denser
+        // over a light backdrop
+        p.rect_filled(rect, r, Color32::from_rgba_unmultiplied(18, 18, 17, a(78.0 + 130.0 * bright)));
+        p.rect_filled(rect, r, Color32::from_white_alpha(a(10.0 * (1.0 - bright))));
+        // on light: a thin dark edge outside, where the light rim can't show
+        if bright > 0.0 {
+            p.rect_stroke(rect, r, Stroke::new(1.0, Color32::from_black_alpha(a(70.0 * bright))), StrokeKind::Outside);
+        }
         // the sheen: light pooling in the top half
         let inset = radius as f32 * 0.6;
         let sheen = Rect::from_min_max(rect.min + vec2(inset, 1.0), pos2(rect.right() - inset, rect.top() + rect.height() * 0.55));
@@ -2506,13 +2958,64 @@ impl OverlayApp {
         }
         let cur = WIDTH_STEPS
             .iter()
-            .position(|w| *w >= self.cfg.editor_width - 0.01)
+            .position(|w| *w >= self.tool_width(self.tool) - 0.01)
             .unwrap_or(WIDTH_STEPS.len() - 1) as i32;
         let next = (cur + if wheel > 0.0 { 1 } else { -1 }).clamp(0, WIDTH_STEPS.len() as i32 - 1) as usize;
         let v = WIDTH_STEPS[next];
-        self.cfg.editor_width = v;
-        self.shared.update_config(|c| c.editor_width = v);
-        self.notice = Some((lf!("размер {}", "size {}", next + 1), now));
+        let key = tool_key(self.tool).to_string();
+        self.cfg.tool_widths.insert(key.clone(), v);
+        self.shared.update_config(|c| {
+            c.tool_widths.insert(key, v);
+        });
+        // the text being typed takes the new size at once
+        self.size_shown = Some(now);
+    }
+
+    /// What the tool will draw at its new size, at the pointer `pt`: a dot
+    /// as thick as the stroke, a marker band, a step badge, or "Aa" at the
+    /// text's size; its number under it.
+    fn paint_size_preview(&self, ctx: &egui::Context, pt: Pos2, ppp: f32, alpha: f32) {
+        let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, Id::unique("ov-size")));
+        let w = self.shape_width(ppp) / ppp;
+        let c = self.color.gamma_multiply(alpha);
+        let rim = Stroke::new(1.0, Color32::from_black_alpha((160.0 * alpha) as u8));
+        let at = pt + vec2(0.0, -34.0);
+        let label = match self.tool {
+            Tool::Text | Tool::TextBox => {
+                let size = doc::text_size(w);
+                let g = p.layout_no_wrap("Aa".into(), font_semibold(size), if self.tool == Tool::TextBox { contrast_on(self.color) } else { c });
+                let r = Rect::from_center_size(at - vec2(0.0, size * 0.3), g.size() + doc::text_pad(size) * 2.0);
+                if self.tool == Tool::TextBox {
+                    p.rect_filled(r, size * 0.22, c);
+                } else {
+                    p.rect_filled(r.expand(4.0), 8, Color32::from_rgba_unmultiplied(18, 18, 17, (150.0 * alpha) as u8));
+                }
+                p.galley(r.center() - g.size() / 2.0, g, c);
+                format!("{:.0}", size)
+            }
+            Tool::Steps => {
+                let r = doc::counter_radius(w);
+                p.circle(at, r, c, rim);
+                p.text(at, egui::Align2::CENTER_CENTER, "1", font_semibold(r * 1.15), contrast_on(self.color).gamma_multiply(alpha));
+                format!("{w:.0}")
+            }
+            Tool::Highlight => {
+                let band = w * 3.6 + 6.0;
+                let r = Rect::from_center_size(at, vec2(band * 2.6, band));
+                p.rect_filled(r, band * 0.3, self.color.gamma_multiply(0.45 * alpha));
+                format!("{w:.0}")
+            }
+            _ => {
+                // a ring around the dot, so it shows on any background
+                p.circle(at, (w / 2.0).max(1.0) + 3.0, Color32::from_rgba_unmultiplied(18, 18, 17, (150.0 * alpha) as u8), Stroke::NONE);
+                p.circle(at, (w / 2.0).max(1.0), c, rim);
+                format!("{w:.0}")
+            }
+        };
+        let g = p.layout_no_wrap(label, font_medium(11.5), TEXT.gamma_multiply(alpha));
+        let tag = Rect::from_center_size(pt + vec2(0.0, 16.0), g.size() + vec2(12.0, 6.0));
+        p.rect_filled(tag, tag.height() / 2.0, Color32::from_rgba_unmultiplied(18, 18, 17, (215.0 * alpha) as u8));
+        p.galley(tag.center() - g.size() / 2.0, g, TEXT.gamma_multiply(alpha));
     }
 
     /// Live preview of the text being typed, plus a blinking caret.
@@ -2680,6 +3183,28 @@ mod qr_tests {
         assert!(super::qr_link("WIFI:S:home;T:WPA;P:secret;;").is_none());
     }
 
+    /// Wallets by their shape and by their links; other text isn't one.
+    #[test]
+    fn wallets() {
+        use super::{Chain, wallet_of};
+        let w = |t: &str| wallet_of(t).map(|w| (w.chain, w.address, w.amount, w.chain_id));
+        assert_eq!(w("0x52908400098527886E0F7030069857D2E4169EE7").unwrap().0, Chain::Evm);
+        assert_eq!(w("ethereum:0x52908400098527886E0F7030069857D2E4169EE7@56").unwrap().3, Some(56));
+        assert_eq!(w("bitcoin:bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq?amount=0.01").unwrap(), (Chain::Btc, "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".into(), Some("0.01".into()), None));
+        assert_eq!(w("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2").unwrap().0, Chain::Btc);
+        assert_eq!(w("TJCnKsPa7y5okkXvQAidZBzqx3QyQ6sxMW").unwrap().0, Chain::Tron);
+        assert_eq!(w("tron:TJCnKsPa7y5okkXvQAidZBzqx3QyQ6sxMW").unwrap().0, Chain::Tron);
+        assert_eq!(w("EQDtFpEwcFAEcRe5mLVh2N6C0x-_hJEM7W61_JLnSF74p4q2").unwrap().0, Chain::Ton);
+        assert_eq!(w("ton://transfer/EQDtFpEwcFAEcRe5mLVh2N6C0x-_hJEM7W61_JLnSF74p4q2?amount=1000").unwrap().0, Chain::Ton);
+        assert_eq!(w("7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU").unwrap().0, Chain::Solana);
+        assert_eq!(w("LdP8Qox1VAhCzLJNqrr74YovaWYyNBUWvL").unwrap().0, Chain::Ltc);
+        assert_eq!(w("DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L").unwrap().0, Chain::Doge);
+        assert!(w("https://blinker.cool/update").is_none());
+        assert!(w("hello world").is_none());
+        assert!(w("POGODITE: QR RESTORES MISSING DATA").is_none());
+        assert!(w("WIFI:S:home;T:WPA;P:secret;;").is_none());
+    }
+
     /// `BLINKER_TEST_QR` = a picture with QR codes: what they say.
     #[test]
     fn find() {
@@ -2692,3 +3217,4 @@ mod qr_tests {
         eprintln!("in {:?}", t.elapsed());
     }
 }
+

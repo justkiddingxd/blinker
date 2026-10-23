@@ -2,6 +2,32 @@
 
 Each version's section has a Russian half, `---`, then an English one: the app shows the one of its language, and GitHub's release notes (and the Discord note) are the English half (`.github/workflows/release.yml`).
 
+## 0.4.2
+
+**Снимки**
+- QR-коды находятся намного чаще: мелкие в превью видео, цветные, светлые на тёмном фоне и несколько сразу. Их читает ZXing (rxing), а прежний распознаватель подбирает остальное. На маке первым смотрит Vision — тот же сканер, что в камере iPhone.
+- Криптокошельки в QR-кодах: адреса и ссылки EVM (Ethereum, BNB Chain, Polygon, Base, Arbitrum…), Bitcoin, TRON, Solana, TON, Litecoin, Dogecoin и XRP. Карточка пишет «криптокошелёк», сеть с её значком и сокращённый адрес (и сумму, если она в ссылке); «копировать» берёт сам адрес, рядом кнопка обозревателя сети.
+- Два QR-кода рядом: карточки больше не налезают друг на друга, вторая встаёт под первую.
+- Рисование: у каждого инструмента свой размер — толщина кисти, обводки, размер текста. Колесо меняет его прямо во время рисования, у курсора видно, каким он будет. Новая фигура — круг (клавиша O, с Shift ровный; прямоугольник с Shift — квадрат).
+- Окно распознанного текста открыто всегда одно: новое закрывает прежнее, а новый снимок закрывает его до того, как снять экран, — текст больше не распознаётся сам из себя.
+- Панель инструментов сверху переезжает на монитор, где курсор, плавно.
+- Размер всех инструментов рисования один раз сброшен на 4.
+- Мак: стекло над светлым фоном темнеет, как у Apple, — панели захвата и карточки больше не теряются на белой странице.
+- Мак: конструктор меню трея в настройках стеклянный, как всё окно настроек.
+
+---
+
+**Shots**
+- QR codes are found far more often: small ones in video thumbnails, colored ones, light on dark, several at once. ZXing (rxing) reads them, and the old reader picks up the rest. On a Mac, Vision looks first — the same scanner as the iPhone's camera.
+- Crypto wallets in QR codes: EVM addresses and links (Ethereum, BNB Chain, Polygon, Base, Arbitrum…), Bitcoin, TRON, Solana, TON, Litecoin, Dogecoin and XRP. The card says "crypto wallet", the network with its mark and the address shortened (and the amount if the link has one); "copy" takes the address itself, and a button beside it opens the network's explorer.
+- Two QR codes side by side: their cards no longer cover each other, the second one goes under the first.
+- Drawing: each tool keeps its own size — brush and outline thickness, text size. The wheel changes it while you draw, with a preview at the pointer. A new shape: the ellipse (key O, a circle with Shift; a rectangle with Shift is a square).
+- Only one recognized-text window is open: a new one closes the old, and a new capture closes it before taking the screen — text is no longer read off itself.
+- The toolbar at the top glides over to the display the pointer is on.
+- Every drawing tool's size is set back to 4, once.
+- Mac: the glass darkens over light backgrounds, as Apple's does — the capture panels and cards no longer get lost on a white page.
+- Mac: the tray menu builder in the settings is glass, like the rest of the settings window.
+
 ## 0.4.1
 
 **Редактор видео**

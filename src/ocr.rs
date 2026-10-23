@@ -189,6 +189,19 @@ pub fn spawn(img: &RgbaImage, at: IRect) {
     }
 }
 
+/// Set by a new text window: the one already open closes (one at a time).
+const CLOSE_EVENT: &str = "Local\\BlinkerTextClose";
+
+/// Closes the text window if one is open, and waits for it to be gone (a
+/// capture right after shouldn't have it in the picture). True if there was one.
+pub fn close_open() -> bool {
+    let open = win::signal_event(CLOSE_EVENT);
+    if open {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    open
+}
+
 /// What the recognizer found, once it's done.
 type Found = Arc<Mutex<Option<Result<Vec<Line>, String>>>>;
 
@@ -213,6 +226,10 @@ pub fn run(path: PathBuf, x: i32, y: i32) {
     if !waiting {
         read_in_background(&found, &img);
     }
+    // one text window at a time: the one open goes, and lets go of the name
+    // before this one takes it
+    close_open();
+    let close = win::create_event(CLOSE_EVENT);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(crate::i18n::l("blinker · текст", "blinker · text"))
@@ -241,6 +258,17 @@ pub fn run(path: PathBuf, x: i32, y: i32) {
                 }
                 win::cloak(h, true);
                 win::set_window_rect(h, rect, true);
+            }
+            if let Some(ev) = close {
+                let ctx = cc.egui_ctx.clone();
+                std::thread::spawn(move || {
+                    loop {
+                        if win::wait_event(ev, 2000) {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            ctx.request_repaint();
+                        }
+                    }
+                });
             }
             let tex = TiledTexture::new(&cc.egui_ctx, "text-shot", &img, TextureOptions::LINEAR);
             Ok(Box::new(TextApp {

@@ -167,6 +167,7 @@ unsafe extern "C" {
     pub fn bk_pid_is_ours(pid: c_int) -> c_int;
     pub fn bk_ax_trusted(prompt: c_int) -> c_int;
     pub fn bk_ocr(rgba: *const u8, w: c_int, h: c_int, ctx: *mut c_void, cb: OcrCb) -> c_int;
+    pub fn bk_qr(rgba: *const u8, w: c_int, h: c_int, ctx: *mut c_void, cb: OcrCb) -> c_int;
     pub fn bk_window_parts(pid: c_int, x: f64, y: f64, w: f64, h: f64, out: *mut f64, max: c_int) -> c_int;
     pub fn bk_capture_display(
         display: u32,

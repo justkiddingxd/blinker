@@ -362,9 +362,16 @@ impl HomeApp {
             hot
         };
 
-        // the menu, as dark as the real one
-        p.rect_filled(panel, 10, BG);
-        p.rect_stroke(panel, 10, Stroke::new(1.0, LINE_HI), StrokeKind::Inside);
+        // the menu, as dark as the real one; on glass (macOS 26) a pane of
+        // dark glass with a light rim, as the menu bar's menu is there
+        let glass = theme::glass();
+        let (rim, line) = if glass { (egui::Color32::from_white_alpha(34), egui::Color32::from_white_alpha(22)) } else { (LINE_HI, LINE) };
+        if glass {
+            ui::paint_float(&p, panel, 10, 1.0);
+        } else {
+            p.rect_filled(panel, 10, BG);
+            p.rect_stroke(panel, 10, Stroke::new(1.0, rim), StrokeKind::Inside);
+        }
         let mut y = panel.top() + PAD;
         let mut rows: Vec<(Rect, Vec<Rect>)> = Vec::new();
         let mut titles = Vec::new();
@@ -400,7 +407,7 @@ impl HomeApp {
         // room for one more row of tiles
         let new_row = Rect::from_min_size(pos2(panel.left() + PAD, y), vec2(menu_w - 2.0 * PAD, NEW_ROW_H));
         let carrying_item = drag.is_some_and(|d| matches!(d.piece, TrayPiece::Item(_)));
-        let edge = if carrying_item { DIM } else { LINE_HI };
+        let edge = if carrying_item { DIM } else { rim };
         p.extend(egui::Shape::dashed_line(
             &[new_row.left_top(), new_row.right_top(), new_row.right_bottom(), new_row.left_bottom(), new_row.left_top()],
             Stroke::new(1.0, edge),
@@ -409,7 +416,7 @@ impl HomeApp {
         ));
         p.text(new_row.center(), egui::Align2::CENTER_CENTER, l("+ новый ряд плиток", "+ a new row of tiles"), font(11.5), if carrying_item { DIM } else { FAINT });
         y += NEW_ROW_H + 8.0;
-        p.hline(panel.x_range().shrink(PAD), y + SEP_H / 2.0, Stroke::new(1.0, LINE));
+        p.hline(panel.x_range().shrink(PAD), y + SEP_H / 2.0, Stroke::new(1.0, line));
         y += SEP_H;
         // the list
         let list_top = y;
@@ -431,7 +438,7 @@ impl HomeApp {
             }
             match e {
                 Entry::Separator => {
-                    p.hline(rect.x_range().shrink(8.0), rect.center().y, Stroke::new(1.0, if hot { DIM } else { LINE_HI }.gamma_multiply(a)));
+                    p.hline(rect.x_range().shrink(8.0), rect.center().y, Stroke::new(1.0, if hot { DIM } else { rim }.gamma_multiply(a)));
                 }
                 Entry::Item(item) => {
                     // the replay's row shows only while the replay is on
@@ -455,7 +462,7 @@ impl HomeApp {
             let resp = ui.interact(rect, ui.scope_id().with(("tray-spare", piece.label())), Sense::drag());
             let hot = grab(&resp, piece, TrayFrom::Spare);
             p.rect_filled(rect, 14, if hot { ui::hover_fill().gamma_multiply(2.2) } else { ui::hover_fill() });
-            p.rect_stroke(rect, 14, Stroke::new(1.0, LINE), StrokeKind::Inside);
+            p.rect_stroke(rect, 14, Stroke::new(1.0, line), StrokeKind::Inside);
             icons::paint(&p, Rect::from_center_size(pos2(rect.left() + 15.0, rect.center().y), egui::Vec2::splat(13.0)), piece.icon(), 12.0, DIM);
             p.galley(pos2(rect.left() + 26.0, rect.center().y - g.size().y / 2.0), g, TEXT2);
         }
@@ -543,7 +550,7 @@ impl HomeApp {
             let g = tip.layout_no_wrap(d.piece.label().to_string(), font(12.0), TEXT);
             let r = Rect::from_min_size(pt + vec2(12.0, 10.0), vec2(34.0 + g.size().x, 28.0));
             tip.add(egui::epaint::Shadow { offset: [0, 4], blur: 14, spread: 0, color: egui::Color32::from_black_alpha(120) }.as_shape(r, 14));
-            tip.rect_filled(r, 14, PANEL);
+            tip.rect_filled(r, 14, ui::float_fill());
             tip.rect_stroke(r, 14, Stroke::new(1.0, ACCENT.gamma_multiply(0.6)), StrokeKind::Inside);
             icons::paint(&tip, Rect::from_center_size(pos2(r.left() + 15.0, r.center().y), egui::Vec2::splat(13.0)), d.piece.icon(), 12.0, ACCENT);
             tip.galley(pos2(r.left() + 26.0, r.center().y - g.size().y / 2.0), g, TEXT);

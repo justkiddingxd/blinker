@@ -1,6 +1,6 @@
 [package]
 name = "blinker"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 description = "Fast, quiet screenshot and screen recording tool for Windows and macOS"
 license = "GPL-3.0-only"
@@ -28,6 +28,8 @@ tiny-skia = "0.12.0"
 whisper-rs = "0.16.0"
 # QR codes on the screen while selecting
 rqrr = "0.10"
+# QR codes on the screen: ZXing ported to Rust, finds small, colored and tilted ones
+rxing = { version = "0.9.3", default-features = false, features = ["qrcode", "decoders", "multi_barcode_readers", "encoding_rs"] }
 # checks the downloaded speech model
 sha2 = "0.10.9"
 toml = "1.1.8"

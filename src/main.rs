@@ -297,6 +297,10 @@ fn controller(shared: &Arc<Shared>) -> bool {
     sync_replay(shared, &mut replay);
     loop {
         let cmd_now = shared.wait();
+        // a capture never takes in the text window of the one before
+        if cmd_now.is_capture() && cmd_now != Command::PickColor {
+            ocr::close_open();
+        }
         match cmd_now.clone() {
             Command::Quit | Command::Restart => {
                 if let Some(rec) = recording.take() {
