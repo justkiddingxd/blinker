@@ -66,6 +66,8 @@ fn macos() {
         "Accelerate",
         "QuartzCore",
         "AudioToolbox",
+        "ApplicationServices",
+        "Vision",
     ] {
         println!("cargo:rustc-link-lib=framework={fw}");
     }

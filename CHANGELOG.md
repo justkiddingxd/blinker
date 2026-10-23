@@ -1,11 +1,85 @@
 # Changelog
 
-Each version's section becomes its release notes on GitHub (`.github/workflows/release.yml` takes the part under `## <version>`).
+Each version's section has a Russian half, `---`, then an English one: the app shows the one of its language, and GitHub's release notes (and the Discord note) are the English half (`.github/workflows/release.yml`).
+
+## 0.4.1
+
+**Редактор видео**
+- Редактор стал полноценным: полоса инструментов (разрезать, убрать кусок, текст, субтитр, из речи, метка, импорт, отменить и вернуть), справа инспектор с вкладками «видео», «текст», «звук», внизу таймлайн с линейкой времени, дорожками «текст» и «субтитры» и приближением (Ctrl+колесо, кнопки + и −, «весь клип»; обычное колесо листает).
+- Текст поверх видео: заголовки, подписи, реакции на своей дорожке. Перетаскивается прямо на превью, у каждого свой вид и появление: проявление, всплытие, снизу, печать. Те же анимации есть у субтитров.
+- Приближение кадра (масштаб и место) и «плавный наезд»: камера медленно приближается за весь клип, как в коротких видео.
+- Монтаж: S — разрез на месте курсора, Del — убрать кусок между разрезами (или вернуть его), Ctrl+Z / Ctrl+Shift+Z — отменить и вернуть. Убранные куски пропускаются при просмотре и не попадают в mp4, gif и звук.
+- Вертикальное видео 9:16 для Shorts, Reels и TikTok, 1080 × 1920. «Часть» — вертикальная полоса из кадра, рамку двигаешь на превью; «целиком» — весь кадр по центру на размытом фоне. Больше 60 кадров в секунду такие видео не хранят.
+- Скорость куска: 0,5×, 1,5×, 2×, 3× в инспекторе на вкладке «видео». Звук ускоряется и замедляется вместе с картинкой, а голос в сохранённом клипе не пищит и не басит. На кадрах видна плашка со скоростью.
+- Импорт: музыка (mp3, wav, m4a, flac…) на своей дорожке под клипом — её блок двигается, у неё громкость и затухание в конце; картинки (png, jpg, webp) поверх видео на дорожке «картинки» — двигаются на превью, у каждой размер и появление. Всё это попадает в mp4.
+- Субтитры: дорожка под кадрами, T добавляет субтитр на месте курсора, края тянутся, блок двигается. Они впекаются в mp4.
+- Вид субтитров: размер, шрифт (обычный, жирный, моно), ЗАГЛАВНЫЕ, фон (плашка, обводка, тень), цвет, место. Текст на превью перетаскивается вверх-вниз. Вид запоминается.
+- Субтитры из речи: «субтитры» → «распознать речь». Распознаёт whisper прямо на компьютере, без интернета и без загрузки клипа куда-либо; язык определяется сам. Модель на выбор: «быстрее» (190 мб) или «точнее» (570 мб); ставится и удаляется в настройках → система или по кнопке в редакторе, сама по себе ничего не качается. Слушает включённые дорожки: выключи звук игры, чтобы остался один голос. Тихий микрофон подтягивается по громкости, тишина и выдуманные фразы («Продолжение следует…») отбрасываются.
+
+**Снимки и клипы**
+- Текст с экрана: кнопка «распознать текст» в панели после выделения (клавиша T) и своя клавиша, которая сразу выделяет и распознаёт (по умолчанию Ctrl+Alt+T, на маке Ctrl+Opt+Cmd+T). Окно встаёт на место области: каждая строка лежит поверх своих слов на тёмной плашке, текст выделяется и копируется, весь он сразу в буфере. На Windows читает PaddleOCR (PP-OCRv5): русский, украинский, белорусский и английский вперемешку, в том числе мелкий текст тёмных интерфейсов. Модель весит 13 мб и скачивается один раз: окно текста предложит её при первом распознавании, а ставится и удаляется она в настройках → система. Работает на компьютере, через встроенный в Windows движок, картинка никуда не уходит. На маке читает Vision. У окна шапка с числом строк и кнопкой «копировать всё», строки появляются по очереди, у каждой при наведении своя кнопка копирования.
+- Видео по ссылке blinker.cool играет прямо в Discord и Telegram: у страницы есть размер видео и превью (первый кадр), а сервер переставляет индекс mp4 в начало файла, чтобы мессенджер мог играть его, не скачивая целиком.
+- QR-коды на экране: при снимке найденный код обводится рамкой с бегущей полосой, под ним карточка — куда он ведёт, кнопка «перейти» и копирование ссылки (или «копировать», если там не ссылка). На маке карточка из стекла, как и окно распознанного текста. Выключается галкой «читать qr-коды» в настройках → захват.
+- Пипетка: своя клавиша (по умолчанию Ctrl+Alt+C, на маке Ctrl+Opt+Cmd+C). Экран замирает, лупа у курсора, клик копирует цвет в hex.
+- Клипы по играм: запись, повтор и gif во время игры называются по ней («Dota 2 2026-10-23 20-03-05.mp4») и лежат в «games / Dota 2». В истории на вкладке видео фильтр по играм. Выключается в «хранение». Пока на Windows.
+
+**Логотип**
+- Новый логотип: белая «B» с вырезанной звездой и красной точкой. На Windows классический, на маке стеклянный (Liquid Glass в macOS 26).
+- Значок в трее и в строке меню мака — белая звезда на тёмной плитке, читается даже в 16 px. Пока пишется повтор, в углу красная точка (раньше значок краснел целиком).
+- Статус в Discord с новым логотипом, без точки: она не спорит со значком записи в углу.
+
+**Прочее**
+- После автообновления blinker перезапускается тихо, в трее: окно настроек больше не открывается само и не выбивает из полноэкранной игры.
+- «Настройки» и «история» из трея поднимают уже открытое окно наверх, даже свёрнутое.
+- Меню трея собирается под себя: настройки → «меню трея». Меню показано как есть, пункты перетаскиваются между плитками сверху, списком и запасными справа; ряды плиток добавляются, их заголовки меняются по клику, есть разделители; «сбросить» возвращает меню по умолчанию. В меню теперь можно поставить «распознать текст» и пипетку. Клики по значку переехали туда же.
+- Настройки разложены заново: «текст и qr-коды», «редактор видео» (открывать после записи, субтитры из речи), «меню трея», «интеграции» (Discord, ShareX, NVIDIA). Звук щелчка теперь в «захвате», в «системе» остались язык, запуск и обновления.
+- Esc больше не закрывает историю. Правый клик по уведомлению закрывает его.
+- Внизу настроек ссылки на GitHub и на сервер blinker в Discord (открывается сразу в приложении Discord, если оно стоит).
+- Ссылки blinker://update: кнопка «Update» в Discord blinker открывает настройки и сразу ставит новую версию (через blinker.cool/update, браузер спросит, открыть ли blinker).
+- Мак: клик выделяет часть окна, как на Windows. Нужен «универсальный доступ»: в настройках, раздел «захват», кнопка «разрешить».
+- Мак: плашка записи всего экрана в режиме «в углу» стоит справа снизу, над Dock (раньше уезжала наверх).
+
+---
+
+**Video editor**
+- A real editor now: a tool strip (cut, take out, text, subtitle, from speech, marker, import, undo and redo), an inspector on the right with "video", "text" and "sound" pages, and a timeline with a time ruler, "text" and "subtitles" lanes and zoom (Ctrl+wheel, the + and − buttons, "whole clip"; a plain wheel scrolls along).
+- Texts over the video: titles, callouts, reactions on a lane of their own. Drag them on the preview; each has its look and its entrance: fade, pop, slide up, typing. Subtitles have the same animations.
+- Zoom on the picture (scale and place) and a "slow push in": the camera moves in slowly over the whole clip, as short videos do.
+- Cutting: S cuts at the playhead, Del takes the piece between cuts out (or brings it back), Ctrl+Z / Ctrl+Shift+Z undo and redo. Pieces taken out are skipped while playing and left out of the mp4, gif and sound.
+- Vertical 9:16 video for Shorts, Reels and TikTok, 1080 × 1920. "Slice" takes an upright strip of the picture (drag the frame on the preview); "whole" puts all of it in the middle over a blurred copy. Such videos keep at most 60 frames a second.
+- Piece speed: 0.5×, 1.5×, 2×, 3× on the inspector's "video" page. The sound speeds up and slows down with the picture, and voices in the saved clip keep their pitch. A badge on the frames shows the speed.
+- Import: music (mp3, wav, m4a, flac…) on a lane of its own under the clip, with its block to drag, a volume and a fade at the end; pictures (png, jpg, webp) over the video on the "pictures" lane, dragged on the preview, each with its size and entrance. All of it goes into the mp4.
+- Subtitles: a lane under the frames, T adds one at the playhead, drag its edges or the whole block. They are burnt into the mp4.
+- Subtitle style: size, font (regular, bold, mono), CAPS, background (plate, outline, shadow), color, place. Drag the text up and down on the preview. The style is remembered.
+- Subtitles from speech: "subtitles" → "recognize speech". Whisper runs on your computer, offline, nothing is uploaded; the language is detected. Two models: "quicker" (190 mb) or "more accurate" (570 mb), installed and removed in settings → system or with the button in the editor; nothing downloads on its own. It listens to the tracks that are on: mute the game to leave just the voice. A quiet mic is brought up to level; silence and made-up lines ("Subtitles by…") are dropped.
+
+**Shots and clips**
+- Text from the screen: "recognize text" in the panel after a selection (key T), and a key of its own that selects and reads at once (Ctrl+Alt+T by default, Ctrl+Opt+Cmd+T on a Mac). A window takes the area's place: each line lies over its own words on a dark plate, select and copy any of it, all of it is on the clipboard already. On Windows PaddleOCR (PP-OCRv5) reads it: Russian, Ukrainian, Belarusian and English mixed together, small text in dark interfaces too. The model is 13 mb and downloads once: the text window offers it the first time, and settings → system installs and removes it. It runs on your computer with the engine built into Windows; the picture goes nowhere. Vision reads it on a Mac. The window has a header with the line count and "copy all"; lines come in one by one, and each gets its own copy button on hover.
+- Videos on blinker.cool links play right in Discord and Telegram: the page carries the video's size and a preview frame, and the server moves the mp4 index to the front so a messenger can play it before it has the whole file.
+- QR codes on the screen: when you take a shot, a found code gets a frame with a sweeping line and a card under it saying where it leads, with an "open" button and one to copy the link (or "copy" when it isn't a link). On a Mac the card is glass, as is the recognized text window. Turn it off with "read qr codes" in settings → capture.
+- Color picker: a key of its own (Ctrl+Alt+C by default, Ctrl+Opt+Cmd+C on a Mac). The screen freezes with the loupe at the pointer, a click copies the color as hex.
+- Clips by game: recordings, replays and gifs made while a game runs are named after it ("Dota 2 2026-10-23 20-03-05.mp4") and go into "games / Dota 2". The video tab of the history filters by game. Turn it off in "storage". Windows for now.
+
+**Logo**
+- A new logo: a white "B" with a star cut out and a red dot. Classic on Windows, glass on a Mac (Liquid Glass on macOS 26).
+- The tray and menu bar icon is a white star on a dark tile that reads even at 16 px. While the replay records, a red dot sits in its corner (the whole icon turned red before).
+- The Discord status shows the new logo without the dot, so it doesn't clash with the recording badge in the corner.
+
+**Other**
+- After an automatic update blinker restarts quietly in the tray: the settings no longer open by themselves and pull you out of a full-screen game.
+- "Settings" and "history" in the tray bring an open window to the front, minimized too.
+- Build your own tray menu: settings → "tray menu". The menu is shown as it opens; drag items between the tiles on top, the list and the spare ones on the right, add rows of tiles, click a row's heading to rename it, put in separators; "reset" brings back the default one. "Read text" and the color picker can go in the menu now. The tray icon's clicks moved there too.
+- The settings are laid out anew: "text and qr codes", "video editor" (opening it after a recording, subtitles from speech), "tray menu", "integrations" (Discord, ShareX, NVIDIA). The shutter sound is under "capture" now; "system" keeps the language, startup and updates.
+- Esc no longer closes the history. A right click on the card dismisses it.
+- Links to GitHub and to blinker's Discord server at the bottom of the settings (the invite opens in the Discord app when it's installed).
+- blinker://update links: the "Update" button in blinker's Discord opens the settings and installs the new version right away (through blinker.cool/update; the browser asks to open blinker).
+- Mac: a click takes a part of a window, as on Windows. It needs Accessibility: settings, "capture", the "allow" button.
+- Mac: the recording pill of a whole-screen recording in "in the corner" sits bottom right above the Dock (it went to the top before).
 
 ## 0.4.0
 
 **Снимки и запись**
-- Клик выделяет часть окна: например, саму страницу в браузере без вкладок и адресной строки. Alt + клик берёт окно целиком. Пока на Windows.
+- Клик выделяет часть окна: например, саму страницу в браузере без вкладок и адресной строки. Alt + клик берёт окно целиком.
 - В записи клик по развёрнутому окну берёт весь экран, а не одно окно. В панели записи кнопка «весь экран» (то же, что пробел).
 - Пока пишется весь экран, вокруг него нет рамки: из-за неё Windows считал запись полноэкранной программой, и панель задач с треем не поднималась при наведении. Плашка записи в этом случае стоит в углу, прямо над треем.
 - Место плашки записи выбирается в «запись → плашка записи», отдельно для области и для всего экрана: на маленьких экранах с примером, кликом по месту. По умолчанию она под областью, а при записи всего экрана у трея.

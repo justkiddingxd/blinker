@@ -1,9 +1,14 @@
 //! Video editor for recordings: preview, trimming on a filmstrip timeline,
 //! per-track mute / volume (desktop sound and microphone are separate),
-//! markers with notes (they go along with an upload), and saving as MP4,
-//! GIF or, with the video track off, the sound alone (MP3 / M4A / WAV).
+//! markers with notes (they go along with an upload), cuts (pieces taken out
+//! of the middle), a vertical 9:16 frame and styled subtitles for Shorts, and
+//! saving as MP4, GIF or, with the video track off, the sound alone
+//! (MP3 / M4A / WAV).
 
 mod engine;
+pub mod shorts;
+pub mod speech;
+mod studio;
 pub mod export;
 
 use crate::chrome;
@@ -18,6 +23,8 @@ use crate::win;
 use eframe::egui::{self, Align2, Color32, CursorIcon, Key, Rect, Sense, Stroke, StrokeKind, TextureHandle, Vec2, pos2, vec2};
 use engine::{Engine, Gain, Thumbs};
 use export::{AudioFormat, Job, Kind as ExportKind};
+use shorts::{Aspect, Caption, CaptionStyle, Music, Sticker, Title, Transform};
+use studio::{Lane, Sel, Tab};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -30,6 +37,10 @@ const STRIP_H: f32 = 54.0;
 const TRACK_H: f32 = 46.0;
 /// The lane of markers above the filmstrip.
 const MARK_H: f32 = 20.0;
+/// The lane of subtitles under it.
+const CAP_H: f32 = 24.0;
+/// A new subtitle's length.
+const CAP_LEN: i64 = 2 * HNS;
 /// Trim grips: their width, and how far outside the range they still grab.
 const GRIP_W: f32 = 12.0;
 const GRIP_REACH: f32 = 14.0;
@@ -70,13 +81,13 @@ pub fn run(path: PathBuf) {
     });
 }
 
-/// 1120 × 760, or less on a small screen (the window can't be resized).
+/// 1320 × 860, or less on a small screen (the window can't be resized).
 fn window_size() -> [f32; 2] {
     let (x, y) = win::cursor_pos();
     let mon = win::monitor_at(&win::monitors(), x, y);
     let (work, scale) = mon.map(|m| (m.work, m.scale)).unwrap_or((win::IRect::new(0, 0, 1920, 1040), 1.0));
     let avail = (work.w as f32 / scale * 0.94, work.h as f32 / scale * 0.92);
-    [1120f32.min(avail.0).max(820.0), 760f32.min(avail.1).max(560.0)]
+    [1320f32.min(avail.0).max(900.0), 860f32.min(avail.1).max(600.0)]
 }
 
 struct Track {
@@ -94,6 +105,26 @@ enum Drag {
     Playhead,
     In,
     Out,
+}
+
+/// The edit as it was, for undo: the cuts and the texts.
+#[derive(Clone)]
+struct Snap {
+    splits: Vec<i64>,
+    dropped: Vec<(i64, i64)>,
+    captions: Vec<Caption>,
+    titles: Vec<Title>,
+    stickers: Vec<Sticker>,
+    speeds: Vec<(i64, i64, f32)>,
+    music: Option<Music>,
+}
+
+/// What a press on a subtitle grabbed.
+#[derive(Clone, Copy, PartialEq)]
+enum CapDrag {
+    Move,
+    Start,
+    End,
 }
 
 struct Done {
@@ -151,6 +182,51 @@ struct VideoApp {
     marker_focus: bool,
     /// "Upload" on an edited clip: it is saved first, then the saved file goes up.
     upload_after_save: bool,
+    /// The saved frame: as recorded or 9:16; where the 9:16 slice sits.
+    aspect: Aspect,
+    crop_x: f32,
+    captions: Vec<Caption>,
+    /// Texts over the video (the "text" lane).
+    titles: Vec<Title>,
+    /// The block picked on a lane (the inspector edits it).
+    sel: Sel,
+    /// The inspector's page.
+    tab: Tab,
+    /// The picked text's field takes the keyboard on its next frame.
+    text_focus: bool,
+    /// A block being dragged: its lane, which, what part, and the grab
+    /// point's offset from its start.
+    block_drag: Option<(Lane, usize, CapDrag, i64)>,
+    /// The picture zoomed in / pushed in.
+    transform: Transform,
+    /// The visible part of the timeline (source time).
+    view: (i64, i64),
+    /// "From speech" in the tool strip: the inspector scrolls to it.
+    speech_hint: bool,
+    /// Imported pictures over the video (the "pictures" lane).
+    stickers: Vec<Sticker>,
+    /// Pieces played faster or slower: (from, to, speed), source time.
+    speeds: Vec<(i64, i64, f32)>,
+    /// Imported music under the clip.
+    music: Option<Music>,
+    /// The speed of the piece playing.
+    play_rate: f32,
+    /// The pictures' textures on the preview, by file.
+    sticker_tex: std::collections::HashMap<PathBuf, TextureHandle>,
+    /// Speech being turned into subtitles (the model downloading first).
+    speech: Option<Arc<speech::Job>>,
+    /// How subtitles look (kept in the settings).
+    style: CaptionStyle,
+    /// The subtitle on the preview is being dragged up or down.
+    cap_drag: bool,
+    /// Cut points, sorted; pieces between them (and the trim) can be taken out.
+    splits: Vec<i64>,
+    /// Pieces taken out (source time).
+    dropped: Vec<(i64, i64)>,
+    undo: Vec<Snap>,
+    redo: Vec<Snap>,
+    /// Playing: where the piece being played ends.
+    play_to: i64,
 }
 
 impl VideoApp {
@@ -182,6 +258,7 @@ impl VideoApp {
         let thumbs = engine::thumbnails(ctx, &path, info.duration, THUMBS, (192, 108));
         let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         let gif_width = if info.width > 800 { 800 } else { info.width };
+        let shared_style = shared.config().caption_style;
         Self {
             shared,
             hwnd,
@@ -216,6 +293,30 @@ impl VideoApp {
             marker_drag: None,
             marker_focus: false,
             upload_after_save: false,
+            aspect: Aspect::Original,
+            crop_x: 0.5,
+            captions: Vec::new(),
+            titles: Vec::new(),
+            sel: Sel::None,
+            tab: Tab::Video,
+            text_focus: false,
+            block_drag: None,
+            transform: Transform::default(),
+            view: (0, info.duration.max(1)),
+            speech_hint: false,
+            stickers: Vec::new(),
+            speeds: Vec::new(),
+            music: None,
+            play_rate: 1.0,
+            sticker_tex: Default::default(),
+            speech: None,
+            style: shared_style,
+            cap_drag: false,
+            splits: Vec::new(),
+            dropped: Vec::new(),
+            undo: Vec::new(),
+            redo: Vec::new(),
+            play_to: 0,
             info,
         }
     }
@@ -234,8 +335,19 @@ impl VideoApp {
         if self.pos >= self.trim.1 - HNS / 20 || self.pos < self.trim.0 {
             self.pos = self.trim.0;
         }
+        // from the piece the playhead is in, or the next one kept (a piece
+        // of one speed: they change at their bounds)
+        let Some((a, b, rate)) = self.kept_speed().into_iter().find(|(_, b, _)| self.pos < *b - HNS / 50) else {
+            self.pos = self.kept().first().map_or(self.trim.0, |r| r.0);
+            return;
+        };
+        self.pos = self.pos.max(a);
+        self.play_to = b;
+        self.play_rate = rate;
         self.sync_gains();
-        self.engine.play(self.pos, self.trim.1);
+        // the music from where the saved clip has it at this moment
+        let music = self.music.as_ref().map(|m| (m.path.clone(), m.from + self.out_time(self.pos) - self.out_time(m.start), m.gain));
+        self.engine.play(self.pos, b, rate, music);
         self.playing = true;
         self.play_t0 = Instant::now() + std::time::Duration::from_millis(60);
         self.play_from = self.pos;
@@ -270,11 +382,17 @@ impl VideoApp {
     fn tick(&mut self, ctx: &egui::Context) {
         if self.playing {
             let el = Instant::now().saturating_duration_since(self.play_t0);
-            self.pos = (self.play_from + (el.as_nanos() / 100) as i64).min(self.trim.1);
-            if self.engine.ended.load(Ordering::SeqCst) || self.pos >= self.trim.1 {
+            self.pos = (self.play_from + ((el.as_nanos() / 100) as f64 * self.play_rate as f64) as i64).min(self.play_to);
+            if self.engine.ended.load(Ordering::SeqCst) || self.pos >= self.play_to {
+                // the next kept piece goes on, past the cut
+                let next = self.kept_speed().into_iter().find(|(a, _, _)| *a >= self.play_to).map(|(a, b, _)| (a, b));
                 self.playing = false;
                 self.engine.pause();
-                self.pos = self.trim.1;
+                self.pos = self.play_to;
+                if let Some((a, _)) = next {
+                    self.pos = a;
+                    self.play();
+                }
             }
             ctx.request_repaint();
         }
@@ -328,15 +446,37 @@ impl VideoApp {
             gif_fps: self.gif_fps,
             quality: None,
             codec: crate::record::encoder::Codec::H264,
+            aspect: self.aspect,
+            crop_x: self.crop_x,
+            captions: self.captions.iter().filter(|c| !c.text.trim().is_empty()).cloned().collect(),
+            style: self.style,
+            titles: self.titles.iter().filter(|t| !t.text.trim().is_empty()).cloned().collect(),
+            transform: self.transform,
+            keep: if self.dropped.is_empty() && self.speeds.is_empty() { Vec::new() } else { self.kept_speed() },
+            stickers: self.stickers.clone(),
+            music: self.music.clone().map(|m| {
+                let at = self.out_time(m.start);
+                (m, at)
+            }),
         };
-        let dst = export::target_path(&self.path, kind, self.trimmed());
+        let dst = export::target_path(&self.path, kind, self.trimmed() || !self.dropped.is_empty(), kind == ExportKind::Mp4 && self.aspect.vertical());
         self.done = None;
         self.job = Some(export::start(ctx, self.path.clone(), dst, self.info.clone(), opt));
     }
 
     /// Anything changed: what is uploaded has to be saved first.
     fn edited(&self) -> bool {
-        self.trimmed() || !self.video_on || self.tracks.iter().any(|t| t.gain.muted || (t.gain.volume - 1.0).abs() > 0.01)
+        self.trimmed()
+            || !self.dropped.is_empty()
+            || !self.video_on
+            || self.aspect.vertical()
+            || self.captions.iter().any(|c| !c.text.trim().is_empty())
+            || self.titles.iter().any(|t| !t.text.trim().is_empty())
+            || !self.transform.is_identity()
+            || !self.speeds.is_empty()
+            || !self.stickers.is_empty()
+            || self.music.is_some()
+            || self.tracks.iter().any(|t| t.gain.muted || (t.gain.volume - 1.0).abs() > 0.01)
     }
 
     /// "Upload": the source as it is, or the edited clip once it's saved.
@@ -358,13 +498,14 @@ impl VideoApp {
         if self.video_on { ExportKind::Mp4 } else { ExportKind::Audio(self.audio_format) }
     }
 
-    /// Markers inside the trimmed range, in seconds from its start.
+    /// Markers inside the kept pieces, in seconds of the saved clip.
     fn clip_markers(&self) -> Vec<crate::upload::Marker> {
+        let kept = self.kept();
+        let at = |t: i64| kept.iter().any(|(a, b)| t >= *a && t <= *b).then(|| self.out_time(t));
         let mut out: Vec<_> = self
             .markers
             .iter()
-            .filter(|m| m.t >= self.trim.0 && m.t <= self.trim.1)
-            .map(|m| crate::upload::Marker { t: (m.t - self.trim.0) as f64 / HNS as f64, text: m.text.trim().to_string() })
+            .filter_map(|m| at(m.t).map(|t| crate::upload::Marker { t: t as f64 / HNS as f64, text: m.text.trim().to_string() }))
             .collect();
         out.sort_by(|a, b| a.t.total_cmp(&b.t));
         out
@@ -575,6 +716,65 @@ impl VideoApp {
             });
     }
 
+    /// Speech in the kept range to subtitles (they replace the ones there).
+    fn recognize(&mut self, ctx: &egui::Context, model: speech::Model) {
+        self.pause();
+        let tracks: Vec<(u32, f32)> = self.tracks.iter().filter(|t| !t.gain.muted && t.gain.volume > 0.0).map(|t| (t.stream, t.gain.volume)).collect();
+        if tracks.is_empty() {
+            self.notice = Some(Notice::new(ctx, crate::i18n::l("все дорожки звука выключены", "every sound track is off")));
+            return;
+        }
+        self.sel = Sel::None;
+        self.speech = Some(speech::start(ctx, model, self.path.clone(), tracks, self.trim.0, self.trim.1));
+    }
+
+    fn poll_speech(&mut self, ctx: &egui::Context) {
+        let Some(job) = &self.speech else { return };
+        let res = job.result.lock().unwrap().take();
+        let Some(res) = res else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            return;
+        };
+        self.speech = None;
+        match res {
+            Ok(caps) if caps.is_empty() => self.notice = Some(Notice::new(ctx, crate::i18n::l("речи не нашлось", "no speech found"))),
+            Ok(caps) => {
+                self.snapshot();
+                let (a, b) = self.trim;
+                self.captions.retain(|c| c.to <= a || c.from >= b);
+                let n = caps.len();
+                self.captions.extend(caps);
+                self.captions.sort_by_key(|c| c.from);
+                self.notice = Some(Notice::new(ctx, lf!("{n} субтитров · проверь и поправь, клик по блоку", "{n} subtitles · check them, click a block to fix")));
+            }
+            Err(e) => self.notice = Some(Notice::new(ctx, if e == crate::i18n::t("отменено") { e } else { lf!("не распознал: {e}", "recognition failed: {e}") })),
+        }
+    }
+
+    /// The card over the preview while speech is recognized.
+    fn speech_overlay(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        let Some(job) = &self.speech else { return };
+        let (stage, f, job) = (*job.stage.lock().unwrap(), job.fraction(), job.clone());
+        let what = match stage {
+            speech::Stage::Download => crate::i18n::l("скачиваю модель распознавания", "downloading the speech model"),
+            speech::Stage::Listen => crate::i18n::l("распознаю речь", "recognizing speech"),
+        };
+        let p = ui.painter().clone();
+        p.rect_filled(rect, 0, Color32::from_black_alpha(150));
+        let card = Rect::from_center_size(rect.center(), vec2(360.0, 104.0));
+        ui::paint_float(&p, card, 4, 1.0);
+        p.text(card.left_top() + vec2(16.0, 22.0), Align2::LEFT_CENTER, what, font_medium(13.5), TEXT);
+        p.text(card.right_top() + vec2(-16.0, 22.0), Align2::RIGHT_CENTER, format!("{:.0}%", f * 100.0), mono(12.0), DIM);
+        let bar = Rect::from_min_size(card.left_top() + vec2(16.0, 42.0), vec2(card.width() - 32.0, 4.0));
+        p.rect_filled(bar, 2, LINE);
+        p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * f, bar.height())), 2, ACCENT);
+        let btn = Rect::from_min_size(pos2(card.right() - 16.0 - 80.0, card.bottom() - 42.0), vec2(80.0, 30.0));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(btn));
+        if ui::button(&mut child, crate::i18n::t("отмена"), ui::Kind::Ghost).clicked() {
+            job.cancel.store(true, Ordering::SeqCst);
+        }
+    }
+
     /// "Upload" next to "save" (when uploads are on).
     fn upload_button(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         if !crate::upload::configured(&self.shared.config()) {
@@ -593,7 +793,8 @@ impl VideoApp {
     }
 
     fn timeline(&mut self, ui: &mut egui::Ui) {
-        let h = 16.0 + 40.0 + 8.0 + MARK_H + 4.0 + STRIP_H + 10.0 + self.tracks.len() as f32 * (TRACK_H + 4.0) + 12.0;
+        const RULER_H: f32 = 18.0;
+        let h = 16.0 + 40.0 + 6.0 + RULER_H + 2.0 + MARK_H + 4.0 + STRIP_H + 6.0 + (CAP_H + 6.0) * 4.0 + 4.0 + self.tracks.len() as f32 * (TRACK_H + 4.0) + 12.0;
         egui::Panel::bottom("timeline")
             .exact_size(h)
             .frame(egui::Frame::new().fill(ui::pane_fill()).inner_margin(egui::Margin { left: 14, right: 16, top: 10, bottom: 12 }))
@@ -601,18 +802,27 @@ impl VideoApp {
                 let r = ui.max_rect();
                 ui.painter().hline(egui::Rangef::new(r.left() - 14.0, r.right() + 16.0), r.top() - 10.5, Stroke::new(1.0, ui::hairline()));
                 self.transport(ui);
-                ui.add_space(8.0);
-                let lane_top = ui.cursor().top();
+                ui.add_space(6.0);
+                let top0 = ui.cursor().top();
                 let x0 = r.left() + LABEL_W;
                 let x1 = r.right();
-                let lane = Rect::from_min_max(pos2(x0, lane_top), pos2(x1, lane_top + MARK_H));
-                let top = lane.bottom() + 4.0;
-                let strip = Rect::from_min_max(pos2(x0, top), pos2(x1, top + STRIP_H));
-                let tracks_top = strip.bottom() + 10.0;
-                let area = Rect::from_min_max(
-                    pos2(x0, strip.top()),
-                    pos2(x1, tracks_top + self.tracks.len() as f32 * (TRACK_H + 4.0)),
-                );
+                let row = |top: f32, h: f32| Rect::from_min_max(pos2(x0, top), pos2(x1, top + h));
+                let ruler = row(top0, RULER_H);
+                let lane = row(ruler.bottom() + 2.0, MARK_H);
+                let strip = row(lane.bottom() + 4.0, STRIP_H);
+                let title_lane = row(strip.bottom() + 6.0, CAP_H);
+                let image_lane = row(title_lane.bottom() + 6.0, CAP_H);
+                let cap_lane = row(image_lane.bottom() + 6.0, CAP_H);
+                let music_lane = row(cap_lane.bottom() + 6.0, CAP_H);
+                let tracks_top = music_lane.bottom() + 10.0;
+                let area = Rect::from_min_max(pos2(x0, strip.top()), pos2(x1, tracks_top + self.tracks.len() as f32 * (TRACK_H + 4.0)));
+                let whole = Rect::from_min_max(pos2(r.left(), top0), area.max);
+                self.view_input(ui, whole, area);
+                if self.playing {
+                    self.follow();
+                }
+                let label = |rr: Rect| Rect::from_min_max(pos2(r.left(), rr.top()), pos2(x0 - 12.0, rr.bottom()));
+                self.ruler(ui, ruler, area);
                 // left labels
                 let p = ui.painter().clone();
                 self.video_label(ui, Rect::from_min_max(pos2(r.left(), strip.top()), pos2(x0, strip.bottom())));
@@ -627,9 +837,15 @@ impl VideoApp {
                     self.track_row(ui, i, row, x0);
                 }
                 self.timeline_input(ui, area, strip);
-                self.paint_trim_and_playhead(&p, strip, area);
-                let label = Rect::from_min_max(pos2(r.left(), lane.top()), pos2(x0 - 12.0, lane.bottom()));
-                self.markers_lane(ui, lane, label, area);
+                let clipped = p.with_clip_rect(area.expand2(vec2(GRIP_REACH, 12.0)));
+                self.paint_speeds(&clipped, strip, area);
+                self.paint_cuts(&clipped, strip, area);
+                self.paint_trim_and_playhead(&clipped, strip, area);
+                self.markers_lane(ui, lane, label(lane), area);
+                self.blocks_lane(ui, title_lane, label(title_lane), area, Lane::Title);
+                self.blocks_lane(ui, image_lane, label(image_lane), area, Lane::Image);
+                self.blocks_lane(ui, cap_lane, label(cap_lane), area, Lane::Caption);
+                self.music_lane(ui, music_lane, label(music_lane), area);
             });
     }
 
@@ -767,12 +983,165 @@ impl VideoApp {
         }
     }
 
+    // ------------------------------------------------------------ cuts
+
+    /// The pieces that stay: the trimmed range less the ones taken out.
+    fn kept(&self) -> Vec<(i64, i64)> {
+        let mut out = vec![self.trim];
+        let mut gone = self.dropped.clone();
+        gone.sort();
+        for (a, b) in gone {
+            out = out
+                .into_iter()
+                .flat_map(|(x, y)| {
+                    if b <= x || a >= y {
+                        vec![(x, y)]
+                    } else {
+                        [(x, a.max(x)), (b.min(y), y)].into_iter().filter(|(p, q)| q - p > HNS / 50).collect()
+                    }
+                })
+                .collect();
+        }
+        out
+    }
+
+    /// The piece between cut points (and the trim) that holds `t`.
+    fn piece_at(&self, t: i64) -> (i64, i64) {
+        let a = self.splits.iter().copied().filter(|s| *s <= t).max().unwrap_or(self.trim.0).max(self.trim.0);
+        let b = self.splits.iter().copied().filter(|s| *s > t).min().unwrap_or(self.trim.1).min(self.trim.1);
+        (a, b)
+    }
+
+    fn snapshot(&mut self) {
+        self.undo.push(self.snap());
+        if self.undo.len() > 100 {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+    }
+
+    fn snap(&self) -> Snap {
+        Snap {
+            splits: self.splits.clone(),
+            dropped: self.dropped.clone(),
+            captions: self.captions.clone(),
+            titles: self.titles.clone(),
+            stickers: self.stickers.clone(),
+            speeds: self.speeds.clone(),
+            music: self.music.clone(),
+        }
+    }
+
+    fn restore(&mut self, s: Snap) {
+        self.splits = s.splits;
+        self.dropped = s.dropped;
+        self.captions = s.captions;
+        self.titles = s.titles;
+        self.stickers = s.stickers;
+        self.speeds = s.speeds;
+        self.music = s.music;
+        self.sel = Sel::None;
+    }
+
+    fn undo(&mut self) {
+        if let Some(s) = self.undo.pop() {
+            self.redo.push(self.snap());
+            self.restore(s);
+        }
+    }
+
+    fn redo(&mut self) {
+        if let Some(s) = self.redo.pop() {
+            self.undo.push(self.snap());
+            self.restore(s);
+        }
+    }
+
+    /// A cut at the playhead.
+    fn split(&mut self) {
+        let t = self.pos;
+        let min = HNS / 10;
+        if t <= self.trim.0 + min || t >= self.trim.1 - min || self.splits.iter().any(|s| (s - t).abs() < min) {
+            return;
+        }
+        self.snapshot();
+        self.splits.push(t);
+        self.splits.sort();
+    }
+
+    /// The piece under the playhead out, or back in.
+    fn toggle_piece(&mut self, ctx: &egui::Context) {
+        let (a, b) = self.piece_at(self.pos);
+        if let Some(i) = self.dropped.iter().position(|(x, y)| *x <= self.pos && self.pos < *y) {
+            self.snapshot();
+            self.dropped.remove(i);
+            return;
+        }
+        if self.splits.is_empty() {
+            self.notice = Some(Notice::new(ctx, crate::i18n::l("сначала разрежь: s ставит разрез на месте курсора", "cut first: s puts a cut at the playhead")));
+            return;
+        }
+        let left: i64 = self.kept().iter().map(|(x, y)| (y.min(&b) - x.max(&a)).max(0)).sum();
+        let total: i64 = self.kept().iter().map(|(x, y)| y - x).sum();
+        if total - left < HNS / 5 {
+            self.notice = Some(Notice::new(ctx, crate::i18n::l("это последний кусок", "that's the last piece left")));
+            return;
+        }
+        self.snapshot();
+        self.dropped.push((a, b));
+    }
+
+    /// Cuts and the pieces taken out, over the filmstrip and the tracks.
+    fn paint_cuts(&self, p: &egui::Painter, strip: Rect, area: Rect) {
+        for (a, b) in &self.dropped {
+            let r = Rect::from_min_max(pos2(self.x_of(*a, area), area.top()), pos2(self.x_of(*b, area), area.bottom()));
+            p.rect_filled(r, 0, Color32::from_rgba_unmultiplied(20, 6, 6, 190));
+            // diagonal hatching
+            let clip = p.with_clip_rect(r);
+            let mut x = r.left() - r.height();
+            while x < r.right() {
+                clip.line_segment([pos2(x, r.bottom()), pos2(x + r.height(), r.top())], Stroke::new(1.0, Color32::from_rgba_unmultiplied(229, 72, 77, 70)));
+                x += 9.0;
+            }
+            if r.width() > 70.0 {
+                p.text(pos2(r.center().x, strip.center().y), Align2::CENTER_CENTER, crate::i18n::l("вырезано", "cut out"), font_medium(12.0), Color32::from_rgb(240, 140, 140));
+            }
+        }
+        for s in &self.splits {
+            let x = self.x_of(*s, area).round() + 0.5;
+            p.vline(x, area.y_range(), Stroke::new(1.5, TEXT.gamma_multiply(0.85)));
+            let tab = Rect::from_center_size(pos2(x, strip.top() + 6.0), vec2(8.0, 8.0));
+            p.rect_filled(tab, 2, TEXT);
+        }
+        // the piece under the playhead
+        if !self.splits.is_empty() {
+            let (a, b) = self.piece_at(self.pos);
+            let r = Rect::from_min_max(pos2(self.x_of(a, area), strip.top()), pos2(self.x_of(b, area), strip.bottom()));
+            p.rect_stroke(r.shrink(1.0), 3, Stroke::new(1.5, TEXT.gamma_multiply(0.6)), StrokeKind::Inside);
+        }
+    }
+
+    /// A subtitle at the playhead, as long as there's room before the next.
+    fn add_caption(&mut self) {
+        let from = self.pos.clamp(0, (self.dur() - HNS / 5).max(0));
+        if let Some(i) = self.captions.iter().position(|c| from >= c.from && from < c.to) {
+            self.select(Sel::Caption(i));
+            return;
+        }
+        let next = self.captions.iter().map(|c| c.from).filter(|t| *t > from).min().unwrap_or(i64::MAX);
+        let to = (from + CAP_LEN).min(next).min(self.dur()).max(from + HNS / 5);
+        self.snapshot();
+        self.captions.push(Caption { from, to, text: String::new() });
+        self.select(Sel::Caption(self.captions.len() - 1));
+    }
+
+    /// Where time `t` is on the timeline (the zoomed view).
     fn x_of(&self, t: i64, area: Rect) -> f32 {
-        area.left() + area.width() * (t as f64 / self.dur() as f64) as f32
+        area.left() + area.width() * ((t - self.view.0) as f64 / self.view_span() as f64) as f32
     }
 
     fn t_of(&self, x: f32, area: Rect) -> i64 {
-        (((x - area.left()) / area.width()).clamp(0.0, 1.0) as f64 * self.dur() as f64) as i64
+        (self.view.0 + (((x - area.left()) / area.width()).clamp(0.0, 1.0) as f64 * self.view_span() as f64) as i64).clamp(0, self.dur())
     }
 
     fn transport(&mut self, ui: &mut egui::Ui) {
@@ -789,6 +1158,7 @@ impl VideoApp {
             ui.label(egui::RichText::new(format!("/ {}", fmt_time(self.dur(), true))).font(mono(12.0)).color(FAINT));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
+                self.zoom_controls(ui);
                 if self.trimmed() {
                     if ui::button(ui, crate::i18n::t("сбросить"), ui::Kind::Ghost).on_hover_text(crate::i18n::t("вернуть всю длину")).clicked() {
                         self.trim = (0, self.dur());
@@ -798,7 +1168,7 @@ impl VideoApp {
                     ui.label(egui::RichText::new(lf!("останется {range} · {len}", "keeps {range} · {len}")).font(mono(12.0)).color(ACCENT));
                 } else {
                     ui.label(
-                        egui::RichText::new(crate::i18n::l("тяни края рамки, чтобы обрезать · i и o ставят начало и конец · m метка", "drag the frame's edges to trim · i and o set the start and end · m adds a marker"))
+                        egui::RichText::new(crate::i18n::l("края рамки обрезают · i и o начало и конец · ctrl+колесо приближает", "the frame's edges trim · i and o: start and end · ctrl+wheel zooms"))
                             .font(font(12.0))
                             .color(FAINT),
                     );
@@ -809,10 +1179,15 @@ impl VideoApp {
 
     fn filmstrip(&self, p: &egui::Painter, strip: Rect) {
         p.rect_filled(strip, 3, CANVAS);
-        let n = self.thumb_tex.len().max(1);
-        let w = strip.width() / n as f32;
+        let p = p.with_clip_rect(strip);
+        let n = self.thumb_tex.len().max(1) as i64;
+        let dur = self.dur();
         for (i, t) in self.thumb_tex.iter().enumerate() {
-            let cell = Rect::from_min_size(pos2(strip.left() + i as f32 * w, strip.top()), vec2(w, strip.height()));
+            let (a, b) = (dur * i as i64 / n, dur * (i as i64 + 1) / n);
+            let cell = Rect::from_min_max(pos2(self.x_of(a, strip), strip.top()), pos2(self.x_of(b, strip), strip.bottom()));
+            if cell.right() < strip.left() || cell.left() > strip.right() {
+                continue;
+            }
             if let Some(tex) = t {
                 let uv = ui::cover_uv(cell.size(), tex.size_vec2());
                 p.image(tex.id(), cell, uv, Color32::WHITE);
@@ -859,9 +1234,12 @@ impl VideoApp {
                 let half = wave_rect.height() / 2.0 - 3.0;
                 let cols = wave_rect.width().max(1.0) as usize;
                 let mut mesh = egui::Mesh::default();
+                // the peaks of the part in view
+                let (v0, span, dur) = (self.view.0 as f64, self.view_span() as f64, self.dur() as f64);
+                let at = |c: usize| ((v0 + span * c as f64 / cols as f64) / dur * peaks.len() as f64) as usize;
                 for c in 0..cols {
-                    let a = c * peaks.len() / cols;
-                    let b = ((c + 1) * peaks.len() / cols).max(a + 1).min(peaks.len());
+                    let a = at(c).min(peaks.len().saturating_sub(1));
+                    let b = at(c + 1).max(a + 1).min(peaks.len());
                     let pk = peaks[a..b].iter().cloned().fold(0.0f32, f32::max);
                     let hgt = (pk.sqrt() * vol).min(1.0) * half;
                     let x = wave_rect.left() + c as f32;
@@ -983,6 +1361,9 @@ impl VideoApp {
     }
 
     fn preview(&mut self, ui: &mut egui::Ui) {
+        if self.aspect == Aspect::Fit {
+            return self.preview_fit(ui);
+        }
         let r = ui.max_rect();
         self.preview_rect = r;
         let p = ui.painter().clone();
@@ -1000,11 +1381,32 @@ impl VideoApp {
             size = max;
         }
         let rect = Rect::from_center_size(area.center(), size);
-        let resp = ui.interact(rect, ui.scope_id().with("preview"), Sense::click());
+        let resp = ui.interact(rect, ui.scope_id().with("preview"), Sense::click_and_drag());
         if let Some(tex) = &self.tex {
-            p.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            p.image(tex.id(), rect, self.view_uv(), Color32::WHITE);
         }
         p.rect_stroke(rect, 0, Stroke::new(1.0, LINE), StrokeKind::Outside);
+        // 9:16 slice: what's kept is lit, a frame to drag sideways
+        let shown = if self.aspect == Aspect::Crop {
+            let (x, cw) = shorts::slice(self.info.width, self.info.height, self.crop_x);
+            let k = rect.width() / self.info.width.max(1) as f32;
+            let frame = Rect::from_min_size(pos2(rect.left() + x as f32 * k, rect.top()), vec2(cw as f32 * k, rect.height()));
+            let shade = Color32::from_black_alpha(170);
+            p.rect_filled(Rect::from_min_max(rect.min, pos2(frame.left(), rect.bottom())), 0, shade);
+            p.rect_filled(Rect::from_min_max(pos2(frame.right(), rect.top()), rect.max), 0, shade);
+            p.rect_stroke(frame, 0, Stroke::new(2.0, ACCENT), StrokeKind::Inside);
+            let room = rect.width() - frame.width();
+            if resp.dragged() && room > 1.0 {
+                self.crop_x = (self.crop_x + resp.drag_delta().x / room).clamp(0.0, 1.0);
+            }
+            if resp.hovered() || resp.dragged() {
+                ui.ctx().set_cursor_icon(if resp.dragged() { CursorIcon::Grabbing } else { CursorIcon::Grab });
+            }
+            frame
+        } else {
+            rect
+        };
+        self.texts_overlay(ui, shown);
         if resp.clicked() && self.job.is_none() {
             if self.playing { self.pause() } else { self.play() }
         }
@@ -1019,7 +1421,55 @@ impl VideoApp {
             }
         }
         self.job_overlay(ui, rect);
+        self.speech_overlay(ui, rect);
         self.done_card(ui, r);
+    }
+
+    /// "9:16 whole": the picture across the middle, the blurred copy (here
+    /// just dimmed) above and below, as it will be saved.
+    fn preview_fit(&mut self, ui: &mut egui::Ui) {
+        let r = ui.max_rect();
+        self.preview_rect = r;
+        let p = ui.painter().clone();
+        p.rect_filled(r, 0, CANVAS);
+        let area = r.shrink(18.0);
+        let mut size = vec2(area.height() * 9.0 / 16.0, area.height());
+        if size.x > area.width() {
+            size = vec2(area.width(), area.width() * 16.0 / 9.0);
+        }
+        let rect = Rect::from_center_size(area.center(), size);
+        let resp = ui.interact(rect, ui.scope_id().with("preview"), Sense::click());
+        if let Some(tex) = &self.tex {
+            let (x, cw) = shorts::slice(self.info.width, self.info.height, 0.5);
+            let w = self.info.width.max(1) as f32;
+            let view = self.view_uv();
+            let sub = |u0: f32, u1: f32| Rect::from_min_max(pos2(view.left() + view.width() * u0, view.top()), pos2(view.left() + view.width() * u1, view.bottom()));
+            p.image(tex.id(), rect, sub(x as f32 / w, (x + cw) as f32 / w), Color32::from_gray(110));
+            let band_h = rect.width() * self.info.height as f32 / w;
+            let band = Rect::from_center_size(rect.center(), vec2(rect.width(), band_h));
+            p.image(tex.id(), band, view, Color32::WHITE);
+        }
+        p.rect_stroke(rect, 0, Stroke::new(1.0, LINE), StrokeKind::Outside);
+        self.texts_overlay(ui, rect);
+        self.speech_overlay(ui, rect);
+        if resp.clicked() && self.job.is_none() {
+            if self.playing { self.pause() } else { self.play() }
+        }
+        if !self.playing && self.job.is_none() {
+            let c = rect.center();
+            let a = if resp.hovered() { 1.0 } else { 0.75 };
+            p.circle_filled(c, 28.0, Color32::from_rgba_unmultiplied(18, 18, 17, (215.0 * a) as u8));
+            icons::paint(&p, Rect::from_center_size(c + vec2(2.0, 0.0), Vec2::splat(26.0)), Icon::Play, 22.0, TEXT.gamma_multiply(a));
+        }
+        self.job_overlay(ui, rect);
+        self.done_card(ui, r);
+    }
+
+    /// The part of the picture in view now (zoom, the slow push in), as uv.
+    fn view_uv(&self) -> Rect {
+        let total = self.kept_speed().iter().map(|(a, b, s)| ((b - a) as f64 / *s as f64) as i64).sum::<i64>().max(1);
+        let (x, y, w, h) = self.transform.view(self.out_time(self.pos) as f32 / total as f32);
+        Rect::from_min_size(pos2(x, y), vec2(w, h))
     }
 
     fn job_overlay(&mut self, ui: &mut egui::Ui, rect: Rect) {
@@ -1105,6 +1555,23 @@ impl VideoApp {
         if !cmd && pressed(Key::M) {
             self.add_marker();
         }
+        if !cmd && pressed(Key::T) {
+            self.add_caption();
+        }
+        if !cmd && pressed(Key::S) {
+            self.split();
+        }
+        if (pressed(Key::Delete) || pressed(Key::Backspace)) && !self.delete_selected() {
+            self.toggle_piece(ctx);
+        }
+        if pressed(Key::Escape) {
+            self.sel = Sel::None;
+        }
+        if cmd && (pressed(Key::Y) || (shift && pressed(Key::Z))) {
+            self.redo();
+        } else if cmd && pressed(Key::Z) {
+            self.undo();
+        }
         let step = if shift { 5 * HNS } else { HNS };
         if pressed(Key::ArrowLeft) {
             self.seek(self.pos - step);
@@ -1149,13 +1616,12 @@ impl eframe::App for VideoApp {
         }
         self.tick(&ctx);
         self.poll_job(&ctx);
+        self.poll_speech(&ctx);
         if let Some(job) = &self.upload {
             match job.result() {
                 None => {
                     let pct = job.fraction() * 100.0;
-                    if self.notice.is_none() || ctx.input(|i| i.time) as i64 % 1 == 0 {
-                        self.notice = Some(Notice::new(&ctx, lf!("загрузка {pct:.0}%", "uploading {pct:.0}%")));
-                    }
+                    self.notice = Some(Notice::new(&ctx, lf!("загрузка {pct:.0}%", "uploading {pct:.0}%")));
                     ctx.request_repaint_after(std::time::Duration::from_millis(200));
                 }
                 Some(Ok(_)) => {
@@ -1173,7 +1639,9 @@ impl eframe::App for VideoApp {
             }
         }
         self.top_bar(ui);
+        self.tool_strip(ui);
         self.timeline(ui);
+        self.inspector(ui);
         self.shortcuts(&ctx);
         egui::CentralPanel::no_frame().show(ui, |ui| self.preview(ui));
         chrome::frame_border(&ctx);

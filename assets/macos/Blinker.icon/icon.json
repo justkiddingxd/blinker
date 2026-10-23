@@ -7,8 +7,25 @@
       "layers" : [
         {
           "glass" : true,
-          "image-name" : "sparkle.svg",
-          "name" : "sparkle"
+          "image-name" : "dot.svg",
+          "name" : "dot"
+        }
+      ],
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.15
+      }
+    },
+    {
+      "layers" : [
+        {
+          "glass" : true,
+          "image-name" : "glyph.svg",
+          "name" : "glyph"
         }
       ],
       "shadow" : {
@@ -17,7 +34,7 @@
       },
       "translucency" : {
         "enabled" : true,
-        "value" : 0.4
+        "value" : 0.15
       }
     }
   ],

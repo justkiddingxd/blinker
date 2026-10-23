@@ -85,6 +85,13 @@ fn kind_of(path: &Path) -> Option<Kind> {
 }
 
 /// The captures folder, newest first (dated folders included, three levels deep).
+/// The game a clip was made in: its folder in `save_dir/games`.
+fn game_of(path: &Path) -> Option<String> {
+    let folder = path.parent()?;
+    let name = folder.file_name()?.to_string_lossy().into_owned();
+    (folder.parent()?.file_name()? == config::GAMES_DIR).then_some(name)
+}
+
 fn scan(dir: &Path) -> Vec<Item> {
     fn walk(dir: &Path, depth: u32, out: &mut Vec<Item>) {
         let Ok(list) = std::fs::read_dir(dir) else { return };
@@ -212,9 +219,14 @@ pub fn run(shared: &Arc<Shared>, tab: Tab) {
         let show = Arc::new(AtomicBool::new(false));
         if let Some(ev) = event {
             let (show, ctx) = (show.clone(), cc.egui_ctx.clone());
+            let h = hwnd.map(|h| h as isize);
             std::thread::spawn(move || {
                 loop {
                     if win::wait_event(ev, 2000) {
+                        // forward now: a minimized window draws no frames
+                        if let Some(h) = h {
+                            win::raise(h as win::HWND);
+                        }
                         show.store(true, Ordering::SeqCst);
                         ctx.request_repaint();
                     }
@@ -238,6 +250,7 @@ pub fn run(shared: &Arc<Shared>, tab: Tab) {
             notice: None,
             content: Rect::NOTHING,
             renaming: None,
+            game: None,
             menu: None,
         }
     });
@@ -265,6 +278,8 @@ struct HistoryApp {
     /// A file being renamed: its path, the name typed so far, and whether the
     /// field still has to take focus.
     renaming: Option<(PathBuf, String, bool)>,
+    /// "videos and gifs" shows one game's clips only.
+    game: Option<String>,
     /// The right-click menu: its file, where it opened (the pointer) and its
     /// size last frame.
     menu: Option<(Item, egui::Pos2, Vec2)>,
@@ -480,8 +495,43 @@ impl HistoryApp {
             });
     }
 
-    fn grid(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame, kinds: &[Kind]) {
-        let items: Vec<Item> = self.items.iter().filter(|i| kinds.contains(&i.kind)).cloned().collect();
+    /// Clips of one game only, or all (the chips of the games found).
+    fn games_row(&mut self, ui: &mut egui::Ui) {
+        let mut games: Vec<(String, usize)> = Vec::new();
+        for it in self.items.iter().filter(|i| matches!(i.kind, Kind::Video | Kind::Other)) {
+            if let Some(g) = game_of(&it.path) {
+                match games.iter_mut().find(|(n, _)| *n == g) {
+                    Some((_, c)) => *c += 1,
+                    None => games.push((g, 1)),
+                }
+            }
+        }
+        if games.is_empty() {
+            self.game = None;
+            return;
+        }
+        games.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(2.0, 4.0);
+            if ui::filter(ui, l("все", "all"), self.game.is_none()).clicked() {
+                self.game = None;
+            }
+            for (g, n) in &games {
+                if ui::filter(ui, &format!("{g} {n}"), self.game.as_deref() == Some(g.as_str())).clicked() {
+                    self.game = Some(g.clone());
+                }
+            }
+        });
+        ui.add_space(6.0);
+    }
+
+    fn grid(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame, kinds: &[Kind], game: Option<&str>) {
+        let items: Vec<Item> = self
+            .items
+            .iter()
+            .filter(|i| kinds.contains(&i.kind) && game.is_none_or(|g| game_of(&i.path).as_deref() == Some(g)))
+            .cloned()
+            .collect();
         if items.is_empty() {
             empty(ui, l("здесь пока пусто", "nothing here yet"), l("снимки и записи из папки blinker появятся тут", "screenshots and recordings from the blinker folder show up here"));
             return;
@@ -875,9 +925,6 @@ impl eframe::App for HistoryApp {
                 win::force_foreground(h);
             }
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
         self.top_bar(ui);
         // on glass the list is clear: the frosted window shows through
         let fill = if theme::glass() { Color32::TRANSPARENT } else { BG };
@@ -894,8 +941,12 @@ impl eframe::App for HistoryApp {
                     ui.set_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = 0.0;
                     match self.tab {
-                        Tab::Shots => self.grid(ui, frame, &[Kind::Image]),
-                        Tab::Videos => self.grid(ui, frame, &[Kind::Video, Kind::Other]),
+                        Tab::Shots => self.grid(ui, frame, &[Kind::Image], None),
+                        Tab::Videos => {
+                            self.games_row(ui);
+                            let game = self.game.clone();
+                            self.grid(ui, frame, &[Kind::Video, Kind::Other], game.as_deref());
+                        }
                         Tab::Uploads => self.uploads_list(ui),
                     }
                 });

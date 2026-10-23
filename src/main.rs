@@ -3,6 +3,9 @@
 #[macro_use]
 mod i18n;
 mod beauty;
+mod brand;
+mod ocr;
+mod paddle;
 #[cfg_attr(target_os = "macos", path = "mac/capture.rs")]
 mod capture;
 mod chrome;
@@ -30,6 +33,7 @@ mod sk;
 mod sound;
 mod theme;
 mod toast;
+mod tray;
 #[cfg(windows)]
 mod traymenu;
 mod ui;
@@ -67,6 +71,14 @@ fn main() {
         }
         return;
     }
+    if let Some(i) = args.iter().position(|a| a == "--text") {
+        if let Some(path) = args.get(i + 1) {
+            let x = args.get(i + 2).and_then(|v| v.parse().ok()).unwrap_or(100);
+            let y = args.get(i + 3).and_then(|v| v.parse().ok()).unwrap_or(100);
+            ocr::run(path.into(), x, y);
+        }
+        return;
+    }
     if has("--quit") {
         win::signal_quit();
         return;
@@ -78,6 +90,14 @@ fn main() {
         } else {
             demo::run(PathBuf::from(dir), &lang, has("record"));
         }
+        return;
+    }
+    // blinker://update (the "update" button in blinker's Discord): the
+    // settings open and install the new version; blinker starts first if it
+    // isn't running
+    let url_update = args.iter().any(|a| a.trim_end_matches('/').eq_ignore_ascii_case("blinker://update"));
+    if url_update && win::window_class_exists("BlinkerShell") {
+        open_update();
         return;
     }
     if has("--settings") {
@@ -134,6 +154,7 @@ fn main() {
     };
     update::clean_up();
     let cfg = config::load();
+    win::register_url_scheme();
     if cfg.autostart {
         // Keep the Run entry pointing at the current executable.
         win::set_autostart(true);
@@ -152,8 +173,10 @@ fn main() {
     }
     if has("--capture") {
         shared.push(Command::CaptureRegion);
+    } else if url_update {
+        shared.push(Command::OpenUpdate);
     } else if sharex {
-        shared.push(Command::OpenHome(HomeTab::System));
+        shared.push(Command::OpenHome(HomeTab::Integrations));
     } else if !has("--background") {
         shared.push(Command::OpenHome(HomeTab::Capture));
     }
@@ -166,7 +189,7 @@ fn main() {
         win::signal_quit();
     }
     if restart {
-        update::relaunch();
+        update::relaunch(shared.quiet_restart.load(std::sync::atomic::Ordering::SeqCst));
     }
 }
 
@@ -184,6 +207,14 @@ fn open_history(tab: history::Tab) {
     let _ = std::fs::write(history::request_file(), tab.arg());
     if !win::signal_event(history::SHOW_EVENT) {
         spawn_self(&["--history".as_ref(), tab.arg().as_ref()]);
+    }
+}
+
+/// The settings, installing the new version.
+fn open_update() {
+    let _ = std::fs::write(home::request_file(), home::UPDATE_ARG);
+    if !win::signal_event(home::SHOW_EVENT) {
+        spawn_self(&["--settings".as_ref(), home::UPDATE_ARG.as_ref()]);
     }
 }
 
@@ -210,8 +241,10 @@ fn open_editor_image(img: &RgbaImage) {
 }
 
 fn run_settings(tab: Option<&str>) {
-    let tab = home::tab_from_arg(tab.unwrap_or(""));
-    let _ = std::fs::write(home::request_file(), home::tab_arg(tab));
+    let raw = tab.unwrap_or("");
+    let tab = home::tab_from_arg(raw);
+    // "update" goes on as it is: the running settings start the update
+    let _ = std::fs::write(home::request_file(), if raw == home::UPDATE_ARG { raw } else { home::tab_arg(tab) });
     if win::signal_event(home::SHOW_EVENT) {
         return;
     }
@@ -341,6 +374,16 @@ fn controller(shared: &Arc<Shared>) -> bool {
                     deliver(shared, out.image, out.action, out.rect, out.monitor);
                 }
             }
+            Command::CaptureText => {
+                let Some(snap) = capture::grab_desktop() else { continue };
+                if let Some(out) = overlay::text(shared, snap) {
+                    deliver(shared, out.image, out.action, out.rect, out.monitor);
+                }
+            }
+            Command::PickColor => {
+                let Some(snap) = capture::grab_desktop() else { continue };
+                overlay::pick(shared, snap);
+            }
             Command::CaptureScreen => {
                 let (x, y) = win::cursor_pos();
                 let Some(mon) = win::monitor_at(&win::monitors(), x, y) else { continue };
@@ -374,6 +417,7 @@ fn controller(shared: &Arc<Shared>) -> bool {
                 }
             }
             Command::OpenHome(tab) => open_settings(tab),
+            Command::OpenUpdate => open_update(),
             Command::OpenHistory => open_history(history::Tab::Shots),
             Command::OpenFolder => {
                 let dir = shared.config().save_dir;
@@ -402,13 +446,7 @@ fn finish_recording(shared: &Arc<Shared>, rec: record::Recording) {
 fn finish_gif(shared: &Arc<Shared>, f: record::Finished) {
     discord::count(true);
     let cfg = shared.config();
-    let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
-    let mut dst = cfg.videos_dir().join(format!("blinker {stamp}.gif"));
-    let mut n = 2;
-    while dst.exists() {
-        dst = cfg.videos_dir().join(format!("blinker {stamp} ({n}).gif"));
-        n += 1;
-    }
+    let dst = record::clip_path(&cfg, "blinker", "gif", record::game_now().as_deref());
     let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
     {
         let (src, dst, done) = (f.path.clone(), dst.clone(), done.clone());
@@ -428,6 +466,15 @@ fn finish_gif(shared: &Arc<Shared>, f: record::Finished) {
                 gif_fps: fps,
                 quality: None,
                 codec: record::encoder::Codec::H264,
+                aspect: vedit::shorts::Aspect::Original,
+                crop_x: 0.5,
+                captions: Vec::new(),
+                style: Default::default(),
+                titles: Vec::new(),
+                transform: Default::default(),
+                keep: Vec::new(),
+                stickers: Vec::new(),
+                music: None,
             };
             let (p, c) = (std::sync::atomic::AtomicU32::new(0), std::sync::atomic::AtomicBool::new(false));
             match vedit::export::gif(&src, &dst, &opt, &p, &c) {
@@ -494,6 +541,10 @@ fn deliver(shared: &Arc<Shared>, image: RgbaImage, action: Action, rect: win::IR
         }
         Action::Pin => {
             pin::spawn(&img, rect);
+            return;
+        }
+        Action::Text => {
+            ocr::spawn(&img, rect);
             return;
         }
         Action::Record => return,

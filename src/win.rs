@@ -38,7 +38,7 @@ pub fn init_process() {
     // settings, history, editors and pins go away with the tray
     let args: Vec<String> = std::env::args().skip(1).collect();
     let has = |f: &str| args.iter().any(|a| a == f);
-    let child = ["--pin", "--settings", "--history", "--edit", "--video"].iter().any(|f| has(f))
+    let child = ["--pin", "--text", "--settings", "--history", "--edit", "--video"].iter().any(|f| has(f))
         || args.iter().any(|a| !a.starts_with("--") && Path::new(a).is_file());
     if child {
         let ev = quit_event();
@@ -251,6 +251,17 @@ pub fn disable_transitions(hwnd: HWND) {
     dwm_set(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, 1i32);
 }
 
+/// A window already open, asked for again: out of the taskbar if it was
+/// minimized, and in front.
+pub fn raise(hwnd: HWND) {
+    unsafe {
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+        }
+    }
+    force_foreground(hwnd);
+}
+
 pub fn force_foreground(hwnd: HWND) {
     unsafe {
         let fg = GetForegroundWindow();
@@ -364,6 +375,9 @@ pub fn signal_event(name: &str) -> bool {
         if h.is_null() {
             return false;
         }
+        // the asking process holds the foreground (a hotkey, a tray click):
+        // it passes it on, so the window it wakes can come forward
+        AllowSetForegroundWindow(ASFW_ANY);
         SetEvent(h);
         CloseHandle(h);
         true
@@ -424,6 +438,19 @@ pub fn open_url(url: &str) {
     }
 }
 
+/// Some program opens `scheme://` links (the Discord app: `discord`).
+pub fn url_scheme_registered(scheme: &str) -> bool {
+    let sub = wide(scheme);
+    let mut key: HKEY = null_mut();
+    unsafe {
+        let ok = RegOpenKeyExW(HKEY_CLASSES_ROOT, sub.as_ptr(), 0, KEY_READ, &mut key) == 0;
+        if ok {
+            RegCloseKey(key);
+        }
+        ok
+    }
+}
+
 const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_VALUE: &str = "Blinker";
 
@@ -454,6 +481,28 @@ pub fn set_autostart(enable: bool) -> bool {
         RegCloseKey(key);
         ok
     }
+}
+
+/// `blinker://` links open this exe (`blinker://update`: the "update" button
+/// in blinker's Discord, through blinker.cool/update). Written for the
+/// current user on every start, so it follows the exe when it moves.
+pub fn register_url_scheme() {
+    let Ok(exe) = std::env::current_exe() else { return };
+    let set = |sub: &str, name: Option<&str>, value: &str| unsafe {
+        let mut key: HKEY = null_mut();
+        let path = wide(&format!("Software\\Classes\\blinker{sub}"));
+        if RegCreateKeyExW(HKEY_CURRENT_USER, path.as_ptr(), 0, null(), 0, KEY_SET_VALUE, null(), &mut key, null_mut()) != 0 {
+            return;
+        }
+        let name = name.map(wide);
+        let val = wide(value);
+        RegSetValueExW(key, name.as_ref().map_or(null(), |n| n.as_ptr()), 0, REG_SZ, val.as_ptr() as *const u8, (val.len() * 2) as u32);
+        RegCloseKey(key);
+    };
+    set("", None, "URL:blinker");
+    set("", Some("URL Protocol"), "");
+    set("\\DefaultIcon", None, &format!("\"{}\",0", exe.display()));
+    set("\\shell\\open\\command", None, &format!("\"{}\" \"%1\"", exe.display()));
 }
 
 /// A shortcut in the Start menu, which is how Windows search finds apps:

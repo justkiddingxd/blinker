@@ -30,6 +30,8 @@ pub enum Action {
     Beauty,
     /// Upload and copy the link.
     Upload,
+    /// Read the text in it (`ocr`).
+    Text,
 }
 
 pub struct Output {
@@ -48,16 +50,38 @@ pub struct Output {
 
 /// `record`: pick an area for a screen recording (no annotations, one action).
 pub fn run(shared: &Arc<Shared>, snap: Snapshot, record: bool, gif: bool) -> Option<Output> {
-    run_with(shared, snap, record, gif, None)
+    run_with(shared, snap, if record { Mode::Record } else { Mode::Capture }, gif, None)
+}
+
+/// "Text from the screen": a selection is read for its text right away.
+pub fn text(shared: &Arc<Shared>, snap: Snapshot) -> Option<Output> {
+    run_with(shared, snap, Mode::Text, false, None)
+}
+
+/// The color picker: the frozen screen with the loupe; a click copies the
+/// color under the pointer as hex.
+pub fn pick(shared: &Arc<Shared>, snap: Snapshot) {
+    run_with(shared, snap, Mode::Pick, false, None);
 }
 
 /// Scripted run for the README animation (see `demo`): off-screen, cloaked,
 /// driven by `player` instead of the mouse.
 pub fn run_demo(shared: &Arc<Shared>, snap: Snapshot, player: crate::demo::Player, record: bool) {
-    run_with(shared, snap, record, false, Some(player));
+    run_with(shared, snap, if record { Mode::Record } else { Mode::Capture }, false, Some(player));
 }
 
-fn run_with(shared: &Arc<Shared>, snap: Snapshot, record: bool, gif: bool, demo: Option<crate::demo::Player>) -> Option<Output> {
+/// What the overlay is for.
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    Capture,
+    /// An area for a screen recording (no annotations, one action).
+    Record,
+    Pick,
+    /// A selection is read for its text (no panels, one action).
+    Text,
+}
+
+fn run_with(shared: &Arc<Shared>, snap: Snapshot, mode: Mode, gif: bool, demo: Option<crate::demo::Player>) -> Option<Output> {
     let out: Rc<RefCell<Option<Output>>> = Rc::default();
     let out2 = out.clone();
     let target = IRect::new(snap.origin.0, snap.origin.1, snap.image.width() as i32, snap.image.height() as i32);
@@ -97,11 +121,11 @@ fn run_with(shared: &Arc<Shared>, snap: Snapshot, record: bool, gif: bool, demo:
             // frames are saved 1:1 with the made-up desktop
             cc.egui_ctx.set_pixels_per_point(1.0);
         }
-        let mut list = vec![OverlayApp::new(&cc.egui_ctx, &shared2, snap, target, hwnd, record, gif, demo, out2.clone(), None)];
+        let mut list = vec![OverlayApp::new(&cc.egui_ctx, &shared2, snap, target, hwnd, mode, gif, demo, out2.clone(), None)];
         for (i, s) in others.into_iter().enumerate() {
             let t = IRect::new(s.origin.0, s.origin.1, s.image.width() as i32, s.image.height() as i32);
             let title = format!("blinker overlay {}", i + 1);
-            list.push(OverlayApp::new(&cc.egui_ctx, &shared2, s, t, None, record, gif, None, out2.clone(), Some(title)));
+            list.push(OverlayApp::new(&cc.egui_ctx, &shared2, s, t, None, mode, gif, None, out2.clone(), Some(title)));
         }
         Overlays { list, engaged: None, active: 0 }
     });
@@ -118,7 +142,7 @@ impl OverlayApp {
         snap: Snapshot,
         target: IRect,
         hwnd: Option<win::HWND>,
-        record: bool,
+        mode: Mode,
         gif: bool,
         demo: Option<crate::demo::Player>,
         out: Rc<RefCell<Option<Output>>>,
@@ -128,13 +152,38 @@ impl OverlayApp {
         let tex = TiledTexture::new(ctx, &name, &snap.image, TextureOptions::NEAREST);
         let c = shared.config().editor_color;
         let primary = title.is_none();
-        let cfg = shared.config();
+        let (record, pick, ocr) = (mode == Mode::Record, mode == Mode::Pick, mode == Mode::Text);
+        let mut cfg = shared.config();
+        if pick {
+            // the picker is the loupe: always there, never zoomed out of sight
+            cfg.magnifier = true;
+            if cfg.loupe_cell <= 0.0 {
+                cfg.loupe_cell = LOUPE_STEPS[4];
+            }
+        }
         // instant mode copies on release: only the "select" step shows, the
         // first capture ends it
-        let tour = (!cfg.tour_done && !record)
+        let tour = (!cfg.tour_done && !record && !pick && !ocr)
             .then_some(Tour { step: TourStep::Select, at: f64::NAN, rect: None, shapes: 0 });
+        // QR codes are looked for while the user aims (not in the picker)
+        let qr: Arc<std::sync::Mutex<Option<Vec<Qr>>>> = Arc::default();
+        if mode == Mode::Capture && demo.is_none() && cfg.read_qr {
+            let (qr, img) = (qr.clone(), snap.image.clone());
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let found = find_qr(&img);
+                let any = !found.is_empty();
+                *qr.lock().unwrap() = Some(found);
+                if any {
+                    ctx.request_repaint();
+                }
+            });
+        }
         OverlayApp {
-            cfg: shared.config(),
+            qr,
+            qr_rects: Vec::new(),
+            qr_seen: None,
+            cfg,
             shared: shared.clone(),
             snap,
             tex,
@@ -169,6 +218,9 @@ impl OverlayApp {
             bar_mon: None,
             last_ppp: 1.0,
             record,
+            pick,
+            ocr,
+            picked_at: None,
             gif,
             draw_path: Vec::new(),
             clicked_window: None,
@@ -398,7 +450,75 @@ fn bar_step(w: f32, h: f32) -> usize {
     }
 }
 
+/// A QR code found on the frozen screen: its box (image px) and what it says.
+#[derive(Clone)]
+struct Qr {
+    rect: Rect,
+    text: String,
+}
+
+/// The QR codes in `img` (looked for in the background when a capture opens).
+fn find_qr(img: &RgbaImage) -> Vec<Qr> {
+    let gray = image::DynamicImage::ImageRgba8(img.clone()).to_luma8();
+    let mut prepared = rqrr::PreparedImage::prepare(gray);
+    let mut out = Vec::new();
+    for grid in prepared.detect_grids() {
+        let Ok((_, text)) = grid.decode() else { continue };
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            continue;
+        }
+        let xs = grid.bounds.iter().map(|p| p.x as f32);
+        let ys = grid.bounds.iter().map(|p| p.y as f32);
+        let (x0, x1) = (xs.clone().fold(f32::MAX, f32::min), xs.fold(f32::MIN, f32::max));
+        let (y0, y1) = (ys.clone().fold(f32::MAX, f32::min), ys.fold(f32::MIN, f32::max));
+        out.push(Qr { rect: Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)), text });
+    }
+    out
+}
+
+/// A link as the card shows it: the site, then the rest of the address.
+fn split_link(url: &str) -> (String, String) {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let rest = rest.strip_prefix("www.").unwrap_or(rest);
+    match rest.split_once('/') {
+        Some((host, path)) if !path.is_empty() => (host.to_string(), short(&format!("/{path}"), 46)),
+        Some((host, _)) => (host.to_string(), String::new()),
+        None => (short(rest, 40), String::new()),
+    }
+}
+
+/// `s` cut to `n` letters with an ellipsis.
+fn short(s: &str, n: usize) -> String {
+    if s.chars().count() > n { format!("{}…", s.chars().take(n - 1).collect::<String>()) } else { s.to_string() }
+}
+
+/// Overshoots a little, then settles (the brackets snapping on).
+fn back_out(t: f32) -> f32 {
+    let x = t - 1.0;
+    1.0 + 2.2 * x.powi(3) + 1.2 * x.powi(2)
+}
+
+/// A QR's text that opens in the browser (or another app).
+fn qr_link(text: &str) -> Option<String> {
+    let t = text.trim();
+    let lower = t.to_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("tg://") || lower.starts_with("mailto:") {
+        Some(t.to_string())
+    } else if lower.starts_with("www.") && !t.contains(' ') {
+        Some(format!("https://{t}"))
+    } else {
+        None
+    }
+}
+
 struct OverlayApp {
+    /// QR codes on the screen, once found (under each: where it leads).
+    qr: Arc<std::sync::Mutex<Option<Vec<Qr>>>>,
+    /// Their cards' rects (points), last frame: clicks there aren't a selection.
+    qr_rects: Vec<Rect>,
+    /// When they were first drawn (the scan animation starts then).
+    qr_seen: Option<f64>,
     /// macOS 26: a blurred copy of the screenshot the panels are made of,
     /// so they look like Liquid Glass over what's under them.
     glass: Option<TextureHandle>,
@@ -446,6 +566,12 @@ struct OverlayApp {
     bar_mon: Option<Rect>,
     last_ppp: f32,
     record: bool,
+    /// The color picker (see `pick`).
+    pick: bool,
+    /// "Text from the screen": the selection is read for its text at once.
+    ocr: bool,
+    /// When the picker copied: the note shows a moment, then it closes.
+    picked_at: Option<f64>,
     gif: bool,
     /// Pointer trail of the arrow being drawn (bends a Shift arrow).
     draw_path: Vec<Pos2>,
@@ -606,6 +732,18 @@ impl OverlayApp {
         }
     }
 
+    /// The action a finished selection takes at once, with no panel: reading
+    /// the text ("text from the screen"), or copying (instant mode).
+    fn quick(&self) -> Option<Action> {
+        if self.ocr {
+            Some(Action::Text)
+        } else if self.cfg.instant_mode {
+            Some(Action::Copy)
+        } else {
+            None
+        }
+    }
+
     fn cancel(&mut self, ctx: &egui::Context) {
         *self.out.borrow_mut() = None;
         if !matches!(self.phase, Phase::Closing { .. }) {
@@ -629,7 +767,8 @@ impl OverlayApp {
         }
         let p = pointer_pt.map(|p| pos2(p.x * ppp, p.y * ppp));
         let over_toolbar = pointer_pt.is_some_and(|p| {
-            self.toolbar_rect.is_some_and(|r| r.contains(p))
+            self.qr_rects.iter().any(|r| r.contains(p))
+                || self.toolbar_rect.is_some_and(|r| r.contains(p))
                 || self.top_rect.is_some_and(|r| r.contains(p))
                 || self.tour.as_ref().and_then(|t| t.rect).is_some_and(|r| r.contains(p))
         }) && matches!(self.drag, Drag::None);
@@ -707,7 +846,9 @@ impl OverlayApp {
                 .iter()
                 .position(|s| (*s - self.cfg.loupe_cell).abs() < 0.01)
                 .unwrap_or(4) as i32;
-            let next = (cur + if wheel > 0.0 { 1 } else { -1 }).clamp(0, LOUPE_STEPS.len() as i32 - 1) as usize;
+            // the picker never zooms the loupe out of sight
+            let lowest = if self.pick { 1 } else { 0 };
+            let next = (cur + if wheel > 0.0 { 1 } else { -1 }).clamp(lowest, LOUPE_STEPS.len() as i32 - 1) as usize;
             if next as i32 != cur {
                 let v = LOUPE_STEPS[next];
                 self.cfg.loupe_cell = v;
@@ -737,6 +878,22 @@ impl OverlayApp {
             self.cancel(ctx);
             return;
         }
+        // the color picker: a click copies the color under the pointer
+        if self.pick {
+            if self.picked_at.is_none()
+                && input.pointer.primary_released()
+                && let Some(p) = p
+            {
+                let img = &self.snap.image;
+                let px = img.get_pixel((p.x.max(0.0) as u32).min(img.width() - 1), (p.y.max(0.0) as u32).min(img.height() - 1));
+                let hex = format!("#{:02x}{:02x}{:02x}", px[0], px[1], px[2]);
+                crate::output::copy_text(&hex);
+                crate::sound::play_capture(&self.shared.config());
+                self.notice = Some((lf!("{hex} скопирован", "{hex} copied"), now));
+                self.picked_at = Some(now);
+            }
+            return;
+        }
         if self.sel.is_none()
             && self.tool != Tool::Region
             && (input.key_pressed(Key::Enter) || enter)
@@ -758,6 +915,7 @@ impl OverlayApp {
                 (CaptureKey::Edit, Action::Edit),
                 (CaptureKey::Pin, Action::Pin),
                 (CaptureKey::Beauty, Action::Beauty),
+                (CaptureKey::Text, Action::Text),
             ] {
                 if keys(k) {
                     return self.finish(action, now);
@@ -807,8 +965,8 @@ impl OverlayApp {
         {
             self.sel = Some(irect_to_rect(self.snap.monitor_at(p.x as i32, p.y as i32).rect));
             self.phase = Phase::Adjusting;
-            if self.cfg.instant_mode {
-                return self.finish(Action::Copy, now);
+            if let Some(a) = self.quick() {
+                return self.finish(a, now);
             }
         }
 
@@ -940,17 +1098,17 @@ impl OverlayApp {
                     self.clicked_window = self.window_at(p).map(|(r, h)| (self.clamp_rect(r), h));
                     self.sel = Some(self.clamp_rect(self.hover_target(p)));
                     self.phase = Phase::Adjusting;
-                    if self.cfg.instant_mode {
+                    if let Some(a) = self.quick() {
                         self.drag = Drag::None;
-                        return self.finish(Action::Copy, now);
+                        return self.finish(a, now);
                     }
                 }
                 Drag::Creating { .. } => {
                     if self.sel.is_some_and(|s| s.width() >= 2.0 && s.height() >= 2.0) {
                         self.phase = Phase::Adjusting;
-                        if self.cfg.instant_mode {
+                        if let Some(a) = self.quick() {
                             self.drag = Drag::None;
-                            return self.finish(Action::Copy, now);
+                            return self.finish(a, now);
                         }
                     } else {
                         self.sel = None;
@@ -1017,6 +1175,7 @@ impl OverlayApp {
 
         // focus frame: glides between windows while hovering, follows the mouse exactly while dragging
         let region_hover = self.tool == Tool::Region
+            && !self.pick
             && self.phase == Phase::Selecting
             && matches!(self.drag, Drag::None | Drag::Pending { .. });
         // Drawing without a selection: the window being drawn on stays lit
@@ -1044,7 +1203,8 @@ impl OverlayApp {
             (t, _) => t,
         };
 
-        let veil = Color32::from_rgba_unmultiplied(12, 12, 11, (150.0 * fade) as u8);
+        // the picker shows the screen as it is
+        let veil = Color32::from_rgba_unmultiplied(12, 12, 11, if self.pick { 0 } else { (150.0 * fade) as u8 });
         match self.anim {
             Some(f) => {
                 for r in [
@@ -1128,6 +1288,150 @@ impl OverlayApp {
         if appear < 1.0 || finishing.is_some() || closing.is_some() {
             ctx.request_repaint();
         }
+    }
+
+    /// Under each QR code on the screen: where it leads, and a button to go
+    /// there (or to copy what it says). Hidden while a selection is dragged.
+    fn qr_cards(&mut self, ctx: &egui::Context, ppp: f32) {
+        // last frame's cards: their size, for the glass under them
+        let last = std::mem::take(&mut self.qr_rects);
+        let found = self.qr.lock().unwrap().clone().unwrap_or_default();
+        if found.is_empty() || !matches!(self.drag, Drag::None) || matches!(self.phase, Phase::Finishing { .. } | Phase::Closing { .. }) {
+            return;
+        }
+        // the moment they were found: the scan plays from it
+        let now = ctx.input(|i| i.time);
+        let seen = *self.qr_seen.get_or_insert(now);
+        let age = (now - seen) as f32;
+        if age < 1.2 {
+            ctx.request_repaint();
+        }
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("qr-frames")));
+        let mut done = None;
+        for (i, q) in found.iter().enumerate() {
+            let r = Rect::from_min_max(pos2(q.rect.min.x / ppp, q.rect.min.y / ppp), pos2(q.rect.max.x / ppp, q.rect.max.y / ppp));
+            let age = (age - i as f32 * 0.08).max(0.0);
+            // corner brackets close in on the code
+            let t = back_out((age / 0.45).clamp(0.0, 1.0));
+            let a = (age / 0.2).clamp(0.0, 1.0);
+            let frame = r.expand(6.0 + (1.0 - t) * 22.0);
+            let len = (frame.width().min(frame.height()) * 0.24).max(10.0);
+            let stroke = Stroke::new(3.0, ACCENT.gamma_multiply(a));
+            for (c, dx, dy) in [(frame.left_top(), 1.0, 1.0), (frame.right_top(), -1.0, 1.0), (frame.left_bottom(), 1.0, -1.0), (frame.right_bottom(), -1.0, -1.0)] {
+                painter.add(egui::Shape::line(vec![c + vec2(0.0, dy * len), c, c + vec2(dx * len, 0.0)], stroke));
+            }
+            // a line of light sweeps down it once
+            let sweep = (age - 0.1) / 0.55;
+            if (0.0..1.0).contains(&sweep) {
+                let y = r.top() + r.height() * ui::ease_out_cubic(sweep);
+                let fade = (1.0 - sweep).min(sweep * 4.0).clamp(0.0, 1.0);
+                let glow = Rect::from_min_max(pos2(r.left(), (y - r.height() * 0.25).max(r.top())), pos2(r.right(), y));
+                let mut mesh = egui::Mesh::default();
+                let clear = ACCENT.gamma_multiply(0.0);
+                let lit = ACCENT.gamma_multiply(0.28 * fade);
+                mesh.colored_vertex(glow.left_top(), clear);
+                mesh.colored_vertex(glow.right_top(), clear);
+                mesh.colored_vertex(glow.right_bottom(), lit);
+                mesh.colored_vertex(glow.left_bottom(), lit);
+                mesh.add_triangle(0, 1, 2);
+                mesh.add_triangle(0, 2, 3);
+                painter.add(egui::Shape::mesh(mesh));
+                painter.hline(r.x_range(), y, Stroke::new(2.0, ACCENT.gamma_multiply(fade)));
+            }
+            // the card slides up under it
+            let card_t = ui::ease_out_cubic(((age - 0.18) / 0.3).clamp(0.0, 1.0));
+            if card_t <= 0.0 {
+                continue;
+            }
+            let link = qr_link(&q.text);
+            let (title, sub) = match &link {
+                Some(url) => split_link(url),
+                None => (crate::i18n::l("текст в qr-коде", "text in the qr code").to_string(), short(&q.text.replace(['\n', '\r'], " "), 46)),
+            };
+            let at = pos2(r.center().x, frame.bottom() + 12.0 + (1.0 - card_t) * 10.0);
+            if let Some(prev) = last.get(i) {
+                let size = prev.shrink(4.0).size();
+                self.paint_glass(ctx, Rect::from_min_size(at - vec2(size.x / 2.0, 0.0), size), card_t, ppp, &format!("qr-glass-{i}"), QR_RADIUS);
+            }
+            let glass = self.glass.is_some();
+            let resp = egui::Area::new(Id::unique(("qr-card", i)))
+                .order(egui::Order::Foreground)
+                .pivot(egui::Align2::CENTER_TOP)
+                .fixed_pos(at)
+                .show(ctx, |ui| {
+                    ui.set_opacity(card_t);
+                    // on glass the card is clear: the pane painted under it shows
+                    let frame = if glass {
+                        egui::Frame::new().corner_radius(QR_RADIUS)
+                    } else {
+                        egui::Frame::new()
+                            .fill(PANEL)
+                            .stroke(Stroke::new(1.0, LINE_HI))
+                            .corner_radius(QR_RADIUS)
+                            .shadow(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(110) })
+                    };
+                    frame.inner_margin(egui::Margin { left: 10, right: 8, top: 8, bottom: 8 }).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 10.0;
+                            // the kind of code, on an accent tile
+                            let (tile, _) = ui.allocate_exact_size(vec2(36.0, 36.0), egui::Sense::hover());
+                            ui.painter().rect_filled(tile, 10, ACCENT.gamma_multiply(0.15));
+                            crate::icons::paint(ui.painter(), Rect::from_center_size(tile.center(), Vec2::splat(18.0)), if link.is_some() { Icon::Link } else { Icon::Scan }, 15.0, ACCENT);
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 1.0;
+                                ui.set_max_width(250.0);
+                                ui.add_space(1.0);
+                                ui.add(egui::Label::new(egui::RichText::new(&title).font(font_medium(13.5)).color(TEXT)).truncate());
+                                if !sub.is_empty() {
+                                    ui.add(egui::Label::new(egui::RichText::new(&sub).font(font(11.5)).color(DIM)).truncate());
+                                }
+                            })
+                            .response
+                            .on_hover_text(&q.text);
+                            ui.add_space(4.0);
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            match &link {
+                                Some(_) => {
+                                    if ui::icon_button(ui, Icon::Copy, crate::i18n::l("копировать ссылку", "copy the link"), 34.0, false, ui::Kind::Ghost).clicked() {
+                                        done = Some((i, false));
+                                    }
+                                    if qr_button(ui, crate::i18n::l("перейти", "open"), Icon::Arrow).clicked() {
+                                        done = Some((i, true));
+                                    }
+                                }
+                                None => {
+                                    if qr_button(ui, crate::i18n::l("копировать", "copy"), Icon::Copy).clicked() {
+                                        done = Some((i, false));
+                                    }
+                                }
+                            }
+                        });
+                    });
+                });
+            self.qr_rects.push(resp.response.rect.expand(4.0));
+        }
+        if let Some((i, open)) = done {
+            let q = &found[i];
+            match qr_link(&q.text) {
+                Some(url) if open => win::open_url(&url),
+                Some(url) => crate::output::copy_text(&url),
+                None => crate::output::copy_text(&q.text),
+            }
+            // done here: the capture goes away
+            self.cancel(ctx);
+        }
+    }
+
+    /// The picker's note at the top of the display: what a click does.
+    fn pick_hint(&self, ctx: &egui::Context) {
+        let Some(m) = self.bar_mon else { return };
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("pick-hint")));
+        let text = crate::i18n::l("пипетка · клик копирует цвет · колесо — масштаб · esc — выход", "color picker · click copies the color · wheel zooms · esc leaves");
+        let galley = painter.layout_no_wrap(text.to_string(), font_medium(12.5), TEXT);
+        let size = galley.size() + vec2(24.0, 14.0);
+        let rect = Rect::from_center_size(pos2(m.center().x, m.top() + 16.0 + size.y / 2.0), size);
+        painter.rect_filled(rect, size.y / 2.0, Color32::from_rgba_unmultiplied(18, 18, 17, 230));
+        painter.galley(rect.min + vec2(12.0, 7.0), galley, TEXT);
     }
 
     /// Points at the top of snapshot monitor `m` that a notch covers (MacBooks;
@@ -1320,6 +1624,7 @@ impl OverlayApp {
                                 (CaptureKey::Edit, Icon::Edit, Action::Edit),
                                 (CaptureKey::Pin, Icon::Pin, Action::Pin),
                                 (CaptureKey::Beauty, Icon::Frame, Action::Beauty),
+                                (CaptureKey::Text, Icon::Scan, Action::Text),
                             ] {
                                 if ui::icon_button_sized(ui, icon, &tip(k), bar_btn(), bar_icon(), false, ui::Kind::Ghost).clicked() {
                                     act = Some(action);
@@ -1446,8 +1751,19 @@ impl OverlayApp {
                 ctx.request_repaint();
             }
         }
-        if self.active {
+        if self.active && !self.pick && !self.ocr {
             self.tools_bar(&ctx);
+        }
+        if self.pick && self.active {
+            self.pick_hint(&ctx);
+        }
+        self.qr_cards(&ctx, ppp);
+        if let Some(at) = self.picked_at {
+            if now - at >= 0.6 {
+                close_all(&ctx);
+            } else {
+                ctx.request_repaint();
+            }
         }
         self.last_ppp = ppp;
         let adjusting = self.phase == Phase::Adjusting;
@@ -1683,6 +1999,26 @@ impl OverlayApp {
         }
         self.tour = Some(tour);
     }
+}
+
+/// How round a QR card is.
+const QR_RADIUS: u8 = 14;
+
+/// The card's main action: an accent pill with its label and an icon after
+/// it, lighter on hover.
+fn qr_button(ui: &mut egui::Ui, label: &str, icon: Icon) -> egui::Response {
+    let g = ui.painter().layout_no_wrap(label.to_string(), font_semibold(13.0), ON_ACCENT);
+    let size = vec2(14.0 + g.size().x + 6.0 + 14.0 + 12.0, 34.0);
+    let (r, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let h = ui.ctx().animate_bool_with_time(resp.id.with("hover"), resp.hovered(), 0.1);
+    let p = ui.painter();
+    p.rect_filled(r, 17, crate::theme::lerp_color(ACCENT, ACCENT_HI, h));
+    // a highlight along the top edge, like a pressed-in key
+    p.rect_filled(Rect::from_min_size(r.min + vec2(12.0, 1.0), vec2(r.width() - 24.0, 1.0)), 0, Color32::from_white_alpha((40.0 + 30.0 * h) as u8));
+    p.galley(pos2(r.left() + 14.0, r.center().y - g.size().y / 2.0), g.clone(), ON_ACCENT);
+    let ic = Rect::from_center_size(pos2(r.left() + 14.0 + g.size().x + 6.0 + 7.0 + h * 1.5, r.center().y - h * 1.5), Vec2::splat(14.0));
+    crate::icons::paint(p, ic, icon, 12.0, ON_ACCENT);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// A key name on a little plate, as on a keyboard.
@@ -2314,4 +2650,45 @@ fn color_chip(ui: &mut egui::Ui, c: eframe::egui::Color32, selected: bool) -> eg
         p.rect_stroke(chip, 2, Stroke::new(1.0, LINE), StrokeKind::Inside);
     }
     resp.on_hover_cursor(CursorIcon::PointingHand)
+}
+
+#[cfg(test)]
+mod qr_tests {
+    /// A QR drawn on a big gray "screen" is found where it is, with its text.
+    #[test]
+    fn finds_a_code() {
+        let code = qrcode::QrCode::new(b"https://blinker.cool/update").unwrap();
+        let w = code.width();
+        let mut img = image::RgbaImage::from_pixel(1920, 1080, image::Rgba([60, 60, 60, 255]));
+        let (x0, y0, cell) = (900u32, 400u32, 6u32);
+        for y in 0..w + 8 {
+            for x in 0..w + 8 {
+                let dark = x >= 4 && y >= 4 && x < w + 4 && y < w + 4 && code[(x - 4, y - 4)] == qrcode::Color::Dark;
+                let c = if dark { 0 } else { 255 };
+                for dy in 0..cell {
+                    for dx in 0..cell {
+                        img.put_pixel(x0 + x as u32 * cell + dx, y0 + y as u32 * cell + dy, image::Rgba([c, c, c, 255]));
+                    }
+                }
+            }
+        }
+        let found = super::find_qr(&img);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].text, "https://blinker.cool/update");
+        assert!((found[0].rect.min.x - (x0 + 4 * cell) as f32).abs() < 12.0, "{:?}", found[0].rect);
+        assert_eq!(super::qr_link("www.example.com").as_deref(), Some("https://www.example.com"));
+        assert!(super::qr_link("WIFI:S:home;T:WPA;P:secret;;").is_none());
+    }
+
+    /// `BLINKER_TEST_QR` = a picture with QR codes: what they say.
+    #[test]
+    fn find() {
+        let Ok(path) = std::env::var("BLINKER_TEST_QR") else { return };
+        let img = image::open(path).unwrap().to_rgba8();
+        let t = std::time::Instant::now();
+        for q in super::find_qr(&img) {
+            eprintln!("{:?} {}", q.rect, q.text);
+        }
+        eprintln!("in {:?}", t.elapsed());
+    }
 }

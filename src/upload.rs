@@ -140,6 +140,12 @@ pub fn start_with(cfg: &Config, path: PathBuf, wait: Option<Arc<std::sync::atomi
                 }
                 let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
                 post(&target, &name, content_type(&path), &body, &markers, &j.progress).map(|p| {
+                    if matches!(target, Target::Blinker { .. })
+                        && content_type(&path) == "video/mp4"
+                        && let Some(d) = &p.delete_url
+                    {
+                        send_poster(d, &path);
+                    }
                     log_upload(&p, &path, body.len() as u64);
                     p.url
                 })
@@ -150,6 +156,25 @@ pub fn start_with(cfg: &Config, path: PathBuf, wait: Option<Arc<std::sync::atomi
         *j.result.lock().unwrap() = Some(r);
     });
     job
+}
+
+/// A video on a blinker server gets its first frame as a picture: Discord
+/// and Telegram show a player for the link only with one. Sent before the
+/// link reaches the clipboard, so a paste right away already has it.
+fn send_poster(delete_url: &str, path: &Path) {
+    if !delete_url.contains("/api/delete/") {
+        return;
+    }
+    let url = delete_url.replacen("/api/delete/", "/api/poster/", 1);
+    let Ok((r, _)) = crate::media::VideoReader::open(path, 1280, 720) else { return };
+    let _ = r.seek(crate::record::encoder::HNS / 3);
+    let Ok(Some((_, img))) = r.next() else { return };
+    let mut jpg = Vec::new();
+    let rgb = image::DynamicImage::ImageRgba8(img).to_rgb8();
+    if image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpg, 85).encode_image(&rgb).is_ok() {
+        // an older server says 404: the link still works, without the preview
+        let _ = send("POST", &url, &[("Content-Type", "image/jpeg".to_string())], &jpg, &AtomicU32::new(0));
+    }
 }
 
 /// Sends a tiny PNG to check the address and token.

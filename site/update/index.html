@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Update blinker</title>
+<meta name="robots" content="noindex">
+<link rel="icon" type="image/png" href="../assets/logo.png">
+<style>
+@font-face { font-family: "Fira Sans"; font-weight: 400; font-display: swap; src: url("../assets/fonts/FiraSans-Regular.ttf") format("truetype"); }
+@font-face { font-family: "Fira Sans"; font-weight: 600; font-display: swap; src: url("../assets/fonts/FiraSans-SemiBold.ttf") format("truetype"); }
+:root { --bg: #161615; --panel: #1d1d1c; --line: #2c2c2a; --text: #e6e4de; --dim: #8c8a84; --accent: #d8d5cd; --on-accent: #161615; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--text); font: 16px/1.5 "Fira Sans", system-ui, sans-serif; padding: 24px 16px; }
+.card { width: 100%; max-width: 420px; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 32px 28px; text-align: center; }
+img { width: 72px; height: 72px; }
+h1 { font-size: 22px; font-weight: 600; margin: 18px 0 6px; }
+p { margin: 0 0 22px; color: var(--dim); }
+.row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+a.btn { display: inline-block; padding: 10px 18px; border-radius: 10px; text-decoration: none; font-weight: 600; font-size: 15px; }
+.primary { background: var(--accent); color: var(--on-accent); }
+.ghost { color: var(--text); border: 1px solid var(--line); }
+.ghost:hover { border-color: var(--dim); }
+</style>
+</head>
+<body>
+<main class="card">
+  <img src="../assets/logo.png" alt="">
+  <h1 data-t="h">Updating blinker…</h1>
+  <p data-t="p">Your browser will ask to open blinker: allow it, and the update starts in its settings. Nothing happened? blinker isn't installed, or it's older than 0.4.1: download the new one.</p>
+  <div class="row">
+    <a class="btn primary" href="blinker://update" data-t="open">Open blinker</a>
+    <a class="btn ghost" href="https://blinker.cool" data-t="get">Download blinker</a>
+  </div>
+</main>
+<script>
+// the "update" button in blinker's Discord comes here: Discord only links
+// to web pages, this one hands the link on to the app (blinker://update)
+const ru = (navigator.language || "").toLowerCase().startsWith("ru");
+if (ru) {
+  document.documentElement.lang = "ru";
+  const t = {
+    h: "Обновляю blinker…",
+    p: "Браузер спросит, открыть ли blinker: разреши, и обновление начнётся в его настройках. Ничего не произошло? blinker не установлен или старше 0.4.1: скачай новый.",
+    open: "Открыть blinker",
+    get: "Скачать blinker",
+  };
+  for (const el of document.querySelectorAll("[data-t]")) el.textContent = t[el.dataset.t];
+  document.title = "Обновить blinker";
+}
+window.location.href = "blinker://update";
+</script>
+</body>
+</html>

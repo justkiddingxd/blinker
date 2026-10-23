@@ -155,16 +155,27 @@ pub struct Finished {
     pub tracks: Vec<Source>,
 }
 
-pub fn new_path(cfg: &Config, prefix: &str) -> PathBuf {
+/// A new clip's file: "blinker 2026-10-23 20-03-05.mp4", or with a game
+/// running "Dota 2 2026-10-23 20-03-05.mp4" in that game's folder.
+pub fn clip_path(cfg: &Config, prefix: &str, ext: &str, game: Option<&str>) -> PathBuf {
     let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
-    let dir = cfg.videos_dir();
-    let mut path = dir.join(format!("{prefix} {stamp}.mp4"));
+    let dir = cfg.clips_dir(game);
+    let prefix = match game.map(crate::config::safe_name).filter(|g| !g.is_empty()) {
+        Some(g) => prefix.replacen("blinker", &g, 1),
+        None => prefix.to_string(),
+    };
+    let mut path = dir.join(format!("{prefix} {stamp}.{ext}"));
     let mut n = 2;
     while path.exists() {
-        path = dir.join(format!("{prefix} {stamp} ({n}).mp4"));
+        path = dir.join(format!("{prefix} {stamp} ({n}).{ext}"));
         n += 1;
     }
     path
+}
+
+/// The game in front (or running) right now, by name.
+pub fn game_now() -> Option<String> {
+    crate::games::running().map(|g| g.name)
 }
 
 #[cfg(windows)]
@@ -276,7 +287,7 @@ pub fn start(
         let _ = std::fs::create_dir_all(&dir);
         dir.join(format!("rec-{}.mp4", chrono::Local::now().format("%Y%m%d-%H%M%S")))
     } else {
-        new_path(cfg, "blinker")
+        clip_path(cfg, "blinker", "mp4", game_now().as_deref())
     };
     let (enc, spec) = open_encoder(&path, &video_spec(cfg, w, h, 2, &monitor), tracks.len(), &gpu)?;
     let enc = Arc::new(enc);

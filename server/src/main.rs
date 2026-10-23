@@ -13,7 +13,13 @@
 //! <the file>
 //!
 //! 201 {"url": "https://…/<id>", "raw_url": "…", "delete_url": "…", "expires": <unix>}
+//!
+//! POST /api/poster/<id>?token=<the delete token>    (a video's first frame)
+//! <a JPEG or PNG>
 //! ```
+//!
+//! A video's page carries its size and that frame, so Discord and Telegram
+//! play the link right in the chat.
 //!
 //! Settings come from the environment (see `Settings::from_env`); files and
 //! their notes live in `DATA_DIR`, one `<id>.<ext>` and one `<id>.json` each.
@@ -32,6 +38,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tower::ServiceExt;
+
+mod mp4;
 
 const PAGE: &str = include_str!("page.html");
 const HOME: &str = include_str!("home.html");
@@ -103,6 +111,9 @@ struct Meta {
     width: u32,
     #[serde(default)]
     height: u32,
+    /// A video's picture for previews (`<id>.poster.<ext>`): its extension.
+    #[serde(default)]
+    poster: Option<String>,
 }
 
 struct App {
@@ -271,6 +282,8 @@ async fn upload(State(app): State<Arc<App>>, ConnectInfo(addr): ConnectInfo<Sock
     let Some((kind, mime, ext)) = sniff(&body) else {
         return error(StatusCode::UNSUPPORTED_MEDIA_TYPE, "only images, mp4 videos and sound");
     };
+    // the index first, so a messenger plays it before it has all of it
+    let body = if kind == "video" { Bytes::from(mp4::fast_start(body.to_vec())) } else { body };
     let raw_name = headers.get("x-filename").and_then(|v| v.to_str().ok()).map(percent_decode).unwrap_or_default();
     let mut markers: Vec<Marker> = headers
         .get("x-blinker-markers")
@@ -285,7 +298,12 @@ async fn upload(State(app): State<Arc<App>>, ConnectInfo(addr): ConnectInfo<Sock
 
     let id = random_id(10);
     let created = now();
-    let (width, height) = if kind == "image" { image_size(&body).unwrap_or((0, 0)) } else { (0, 0) };
+    let (width, height) = match kind {
+        "image" => image_size(&body),
+        "video" => mp4::video_size(&body),
+        _ => None,
+    }
+    .unwrap_or((0, 0));
     let meta = Meta {
         id: id.clone(),
         name: clean_name(&raw_name, ext),
@@ -299,6 +317,7 @@ async fn upload(State(app): State<Arc<App>>, ConnectInfo(addr): ConnectInfo<Sock
         delete_token: random_id(24),
         width,
         height,
+        poster: None,
     };
     let file = app.s.data.join(format!("{id}.{ext}"));
     if let Err(e) = tokio::fs::write(&file, &body).await {
@@ -357,9 +376,23 @@ async fn page(State(app): State<Arc<App>>, Path(id): Path<String>) -> Response {
                 meta.mime
             )
         }
-        "video" => format!(
-            r#"<meta property="og:type" content="video.other"><meta property="og:video" content="{raw}"><meta property="og:video:secure_url" content="{raw}"><meta property="og:video:type" content="video/mp4"><meta name="twitter:card" content="player">"#
-        ),
+        // the size and a picture: without them Discord and Telegram show
+        // a plain link instead of a player
+        "video" => {
+            let poster = poster_url(base, &meta).unwrap_or_else(|| FALLBACK_POSTER.to_string());
+            let page = format!("{base}/{}", meta.id);
+            let size = if meta.width > 0 && meta.height > 0 {
+                let (w, h) = (meta.width, meta.height);
+                format!(
+                    r#"<meta property="og:video:width" content="{w}"><meta property="og:video:height" content="{h}"><meta name="twitter:player:width" content="{w}"><meta name="twitter:player:height" content="{h}">"#
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                r#"<meta property="og:type" content="video.other"><meta property="og:video" content="{raw}"><meta property="og:video:url" content="{raw}"><meta property="og:video:secure_url" content="{raw}"><meta property="og:video:type" content="video/mp4">{size}<meta property="og:image" content="{poster}"><meta name="twitter:card" content="player"><meta name="twitter:player" content="{page}"><meta name="twitter:player:stream" content="{raw}"><meta name="twitter:player:stream:content_type" content="video/mp4"><meta name="twitter:image" content="{poster}">"#
+            )
+        }
         _ => format!(r#"<meta property="og:audio" content="{raw}"><meta property="og:audio:type" content="{}">"#, meta.mime),
     };
     let data = serde_json::json!({
@@ -373,6 +406,7 @@ async fn page(State(app): State<Arc<App>>, Path(id): Path<String>) -> Response {
         "raw": raw,
         "url": format!("{base}/{}", meta.id),
         "markers": meta.markers,
+        "poster": poster_url(base, &meta),
     });
     // JSON inside <script>: no way out of it
     let data = data.to_string().replace("</", "<\\/");
@@ -384,6 +418,13 @@ async fn page(State(app): State<Arc<App>>, Path(id): Path<String>) -> Response {
     let mut r = Html(html).into_response();
     r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     r
+}
+
+/// The picture of a video when blinker sent none.
+const FALLBACK_POSTER: &str = "https://blinker.cool/assets/discord-logo.png";
+
+fn poster_url(base: &str, meta: &Meta) -> Option<String> {
+    meta.poster.as_ref().map(|ext| format!("{base}/p/{}.{ext}", meta.id))
 }
 
 fn gone() -> Response {
@@ -428,6 +469,53 @@ fn mime_octet() -> mime::Mime {
 }
 
 #[derive(Deserialize)]
+struct PosterQuery {
+    token: String,
+}
+
+/// A video's first frame, sent right after the video by whoever uploaded it.
+async fn poster_upload(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Query<PosterQuery>, body: Bytes) -> Response {
+    let Some(mut meta) = read_meta(&app, &id).await else { return error(StatusCode::NOT_FOUND, "no such file") };
+    if meta.delete_token != q.token {
+        return error(StatusCode::FORBIDDEN, "wrong token");
+    }
+    if meta.kind != "video" {
+        return error(StatusCode::BAD_REQUEST, "only videos have a poster");
+    }
+    let ext = match sniff(&body) {
+        Some((_, _, ext @ ("jpg" | "png"))) => ext,
+        _ => return error(StatusCode::UNSUPPORTED_MEDIA_TYPE, "a jpeg or png"),
+    };
+    if let Some(old) = &meta.poster {
+        let _ = tokio::fs::remove_file(app.s.data.join(format!("{id}.poster.{old}"))).await;
+    }
+    if let Err(e) = tokio::fs::write(app.s.data.join(format!("{id}.poster.{ext}")), &body).await {
+        eprintln!("write poster {id}: {e}");
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "could not store the poster");
+    }
+    meta.poster = Some(ext.into());
+    let json = serde_json::to_vec_pretty(&meta).unwrap_or_default();
+    if tokio::fs::write(app.s.data.join(format!("{id}.json")), json).await.is_err() {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "could not store the poster");
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn poster_file(State(app): State<Arc<App>>, Path(name): Path<String>, req: Request) -> Response {
+    let Some((id, ext)) = name.split_once('.') else { return StatusCode::NOT_FOUND.into_response() };
+    let Some(meta) = read_meta(&app, id).await else { return StatusCode::NOT_FOUND.into_response() };
+    if meta.poster.as_deref() != Some(ext) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let mime = if ext == "png" { mime::IMAGE_PNG } else { mime::IMAGE_JPEG };
+    let path = app.s.data.join(format!("{id}.poster.{ext}"));
+    match tower_http::services::ServeFile::new_with_mime(&path, &mime).oneshot(req).await {
+        Ok(r) => r.map(Body::new),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+#[derive(Deserialize)]
 struct DeleteQuery {
     token: String,
 }
@@ -443,6 +531,9 @@ async fn delete(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Q
 
 async fn remove(app: &App, meta: &Meta) {
     let _ = tokio::fs::remove_file(app.s.data.join(format!("{}.{}", meta.id, meta.ext))).await;
+    if let Some(ext) = &meta.poster {
+        let _ = tokio::fs::remove_file(app.s.data.join(format!("{}.poster.{ext}", meta.id))).await;
+    }
     let _ = tokio::fs::remove_file(app.s.data.join(format!("{}.json", meta.id))).await;
     app.used.fetch_sub(meta.size.min(app.used.load(Ordering::Relaxed)), Ordering::Relaxed);
 }
@@ -502,6 +593,9 @@ async fn sweep(app: &App) -> u64 {
                 Some(m) => {
                     println!("expired {}", m.id);
                     let _ = tokio::fs::remove_file(app.s.data.join(format!("{}.{}", m.id, m.ext))).await;
+                    if let Some(ext) = &m.poster {
+                        let _ = tokio::fs::remove_file(app.s.data.join(format!("{}.poster.{ext}", m.id))).await;
+                    }
                     let _ = tokio::fs::remove_file(e.path()).await;
                 }
                 None => {
@@ -571,6 +665,8 @@ async fn main() {
         .route("/health", get(|| async { "ok" }))
         .route("/api/upload", post(upload).layer(DefaultBodyLimit::max(max + 1024 * 1024)))
         .route("/api/delete/{id}", get(delete))
+        .route("/api/poster/{id}", post(poster_upload).layer(DefaultBodyLimit::max(4 * 1024 * 1024)))
+        .route("/p/{name}", get(poster_file))
         .route("/assets/{name}", get(asset))
         .route("/f/{name}", get(file))
         .route("/{id}", get(page))

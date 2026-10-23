@@ -49,6 +49,17 @@ pub enum Icon {
     Trash,
     /// Opens a link (an arrow out of a box).
     Link,
+    /// Text read off a picture: lines inside a frame's corners.
+    Scan,
+    /// Scissors: a cut on the timeline.
+    Cut,
+    /// The undo arrow turned the other way.
+    Redo,
+    /// A plus: add something.
+    Plus,
+    Pipette,
+    /// Tiles over a list: the tray menu.
+    Menu,
 }
 
 /// (points, closed)
@@ -92,6 +103,19 @@ pub fn paths(icon: Icon) -> Vec<Path> {
             a.push(pos2(6.5, 13.5));
             vec![p(&[(5.5, 3.0), (2.5, 6.0), (5.5, 9.0)], false), (a, false)]
         }
+        Redo => {
+            let mut a = vec![pos2(13.5, 6.0), pos2(6.0, 6.0)];
+            a.extend(arc(6.0, 9.75, 3.75, 3.75, 270.0, 90.0));
+            a.push(pos2(9.5, 13.5));
+            vec![p(&[(10.5, 3.0), (13.5, 6.0), (10.5, 9.0)], false), (a, false)]
+        }
+        Cut => vec![
+            (arc(4.5, 12.0, 2.3, 2.3, 0.0, 360.0), true),
+            (arc(11.5, 12.0, 2.3, 2.3, 0.0, 360.0), true),
+            p(&[(6.2, 10.4), (12.0, 2.0)], false),
+            p(&[(9.8, 10.4), (4.0, 2.0)], false),
+        ],
+        Plus => vec![p(&[(8.0, 3.0), (8.0, 13.0)], false), p(&[(3.0, 8.0), (13.0, 8.0)], false)],
         Sound => vec![
             p(&[(2.5, 6.0), (5.0, 6.0), (8.5, 3.0), (8.5, 13.0), (5.0, 10.0), (2.5, 10.0)], true),
             (arc(9.0, 8.0, 2.5, 2.5, -50.0, 50.0), false),
@@ -163,6 +187,21 @@ pub fn paths(icon: Icon) -> Vec<Path> {
             p(&[(7.0, 6.5), (8.5, 5.5), (8.5, 11.0)], false),
         ],
         Text => vec![p(&[(3.0, 3.5), (13.0, 3.5)], false), p(&[(8.0, 3.5), (8.0, 13.5)], false)],
+        Pipette => vec![
+            p(&[(2.5, 13.5), (3.0, 11.5), (9.0, 5.5)], false),
+            p(&[(7.0, 4.5), (11.5, 9.0)], false),
+            (arc(11.6, 4.4, 2.3, 2.3, 120.0, 330.0), false),
+        ],
+        Menu => vec![rect(2.5, 2.5, 6.5, 6.5), rect(9.5, 2.5, 13.5, 6.5), p(&[(2.5, 10.0), (13.5, 10.0)], false), p(&[(2.5, 13.0), (10.5, 13.0)], false)],
+        Scan => vec![
+            p(&[(1.5, 5.0), (1.5, 1.5), (5.0, 1.5)], false),
+            p(&[(11.0, 1.5), (14.5, 1.5), (14.5, 5.0)], false),
+            p(&[(14.5, 11.0), (14.5, 14.5), (11.0, 14.5)], false),
+            p(&[(5.0, 14.5), (1.5, 14.5), (1.5, 11.0)], false),
+            p(&[(4.5, 6.0), (11.5, 6.0)], false),
+            p(&[(4.5, 8.5), (11.5, 8.5)], false),
+            p(&[(4.5, 11.0), (9.0, 11.0)], false),
+        ],
         Crop => vec![
             p(&[(4.5, 1.5), (4.5, 11.5), (14.5, 11.5)], false),
             p(&[(1.5, 4.5), (11.5, 4.5), (11.5, 14.5)], false),

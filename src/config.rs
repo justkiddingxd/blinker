@@ -260,6 +260,8 @@ impl PillPlace {
     /// The same for a whole-screen recording, where "auto" is by the tray.
     pub fn label_screen(self) -> &'static str {
         match self {
+            // a Mac's menu bar is up top: there it is just the corner
+            PillPlace::Auto if cfg!(target_os = "macos") => crate::i18n::l("в углу", "in the corner"),
             PillPlace::Auto => crate::i18n::l("у трея", "by the tray"),
             p => p.label(),
         }
@@ -329,6 +331,14 @@ pub struct Config {
     pub lang: String,
     /// Lay files out as `save_dir/2026-10-20/pics` and `.../videos`.
     pub sort_by_date: bool,
+    /// Clips made while a game runs: `save_dir/games/<game>`, named after it.
+    pub sort_by_game: bool,
+    /// While selecting, QR codes on the screen show where they lead.
+    pub read_qr: bool,
+    /// The whisper model for subtitles from speech (the video editor).
+    pub speech_model: crate::vedit::speech::Model,
+    /// How subtitles look in the video editor.
+    pub caption_style: crate::vedit::shorts::CaptionStyle,
     pub format: ImageFormat,
     pub jpeg_quality: u8,
     /// Save every capture to `save_dir` (feeds the library).
@@ -361,6 +371,10 @@ pub struct Config {
     pub hotkey_pause: Vec<String>,
     #[serde(deserialize_with = "one_or_many")]
     pub hotkey_replay: Vec<String>,
+    #[serde(deserialize_with = "one_or_many")]
+    pub hotkey_pick: Vec<String>,
+    #[serde(deserialize_with = "one_or_many")]
+    pub hotkey_text: Vec<String>,
     // Keys of the actions on a selected area: read inside a capture only.
     #[serde(deserialize_with = "one_or_many")]
     pub key_copy: Vec<String>,
@@ -374,6 +388,8 @@ pub struct Config {
     pub key_beauty: Vec<String>,
     #[serde(deserialize_with = "one_or_many")]
     pub key_upload: Vec<String>,
+    #[serde(deserialize_with = "one_or_many")]
+    pub key_text: Vec<String>,
     pub autostart: bool,
     pub editor_color: [u8; 4],
     pub editor_width: f32,
@@ -389,6 +405,8 @@ pub struct Config {
     pub sound_volume: f32,
     pub tray_click: TrayAction,
     pub tray_right_click: TrayAction,
+    /// The tray menu as laid out in the settings.
+    pub tray_menu: crate::tray::TrayMenu,
     /// Set: a single left click waits a moment to see whether a second comes.
     pub tray_double_click: TrayAction,
     /// Install new versions by itself (in the background, then restart).
@@ -455,6 +473,10 @@ impl Default for Config {
             save_dir: default_save_dir(),
             lang: String::new(),
             sort_by_date: true,
+            sort_by_game: true,
+            read_qr: true,
+            speech_model: Default::default(),
+            caption_style: Default::default(),
             format: ImageFormat::Png,
             jpeg_quality: 90,
             auto_save: true,
@@ -473,12 +495,15 @@ impl Default for Config {
             hotkey_record_gif: Vec::new(),
             hotkey_pause: default_keys(&["Ctrl+Alt+P"], &["Ctrl+Opt+P"]),
             hotkey_replay: default_keys(&["Ctrl+Alt+PrintScreen"], &["Opt+Shift+Cmd+7"]),
+            hotkey_pick: default_keys(&["Ctrl+Alt+C"], &["Ctrl+Opt+Cmd+C"]),
+            hotkey_text: default_keys(&["Ctrl+Alt+T"], &["Ctrl+Opt+Cmd+T"]),
             key_copy: default_keys(&["Ctrl+C"], &["Cmd+C"]),
             key_save: default_keys(&["Ctrl+S"], &["Cmd+S"]),
             key_edit: vec!["E".into()],
             key_pin: vec!["P".into()],
             key_beauty: vec!["B".into()],
             key_upload: vec!["U".into()],
+            key_text: vec!["T".into()],
             autostart: false,
             editor_color: [0xE3, 0xB3, 0x41, 255],
             editor_width: 4.0,
@@ -495,6 +520,7 @@ impl Default for Config {
             // a Mac opens a menu bar icon's menu on a click
             tray_click: if cfg!(target_os = "macos") { TrayAction::Menu } else { TrayAction::Region },
             tray_right_click: if cfg!(target_os = "macos") { TrayAction::Region } else { TrayAction::Menu },
+            tray_menu: Default::default(),
             tray_double_click: TrayAction::Nothing,
             auto_update: false,
             discord_presence: false,
@@ -557,10 +583,14 @@ pub enum HotkeyAction {
     RecordGif,
     Pause,
     Replay,
+    /// The color under the pointer, as hex, to the clipboard.
+    Pick,
+    /// Select an area and read the text in it.
+    Text,
 }
 
 impl HotkeyAction {
-    pub const ALL: [HotkeyAction; 8] = [
+    pub const ALL: [HotkeyAction; 10] = [
         HotkeyAction::Region,
         HotkeyAction::Screen,
         HotkeyAction::Window,
@@ -569,6 +599,8 @@ impl HotkeyAction {
         HotkeyAction::RecordGif,
         HotkeyAction::Pause,
         HotkeyAction::Replay,
+        HotkeyAction::Pick,
+        HotkeyAction::Text,
     ];
 
     pub fn label(self) -> &'static str {
@@ -581,6 +613,8 @@ impl HotkeyAction {
             HotkeyAction::RecordGif => crate::i18n::t("запись gif"),
             HotkeyAction::Pause => crate::i18n::t("пауза записи"),
             HotkeyAction::Replay => crate::i18n::t("сохранить повтор"),
+            HotkeyAction::Pick => crate::i18n::l("пипетка", "color picker"),
+            HotkeyAction::Text => crate::i18n::l("текст с экрана", "text from the screen"),
         }
     }
 
@@ -594,6 +628,8 @@ impl HotkeyAction {
             HotkeyAction::RecordGif => crate::i18n::t("без звука, повторное нажатие останавливает"),
             HotkeyAction::Pause => "",
             HotkeyAction::Replay => crate::i18n::t("работает, если повтор включён"),
+            HotkeyAction::Pick => crate::i18n::l("клик копирует цвет в hex", "a click copies the color as hex"),
+            HotkeyAction::Text => crate::i18n::l("выдели область: текст в ней распознается и скопируется", "select an area: its text is read and copied"),
         }
     }
 }
@@ -608,11 +644,12 @@ pub enum CaptureKey {
     Pin,
     Beauty,
     Upload,
+    Text,
 }
 
 impl CaptureKey {
-    pub const ALL: [CaptureKey; 6] =
-        [CaptureKey::Copy, CaptureKey::Save, CaptureKey::Edit, CaptureKey::Pin, CaptureKey::Beauty, CaptureKey::Upload];
+    pub const ALL: [CaptureKey; 7] =
+        [CaptureKey::Copy, CaptureKey::Save, CaptureKey::Edit, CaptureKey::Pin, CaptureKey::Beauty, CaptureKey::Upload, CaptureKey::Text];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -622,6 +659,7 @@ impl CaptureKey {
             CaptureKey::Pin => crate::i18n::t("закрепить поверх окон"),
             CaptureKey::Beauty => crate::i18n::t("красивый снимок"),
             CaptureKey::Upload => crate::i18n::t("загрузить и скопировать ссылку"),
+            CaptureKey::Text => crate::i18n::l("распознать текст", "recognize text"),
         }
     }
 
@@ -642,6 +680,7 @@ impl Config {
             CaptureKey::Pin => &self.key_pin,
             CaptureKey::Beauty => &self.key_beauty,
             CaptureKey::Upload => &self.key_upload,
+            CaptureKey::Text => &self.key_text,
         }
     }
 
@@ -653,6 +692,7 @@ impl Config {
             CaptureKey::Pin => &mut self.key_pin,
             CaptureKey::Beauty => &mut self.key_beauty,
             CaptureKey::Upload => &mut self.key_upload,
+            CaptureKey::Text => &mut self.key_text,
         }
     }
 
@@ -671,6 +711,8 @@ impl Config {
             HotkeyAction::RecordGif => &self.hotkey_record_gif,
             HotkeyAction::Pause => &self.hotkey_pause,
             HotkeyAction::Replay => &self.hotkey_replay,
+            HotkeyAction::Pick => &self.hotkey_pick,
+            HotkeyAction::Text => &self.hotkey_text,
         }
     }
 
@@ -684,6 +726,8 @@ impl Config {
             HotkeyAction::RecordGif => &mut self.hotkey_record_gif,
             HotkeyAction::Pause => &mut self.hotkey_pause,
             HotkeyAction::Replay => &mut self.hotkey_replay,
+            HotkeyAction::Pick => &mut self.hotkey_pick,
+            HotkeyAction::Text => &mut self.hotkey_text,
         }
     }
 
@@ -695,6 +739,19 @@ impl Config {
     /// Folder for today's recordings and replays (created on demand).
     pub fn videos_dir(&self) -> PathBuf {
         self.dated_dir("videos")
+    }
+
+    /// Folder for a clip: the game's own when one runs (and that's on),
+    /// else today's videos.
+    pub fn clips_dir(&self, game: Option<&str>) -> PathBuf {
+        match game.map(safe_name).filter(|g| self.sort_by_game && !g.is_empty()) {
+            Some(g) => {
+                let dir = self.save_dir.join(GAMES_DIR).join(g);
+                let _ = std::fs::create_dir_all(&dir);
+                dir
+            }
+            None => self.videos_dir(),
+        }
     }
 
     fn dated_dir(&self, kind: &str) -> PathBuf {
@@ -715,6 +772,15 @@ impl Config {
 
 /// Default bindings: Windows keyboards have PrtSc; on a Mac ⇧⌘3…⌘5 belong to
 /// the system, so blinker takes the free digits next to them.
+/// The folder of games' clips in `save_dir`.
+pub const GAMES_DIR: &str = "games";
+
+/// A game's name made fit for a file or folder name.
+pub fn safe_name(s: &str) -> String {
+    let s: String = s.chars().map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { ' ' } else { c }).collect();
+    s.split_whitespace().collect::<Vec<_>>().join(" ").trim_end_matches('.').trim().to_string()
+}
+
 fn default_keys(windows: &[&str], mac: &[&str]) -> Vec<String> {
     let keys = if cfg!(target_os = "macos") { mac } else { windows };
     keys.iter().map(|k| k.to_string()).collect()
@@ -775,6 +841,7 @@ pub fn load() -> Config {
     if knows {
         cfg.tour_done = true;
     }
+    cfg.tray_menu = std::mem::take(&mut cfg.tray_menu).fixed();
     // a new install has nothing new to tell; an update from a version
     // without this field does
     if fresh {

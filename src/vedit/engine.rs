@@ -35,8 +35,8 @@ impl Gain {
 enum Cmd {
     /// Show the frame at `t` (paused).
     Show(i64),
-    /// Play `from..to`, `from` maps to `start`.
-    Play { from: i64, to: i64, start: Instant },
+    /// Play `from..to` at `rate` (2 = twice as fast), `from` maps to `start`.
+    Play { from: i64, to: i64, start: Instant, rate: f32 },
     Pause,
 }
 
@@ -68,15 +68,17 @@ impl Engine {
         let _ = self.cmd.send(Cmd::Show(t));
     }
 
-    pub fn play(&mut self, from: i64, to: i64) {
+    /// Plays `from..to` at `rate`; `music`: a music file mixed in, from its
+    /// position (100 ns; negative: it starts that much later) and at its gain.
+    pub fn play(&mut self, from: i64, to: i64, rate: f32, music: Option<(PathBuf, i64, f32)>) {
         self.pause();
         self.ended.store(false, Ordering::SeqCst);
         let start = Instant::now() + Duration::from_millis(60);
-        let _ = self.cmd.send(Cmd::Play { from, to, start });
-        if !self.streams.is_empty() {
+        let _ = self.cmd.send(Cmd::Play { from, to, start, rate });
+        if !self.streams.is_empty() || music.is_some() {
             let stop = Arc::new(AtomicBool::new(false));
             let (p, s, g, st) = (self.path.clone(), self.streams.clone(), self.gains.clone(), stop.clone());
-            std::thread::spawn(move || audio_thread(&p, &s, from, to, start, g, st));
+            std::thread::spawn(move || audio_thread(&p, &s, from, to, start, rate, music, g, st));
             self.audio_stop = Some(stop);
         }
     }
@@ -169,7 +171,7 @@ fn video_thread(
                     publish(*lt, img);
                 }
             }
-            Cmd::Play { from, to, start } => {
+            Cmd::Play { from, to, start, rate } => {
                 let _ = reader.seek(from);
                 last = None;
                 ahead = None;
@@ -186,7 +188,7 @@ fn video_thread(
                         last = Some((ts, img));
                         continue;
                     }
-                    let due = start + Duration::from_nanos(((ts - from).max(0) * 100) as u64);
+                    let due = start + Duration::from_nanos((((ts - from).max(0) * 100) as f64 / rate.max(0.1) as f64) as u64);
                     loop {
                         match rx.try_recv() {
                             Ok(c) => {
@@ -322,10 +324,24 @@ impl TrackCursor {
     }
 }
 
-fn audio_thread(path: &Path, streams: &[u32], from: i64, to: i64, start: Instant, gains: Arc<Mutex<Vec<Gain>>>, stop: Arc<AtomicBool>) {
+#[allow(clippy::too_many_arguments)]
+fn audio_thread(
+    path: &Path,
+    streams: &[u32],
+    from: i64,
+    to: i64,
+    start: Instant,
+    rate: f32,
+    music: Option<(PathBuf, i64, f32)>,
+    gains: Arc<Mutex<Vec<Gain>>>,
+    stop: Arc<AtomicBool>,
+) {
     crate::media::startup();
     let mut tracks: Vec<TrackCursor> = streams.iter().filter_map(|s| TrackCursor::open(path, *s, from)).collect();
-    if tracks.is_empty() {
+    // the music runs at its own pace, whatever the clip's speed
+    let mut tune = music.as_ref().and_then(|(p, at, _)| crate::media::probe(p).ok().and_then(|i| i.audio_streams.first().copied()).and_then(|s| TrackCursor::open(p, s, *at)));
+    let tune_gain = music.as_ref().map_or(0.0, |m| m.2);
+    if tracks.is_empty() && tune.is_none() {
         return;
     }
     let Ok(mut sink) = rodio::DeviceSinkBuilder::open_default_sink() else { return };
@@ -339,7 +355,9 @@ fn audio_thread(path: &Path, streams: &[u32], from: i64, to: i64, start: Instant
     }
     player.append(Stream { rx, buf: Vec::new(), pos: 0, done: false });
     let chunk = 4800usize; // 50 ms of stereo frames
-    let total = ((to - from).max(0) as i128 * 48_000 / HNS as i128) as usize * 2;
+    // what's heard: the clip's span at `rate`
+    let rate = rate.clamp(0.1, 8.0);
+    let total = (((to - from).max(0) as f64 / rate as f64) as i128 * 48_000 / HNS as i128) as usize * 2;
     let mut sent = 0usize;
     let began = Instant::now();
     while sent < total && !stop.load(Ordering::SeqCst) {
@@ -352,13 +370,22 @@ fn audio_thread(path: &Path, streams: &[u32], from: i64, to: i64, start: Instant
         let n = chunk.min(total - sent);
         let g = gains.lock().unwrap().clone();
         let mut mix = vec![0f32; n];
+        // a faster piece: more of the clip squeezed into the same time (the
+        // saved file keeps the pitch; here it just plays faster)
+        let need = if (rate - 1.0).abs() < 0.01 { n } else { (((n / 2) as f32 * rate).ceil() as usize).max(1) * 2 };
         for (i, t) in tracks.iter_mut().enumerate() {
             let k = g.get(i).map(|g| g.factor()).unwrap_or(1.0);
-            let pcm = t.take(n);
+            let pcm = t.take(need);
+            let pcm = if need == n { pcm } else { resample(&pcm, n) };
             if k > 0.0 {
                 for (m, s) in mix.iter_mut().zip(pcm) {
                     *m += s as f32 / 32768.0 * k;
                 }
+            }
+        }
+        if let Some(t) = &mut tune {
+            for (m, s) in mix.iter_mut().zip(t.take(n)) {
+                *m += s as f32 / 32768.0 * tune_gain;
             }
         }
         for m in &mut mix {
@@ -375,6 +402,26 @@ fn audio_thread(path: &Path, streams: &[u32], from: i64, to: i64, start: Instant
     } else {
         player.sleep_until_end();
     }
+}
+
+/// Interleaved stereo `pcm` stretched or squeezed to `n` samples (linear).
+fn resample(pcm: &[i16], n: usize) -> Vec<i16> {
+    let (src, dst) = (pcm.len() / 2, n / 2);
+    if src == 0 || dst == 0 {
+        return vec![0; n];
+    }
+    let mut out = Vec::with_capacity(n);
+    for i in 0..dst {
+        let f = i as f32 * (src - 1) as f32 / (dst.max(2) - 1) as f32;
+        let (a, k) = (f as usize, f.fract());
+        let b = (a + 1).min(src - 1);
+        for c in 0..2 {
+            let v = pcm[a * 2 + c] as f32 * (1.0 - k) + pcm[b * 2 + c] as f32 * k;
+            out.push(v as i16);
+        }
+    }
+    out.resize(n, 0);
+    out
 }
 
 // ---------------------------------------------------------------------------

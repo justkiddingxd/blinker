@@ -268,6 +268,7 @@ void bk_window_activate(void *w) {
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
         [NSApp activateIgnoringOtherApps:YES];
 #pragma clang diagnostic pop
+        if (win.isMiniaturized) [win deminiaturize:nil];
         [win makeKeyAndOrderFront:nil];
         [win orderFrontRegardless];
     });
@@ -645,6 +646,7 @@ typedef struct {
 @property(nonatomic) bk_tray_cb tray;
 @property(nonatomic) bk_menu_cb menu;
 @property(nonatomic) bk_notify_cb reopen;
+@property(nonatomic) bk_notify_cb url;
 @end
 
 @implementation BKTarget
@@ -677,6 +679,13 @@ typedef struct {
     (void)reply;
     if (self.reopen) self.reopen(0);
 }
+- (void)handleURL:(NSAppleEventDescriptor *)event withReply:(NSAppleEventDescriptor *)reply {
+    (void)reply;
+    NSString *s = [[event paramDescriptorForKeyword:keyDirectObject] stringValue].lowercaseString;
+    while ([s hasSuffix:@"/"]) s = [s substringToIndex:s.length - 1];
+    // only the links blinker knows: 1 = update
+    if (self.url && [s isEqualToString:@"blinker://update"]) self.url(1);
+}
 @end
 
 static NSStatusItem *g_item;
@@ -692,6 +701,19 @@ void bk_on_reopen(bk_notify_cb cb) {
                                                          andSelector:@selector(handleReopen:withReply:)
                                                        forEventClass:kCoreEventClass
                                                           andEventID:kAEReopenApplication];
+    });
+}
+
+/// A `blinker://` link was opened (the app claims the scheme in Info.plist):
+/// `cb(1)` for `blinker://update`.
+void bk_on_url(bk_notify_cb cb) {
+    bk_on_main(^{
+        if (!g_target) g_target = [BKTarget new];
+        g_target.url = cb;
+        [NSAppleEventManager.sharedAppleEventManager setEventHandler:g_target
+                                                         andSelector:@selector(handleURL:withReply:)
+                                                       forEventClass:kInternetEventClass
+                                                          andEventID:kAEGetURL];
     });
 }
 

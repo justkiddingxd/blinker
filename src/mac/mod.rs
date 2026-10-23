@@ -218,7 +218,7 @@ fn kind() -> Kind {
 pub fn init_process() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let has = |f: &str| args.iter().any(|a| a == f);
-    let kind = if has("--pin") || has("--demo") {
+    let kind = if has("--pin") || has("--text") || has("--demo") {
         Kind::Pin
     } else if has("--settings") || has("--history") || has("--edit") || has("--video") || args.iter().any(|a| !a.starts_with("--") && Path::new(a).is_file()) {
         Kind::Regular
@@ -491,6 +491,11 @@ pub fn cloak(hwnd: HWND, on: bool) {
     unsafe { ffi::bk_window_set_alpha(hwnd, if on { 0.0 } else { 1.0 }) };
 }
 
+/// A window already open, asked for again: back from the Dock and in front.
+pub fn raise(hwnd: HWND) {
+    force_foreground(hwnd);
+}
+
 pub fn force_foreground(hwnd: HWND) {
     unsafe { ffi::bk_window_activate(hwnd) };
 }
@@ -576,6 +581,15 @@ pub fn open_path(path: &Path) {
 }
 
 /// Opens a web address in the default browser.
+/// Some program opens `scheme://` links: here, the app for it is installed
+/// (only Discord is asked about).
+pub fn url_scheme_registered(scheme: &str) -> bool {
+    scheme == "discord"
+        && ["/Applications/Discord.app".into(), dirs::home_dir().unwrap_or_default().join("Applications/Discord.app")]
+            .iter()
+            .any(|p: &std::path::PathBuf| p.exists())
+}
+
 pub fn open_url(url: &str) {
     let u = ffi::cstr(url);
     unsafe { ffi::bk_open_url(u.as_ptr()) };
@@ -596,6 +610,10 @@ fn xml_escape(s: &str) -> String {
 }
 
 /// Open at login: a per-user launch agent that starts the tray (`--background`).
+/// `blinker://` links: the app's Info.plist claims the scheme, the tray
+/// takes the links (`shell::on_url`).
+pub fn register_url_scheme() {}
+
 pub fn set_autostart(enable: bool) -> bool {
     let Some(path) = agent_path() else { return false };
     if !enable {
@@ -638,6 +656,11 @@ pub fn set_autostart(enable: bool) -> bool {
 }
 
 /// Screen recording permission (asks once when `request`).
+/// The Accessibility permission (parts of windows); `prompt`: ask for it.
+pub fn ax_trusted(prompt: bool) -> bool {
+    unsafe { ffi::bk_ax_trusted(prompt as i32) != 0 }
+}
+
 pub fn screen_access(request: bool) -> bool {
     unsafe { ffi::bk_screen_access(request as i32) != 0 }
 }

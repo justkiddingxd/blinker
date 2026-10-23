@@ -47,7 +47,7 @@ Capture, annotate and share in a couple of keystrokes. It lives in the tray (the
 - **Window recording** keeps following the window even when it's covered or moved, and the control pill follows it too.
 - **System sound and microphone on separate tracks**, pause and resume, and visible clicks and key combos (plain typing is never shown).
 - **GIF recording** with a built-in encoder: one global palette and only the changed rectangles, so GIFs stay small.
-- **Instant replay.** The last minutes (1 to 30, you choose) are always ready to save with one hotkey, without re-encoding; saving can start the replay over. The tray icon is red while it records.
+- **Instant replay.** The last minutes (1 to 30, you choose) are always ready to save with one hotkey, without re-encoding; saving can start the replay over. A red dot shows on the tray icon while it records.
 - **Video editor:** trim, track volume and mute, markers with notes (`M`), export to MP4 (one mixed track for messengers or separate tracks for editing), GIF, or with the video off the sound alone as MP3 / M4A / WAV.
 - **Upload and share:** by default to [post.blinker.cool](https://post.blinker.cool) (no sign-up, 3 days, videos up to 100 MB): every link has a page with an image viewer or a player that shows the video's markers. Or your own server, or any ShareX uploader (`.sxcu`).
 - **Moving from ShareX** in one click: hotkeys, folder, format, after-capture steps, notification, sound and the uploader.

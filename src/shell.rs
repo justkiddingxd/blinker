@@ -3,7 +3,6 @@
 
 use crate::config::{HotkeyAction, TrayAction};
 use crate::hotkey;
-use crate::icons::Icon;
 use crate::runtime::{Command, HomeTab, Shared, WM_RELOAD_HOTKEYS, WM_RESTART, WM_SUSPEND_HOTKEYS, WM_TRAY_STATE};
 use crate::theme;
 use crate::traymenu::{self, Item};
@@ -100,6 +99,8 @@ impl Hotkeys {
             HotkeyAction::RecordGif => Command::RecordGif,
             HotkeyAction::Pause => Command::RecordPause,
             HotkeyAction::Replay => Command::ReplaySave,
+            HotkeyAction::Pick => Command::PickColor,
+            HotkeyAction::Text => Command::CaptureText,
         })
     }
 }
@@ -212,7 +213,7 @@ impl Tray {
             if hwnd.is_null() {
                 return None;
             }
-            let icon = make_icon(&theme::logo(32));
+            let icon = make_icon(&theme::tray_icon(32, false, 0.0));
             let tray = Tray { hwnd, icon, live: false };
             tray.add();
             Some(tray)
@@ -241,14 +242,13 @@ impl Tray {
         unsafe { Shell_NotifyIconW(NIM_ADD, &d) };
     }
 
-    /// Red sparkle while the instant replay records.
+    /// The red dot while the instant replay records.
     fn set_live(&mut self, live: bool) {
         if live == self.live {
             return;
         }
         self.live = live;
-        let color = if live { theme::DANGER } else { theme::ACCENT };
-        let icon = unsafe { make_icon(&theme::logo_in(32, color)) };
+        let icon = unsafe { make_icon(&theme::tray_icon(32, live, 0.0)) };
         if icon.is_null() {
             return;
         }
@@ -331,63 +331,35 @@ fn tray_action(shared: &Shared, action: TrayAction) {
 }
 
 fn show_menu(shared: &Shared) {
+    use crate::tray::{Row, TrayItem};
     let cfg = shared.config();
     let hk = |a: HotkeyAction| hotkey::display_parts(cfg.primary_binding(a)).join(" ");
-    let l = crate::i18n::l;
     let recording = shared.recording.load(std::sync::atomic::Ordering::SeqCst);
-    // the main actions as big tiles (screenshots, then video), the rest as a list
-    let mut items = if recording {
-        vec![Item::tiles(vec![Item::new(11, Icon::Close, l("стоп", "stop"), ""), Item::new(12, Icon::Pause, l("пауза", "pause"), "")])]
-    } else {
-        vec![
-            Item::caption(l("скриншот", "screenshot")),
-            Item::tiles(vec![
-                Item::new(1, Icon::Region, crate::i18n::t("область"), ""),
-                Item::new(2, Icon::Screen, l("экран", "screen"), ""),
-                Item::new(3, Icon::Window, l("окно", "window"), ""),
-            ]),
-            Item::caption(l("видео", "video")),
-            Item::tiles(vec![
-                Item::new(9, Icon::Record, crate::i18n::t("область"), ""),
-                Item::new(15, Icon::Screen, l("экран", "screen"), ""),
-                Item::new(13, Icon::Video, "gif", ""),
-            ]),
-        ]
-    };
-    items.extend([
-        Item::separator(),
-        Item::new(4, Icon::Repeat, crate::i18n::t("повторить область"), &hk(HotkeyAction::Last)),
-    ]);
-    if cfg.replay_enabled {
-        let live = shared.replay_live.load(std::sync::atomic::Ordering::SeqCst);
-        let label = if live { l("сохранить повтор · идёт", "save the replay · on") } else { crate::i18n::t("сохранить повтор") };
-        items.push(Item::new(10, Icon::Repeat, label, &hk(HotkeyAction::Replay)));
+    let live = shared.replay_live.load(std::sync::atomic::Ordering::SeqCst);
+    // the user's layout (settings → tray menu): tiles on top, then the list
+    let tile = |i: TrayItem| Item::new(i.id(), i.icon(), i.tile_label(), "");
+    let mut items = Vec::new();
+    let mut tiles = false;
+    for row in crate::tray::rows(&cfg.tray_menu, recording, cfg.replay_enabled) {
+        match row {
+            Row::Heading(h) => items.push(Item::caption(&h)),
+            Row::Tiles(t) => {
+                tiles = true;
+                items.push(Item::tiles(t.into_iter().map(tile).collect()));
+            }
+            Row::Item(i) => {
+                if std::mem::take(&mut tiles) {
+                    items.push(Item::separator());
+                }
+                let label = if i == TrayItem::Replay && live { crate::i18n::l("сохранить повтор · идёт", "save the replay · on") } else { i.label() };
+                items.push(Item::new(i.id(), i.icon(), label, &i.hotkey().map(hk).unwrap_or_default()));
+            }
+            Row::Separator => items.push(Item::separator()),
+        }
     }
-    items.extend([
-        Item::separator(),
-        Item::new(14, Icon::Frame, crate::i18n::l("история", "history"), ""),
-        Item::new(6, Icon::Folder, crate::i18n::t("папка с снятым"), ""),
-        Item::new(7, Icon::Settings, crate::i18n::t("настройки"), ""),
-        Item::separator(),
-        Item::new(8, Icon::Close, crate::i18n::t("выход"), ""),
-    ]);
-    let cmd = match traymenu::popup(items, Tray::anchor()) {
-        Some(1) => Command::CaptureRegion,
-        Some(2) => Command::CaptureScreen,
-        Some(3) => Command::CaptureWindow,
-        Some(4) => Command::CaptureLast,
-        Some(6) => Command::OpenFolder,
-        Some(7) => Command::OpenHome(HomeTab::Capture),
-        Some(8) => Command::Quit,
-        Some(9) | Some(11) => Command::Record,
-        Some(10) => Command::ReplaySave,
-        Some(12) => Command::RecordPause,
-        Some(13) => Command::RecordGif,
-        Some(15) => Command::RecordScreen,
-        Some(14) => Command::OpenHistory,
-        _ => return,
-    };
-    shared.push(cmd);
+    if let Some(item) = traymenu::popup(items, Tray::anchor()).and_then(TrayItem::from_id) {
+        shared.push(item.command());
+    }
 }
 
 /// The replay started or stopped (any thread): the tray thread recolors the icon.

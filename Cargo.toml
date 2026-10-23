@@ -1,6 +1,6 @@
 [package]
 name = "blinker"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 description = "Fast, quiet screenshot and screen recording tool for Windows and macOS"
 license = "GPL-3.0-only"
@@ -24,9 +24,19 @@ serde_json = "1.0.145"
 # unpacks the downloaded ffmpeg (.gz)
 flate2 = "1.1.10"
 tiny-skia = "0.12.0"
+# speech to subtitles in the video editor (whisper.cpp, on this computer)
+whisper-rs = "0.16.0"
+# QR codes on the screen while selecting
+rqrr = "0.10"
+# checks the downloaded speech model
+sha2 = "0.10.9"
 toml = "1.1.8"
 # ShareX settings backups (.sxb) are zip files
 zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+# makes a QR picture for the scanner's test
+qrcode = { version = "0.14", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
@@ -59,8 +69,11 @@ windows = { version = "0.62.2", features = [
     "Win32_UI_Accessibility",
     "Win32_UI_Shell",
     "Win32_UI_Shell_PropertiesSystem",
+    # "recognize text": PaddleOCR's models run by Windows ML
+    "AI_MachineLearning",
 ] }
 windows-numerics = "0.3.1"
+windows-collections = "0.3.2"
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

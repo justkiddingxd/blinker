@@ -26,15 +26,23 @@ pub const WM_TRAY_STATE: u32 = WM_APP + 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum HomeTab {
-    Record,
-    Replay,
-    Upload,
     #[default]
     Capture,
+    /// The card after a capture or a recording.
     Notify,
-    Sound,
+    /// Text and QR codes read off the screen.
+    Text,
+    Record,
+    Replay,
+    /// The video editor: opening it, subtitles from speech.
+    Editor,
     Storage,
+    Upload,
     Hotkeys,
+    /// The tray icon's clicks and its menu, laid out by dragging.
+    Tray,
+    /// Discord, ShareX, NVIDIA.
+    Integrations,
     System,
 }
 
@@ -44,6 +52,10 @@ pub enum Command {
     CaptureScreen,
     CaptureWindow,
     CaptureLast,
+    /// The color picker: a frozen screen with the loupe, a click copies.
+    PickColor,
+    /// Select an area, read its text.
+    CaptureText,
     /// Start a screen recording, or stop the running one.
     Record,
     /// Same, recorded straight into a GIF.
@@ -56,6 +68,8 @@ pub enum Command {
     /// Settings changed in another process (replay on/off...).
     Reconfigure,
     OpenHome(HomeTab),
+    /// `blinker://update`: the settings open and install the new version.
+    OpenUpdate,
     /// The history window (screenshots, recordings, uploads).
     OpenHistory,
     OpenFolder,
@@ -66,7 +80,10 @@ pub enum Command {
 
 impl Command {
     pub fn is_capture(&self) -> bool {
-        matches!(self, Command::CaptureRegion | Command::CaptureScreen | Command::CaptureWindow | Command::CaptureLast)
+        matches!(
+            self,
+            Command::CaptureRegion | Command::CaptureScreen | Command::CaptureWindow | Command::CaptureLast | Command::PickColor | Command::CaptureText
+        )
     }
 }
 
@@ -93,6 +110,9 @@ pub struct Shared {
     /// The recording going on: when it started (unix seconds) and what it
     /// is ("1920 × 1080 · 60 fps"), for the Discord status.
     pub recording_note: Mutex<Option<(u64, String)>>,
+    /// The coming restart is an automatic update's: the new copy starts in
+    /// the background (no settings window stealing focus from a game).
+    pub quiet_restart: std::sync::atomic::AtomicBool,
 }
 
 impl Shared {
@@ -108,6 +128,7 @@ impl Shared {
             recording: std::sync::atomic::AtomicBool::new(false),
             replay_live: std::sync::atomic::AtomicBool::new(false),
             recording_note: Mutex::new(None),
+            quiet_restart: std::sync::atomic::AtomicBool::new(false),
         })
     }
 

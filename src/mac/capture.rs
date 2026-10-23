@@ -14,7 +14,8 @@ pub struct WindowInfo {
     pub hwnd: isize,
     #[allow(dead_code)]
     pub title: String,
-    /// Parts of the window taken alone: Windows only for now.
+    /// Parts of the window taken alone (the page in a browser, a list),
+    /// smallest first: from the Accessibility tree, when allowed.
     pub parts: Vec<IRect>,
 }
 
@@ -44,6 +45,11 @@ pub fn grab_desktop() -> Option<Snapshot> {
     let under = win::display_at(cx, cy)?;
     // Enumerate before grabbing: cheap, and the z-order matches what we freeze.
     let windows = enum_windows();
+    // the parts of the front windows, looked up while the screens are grabbed
+    let finder = {
+        let windows = windows.clone();
+        std::thread::spawn(move || window_parts(&windows))
+    };
     let displays = win::displays();
     // the other displays at the same moment, in parallel
     let others: Vec<_> = displays
@@ -56,18 +62,51 @@ pub fn grab_desktop() -> Option<Snapshot> {
         .collect();
     let mut main = snapshot_of(&under, &windows, true)?;
     main.others = others.into_iter().filter_map(|t| t.join().ok().flatten()).collect();
+    let parts = finder.join().unwrap_or_default();
+    add_parts(&mut main, &parts);
+    for o in &mut main.others {
+        add_parts(o, &parts);
+    }
     Some(main)
+}
+
+/// Parts of the front few windows (pixels, smallest first), by window id.
+fn window_parts(windows: &[ffi::Win]) -> std::collections::HashMap<u32, Vec<IRect>> {
+    let mut found = std::collections::HashMap::new();
+    if unsafe { ffi::bk_ax_trusted(0) } == 0 {
+        return found;
+    }
+    for w in windows.iter().filter(|w| w.layer == 0).take(8) {
+        let mut out = vec![0f64; 64 * 4];
+        let n = unsafe { ffi::bk_window_parts(w.pid, w.x, w.y, w.w, w.h, out.as_mut_ptr(), 64) }.max(0) as usize;
+        let mut parts: Vec<IRect> = out[..n * 4].chunks_exact(4).map(|p| win::rect_to_px(p[0], p[1], p[2], p[3])).collect();
+        parts.sort_by_key(|r| r.w as i64 * r.h as i64);
+        if !parts.is_empty() {
+            found.insert(w.id, parts);
+        }
+    }
+    found
+}
+
+/// The parts found for a snapshot's windows, in its image coordinates.
+fn add_parts(snap: &mut Snapshot, parts: &std::collections::HashMap<u32, Vec<IRect>>) {
+    let vs = IRect::new(snap.origin.0, snap.origin.1, snap.image.width() as i32, snap.image.height() as i32);
+    for w in &mut snap.windows {
+        if let Some(ps) = parts.get(&(w.hwnd as u32)) {
+            w.parts = ps.iter().map(|p| p.intersect(&vs)).filter(|p| !p.is_empty()).map(|p| p.offset(-vs.x, -vs.y)).collect();
+        }
+    }
 }
 
 /// One display, frozen, with the windows on it. `notice`: say so when the
 /// screen can't be recorded (only on the main thread: it shows a dialog).
-fn snapshot_of(d: &win::Display, all: &[(IRect, u32)], notice: bool) -> Option<Snapshot> {
+fn snapshot_of(d: &win::Display, all: &[ffi::Win], notice: bool) -> Option<Snapshot> {
     let vs = d.px;
     let windows = all
         .iter()
-        .filter_map(|(rect, id)| {
-            let r = rect.intersect(&vs);
-            (!r.is_empty()).then(|| WindowInfo { rect: r.offset(-vs.x, -vs.y), hwnd: *id as isize, title: String::new(), parts: Vec::new() })
+        .filter_map(|w| {
+            let r = win::rect_to_px(w.x, w.y, w.w, w.h).intersect(&vs);
+            (!r.is_empty()).then(|| WindowInfo { rect: r.offset(-vs.x, -vs.y), hwnd: w.id as isize, title: String::new(), parts: Vec::new() })
         })
         .collect();
     let m = d.monitor();
@@ -141,16 +180,14 @@ pub fn no_permission_notice() {
 }
 
 /// Ordinary windows on screen, front to back: (bounds, CGWindowID).
-fn enum_windows() -> Vec<(IRect, u32)> {
+fn enum_windows() -> Vec<ffi::Win> {
     let mut list = vec![ffi::Win::default(); 512];
     let n = unsafe { ffi::bk_window_list(list.as_mut_ptr(), list.len() as i32) }.max(0) as usize;
     let me = std::process::id() as i32;
-    list[..n]
-        .iter()
-        // normal and floating windows; not the menu bar, the Dock or overlays
-        .filter(|w| (0..=8).contains(&w.layer) && w.pid != me && w.alpha > 0.0 && w.w > 4.0 && w.h > 4.0)
-        .map(|w| (win::rect_to_px(w.x, w.y, w.w, w.h), w.id))
-        .collect()
+    list.truncate(n);
+    // normal and floating windows; not the menu bar, the Dock or overlays
+    list.retain(|w| (0..=8).contains(&w.layer) && w.pid != me && w.alpha > 0.0 && w.w > 4.0 && w.h > 4.0);
+    list
 }
 
 /// Bounds of the front window of the active app.

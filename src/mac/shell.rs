@@ -32,6 +32,7 @@ pub fn spawn(shared: Arc<Shared>) -> ShellHandle {
     // other threads (capture, effects) read the monitor list the main thread saw
     win::displays();
     unsafe { ffi::bk_on_reopen(win::on_reopen) };
+    unsafe { ffi::bk_on_url(on_url) };
     // asks once; the system prompt points to the right switch in Settings,
     // and a note next to it tells why
     if !win::screen_access(false) {
@@ -39,8 +40,10 @@ pub fn spawn(shared: Arc<Shared>) -> ShellHandle {
         win::screen_access(true);
         win::hint::watch(before);
     }
-    let icon = crate::theme::mark_image(36);
+    let icon = crate::theme::tray_icon(36, false, 2.0);
     unsafe { ffi::bk_tray_create(icon.as_raw().as_ptr(), icon.width() as i32, icon.height() as i32, on_tray) };
+    // the tile keeps its own colors: not a template image
+    tray_state_changed(&shared);
     unsafe { ffi::bk_hotkeys_init(on_hotkey) };
     register(&shared);
     win::listen(win::ACTIVATE, 1, on_note);
@@ -97,6 +100,8 @@ fn command_of(a: HotkeyAction) -> Command {
         HotkeyAction::RecordGif => Command::RecordGif,
         HotkeyAction::Pause => Command::RecordPause,
         HotkeyAction::Replay => Command::ReplaySave,
+        HotkeyAction::Pick => Command::PickColor,
+        HotkeyAction::Text => Command::CaptureText,
     }
 }
 
@@ -160,17 +165,22 @@ extern "C" fn on_note(which: i32) {
 // ---------------------------------------------------------------------------
 // Menu bar icon
 
-/// The replay started or stopped: a red sparkle while it records, the usual
-/// menu bar colored one otherwise. Called on the main thread.
+/// The replay started or stopped: the star tile with a red dot while it
+/// records, without otherwise. Its own colors on any menu bar (not a template).
 pub fn tray_state_changed(shared: &Shared) {
     let live = shared.replay_live.load(std::sync::atomic::Ordering::SeqCst);
-    let (icon, template) = if live {
-        (crate::theme::mark_image_in(36, crate::theme::DANGER), 0)
-    } else {
-        (crate::theme::mark_image(36), 1)
-    };
+    let icon = crate::theme::tray_icon(36, live, 2.0);
     let tip = ffi::cstr(if live { crate::i18n::l("blinker · идёт повтор", "blinker · replay is on") } else { "blinker" });
-    unsafe { ffi::bk_tray_set_image(icon.as_raw().as_ptr(), icon.width() as i32, icon.height() as i32, template, tip.as_ptr()) };
+    unsafe { ffi::bk_tray_set_image(icon.as_raw().as_ptr(), icon.width() as i32, icon.height() as i32, 0, tip.as_ptr()) };
+}
+
+/// A `blinker://` link: 1 = update (the settings open and install it).
+extern "C" fn on_url(which: i32) {
+    if which == 1
+        && let Some(s) = shared()
+    {
+        s.push(Command::OpenUpdate);
+    }
 }
 
 extern "C" fn on_tray(right: i32, clicks: i32) {
@@ -205,8 +215,8 @@ struct Row {
 }
 
 fn show_menu(shared: &Shared) {
+    use crate::tray::{Row as Shown, TrayItem};
     let cfg = shared.config();
-    let t = crate::i18n::t;
     // the native menu shows the shortcut itself, with the usual ⌃⌥⇧⌘ glyphs
     let key = |a: HotkeyAction| {
         let c = hotkey::parse(cfg.primary_binding(a))?;
@@ -221,40 +231,26 @@ fn show_menu(shared: &Shared) {
         key: k,
     };
     let sep = || Row { id: 0, depth: 0, submenu: false, label: ffi::cstr(""), symbol: None, key: None };
-    // the main actions as big tiles in one row (depth -1), the rest as a list
-    let l = crate::i18n::l;
-    let mut rows = if shared.recording.load(std::sync::atomic::Ordering::SeqCst) {
-        vec![
-            item(11, -1, l("стоп", "stop"), "stop.circle", key(HotkeyAction::Record)),
-            item(12, -1, l("пауза", "pause"), "pause.circle", key(HotkeyAction::Pause)),
-        ]
-    } else {
-        // depth -2: a heading over the tiles that follow it
-        vec![
-            item(0, -2, l("скриншот", "screenshot"), "", None),
-            item(1, -1, t("область"), "rectangle.dashed", key(HotkeyAction::Region)),
-            item(2, -1, l("экран", "screen"), "display", key(HotkeyAction::Screen)),
-            item(3, -1, l("окно", "window"), "macwindow", key(HotkeyAction::Window)),
-            item(0, -2, l("видео", "video"), "", None),
-            item(9, -1, t("область"), "record.circle", key(HotkeyAction::Record)),
-            item(15, -1, l("экран", "screen"), "display", None),
-            item(13, -1, "gif", "photo.stack", key(HotkeyAction::RecordGif)),
-        ]
-    };
-    rows.push(item(4, 0, t("повторить область"), "arrow.counterclockwise", key(HotkeyAction::Last)));
-    if cfg.replay_enabled {
-        let live = shared.replay_live.load(std::sync::atomic::Ordering::SeqCst);
-        let label = if live { l("сохранить повтор · идёт запись", "save the replay · recording") } else { t("сохранить повтор") };
-        rows.push(item(10, 0, label, "clock.arrow.circlepath", key(HotkeyAction::Replay)));
+    let recording = shared.recording.load(std::sync::atomic::Ordering::SeqCst);
+    let live = shared.replay_live.load(std::sync::atomic::Ordering::SeqCst);
+    // the user's layout (settings → tray menu): tiles in rows (depth -1),
+    // each under its heading (-2), then the list
+    let mut rows = Vec::new();
+    for row in crate::tray::rows(&cfg.tray_menu, recording, cfg.replay_enabled) {
+        match row {
+            Shown::Heading(h) => rows.push(item(0, -2, &h, "", None)),
+            Shown::Tiles(t) => {
+                for i in t {
+                    rows.push(item(i.id() as i32, -1, i.tile_label(), i.symbol(), i.hotkey().and_then(key)));
+                }
+            }
+            Shown::Item(i) => {
+                let label = if i == TrayItem::Replay && live { crate::i18n::l("сохранить повтор · идёт запись", "save the replay · recording") } else { i.label() };
+                rows.push(item(i.id() as i32, 0, label, i.symbol(), i.hotkey().and_then(key)));
+            }
+            Shown::Separator => rows.push(sep()),
+        }
     }
-    rows.extend([
-        sep(),
-        item(14, 0, crate::i18n::l("история", "history"), "clock", None),
-        item(6, 0, t("папка с снятым"), "folder", None),
-        item(7, 0, t("настройки"), "gearshape", None),
-        sep(),
-        item(8, 0, t("выход"), "power", None),
-    ]);
     let items: Vec<ffi::MenuItem> = rows
         .iter()
         .map(|r| ffi::MenuItem {
@@ -272,21 +268,7 @@ fn show_menu(shared: &Shared) {
 
 extern "C" fn on_menu(id: i32) {
     let Some(s) = shared() else { return };
-    let cmd = match id {
-        1 => Command::CaptureRegion,
-        2 => Command::CaptureScreen,
-        3 => Command::CaptureWindow,
-        4 => Command::CaptureLast,
-        6 => Command::OpenFolder,
-        7 => Command::OpenHome(HomeTab::Capture),
-        8 => Command::Quit,
-        9 | 11 => Command::Record,
-        10 => Command::ReplaySave,
-        12 => Command::RecordPause,
-        13 => Command::RecordGif,
-        15 => Command::RecordScreen,
-        14 => Command::OpenHistory,
-        _ => return,
-    };
-    s.push(cmd);
+    if let Some(item) = u32::try_from(id).ok().and_then(crate::tray::TrayItem::from_id) {
+        s.push(item.command());
+    }
 }

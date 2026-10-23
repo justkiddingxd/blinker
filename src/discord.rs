@@ -100,6 +100,19 @@ pub fn count(clip: bool) {
     let _ = std::fs::write(counts_file(), format!("{} {shots} {clips}", today()));
 }
 
+/// blinker's Discord server.
+pub const INVITE: &str = "Dy4pUDEV8x";
+
+/// The invite: straight in the Discord app when it's installed, else in
+/// the browser.
+pub fn open_invite() {
+    if crate::win::url_scheme_registered("discord") {
+        crate::win::open_url(&format!("discord://-/invite/{INVITE}"));
+    } else {
+        crate::win::open_url(&format!("https://discord.gg/{INVITE}"));
+    }
+}
+
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
@@ -110,7 +123,7 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 fn activity(shared: &crate::runtime::Shared) -> serde_json::Value {
     let mut a = serde_json::json!({
         "assets": {
-            "large_image": "https://blinker.cool/assets/logo.png",
+            "large_image": "https://blinker.cool/assets/discord-logo.png",
             "large_text": "hewwo everynyan ;3",
         },
         "buttons": [{ "label": "blinker.cool", "url": "https://blinker.cool" }],

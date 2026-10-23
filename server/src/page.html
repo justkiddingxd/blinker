@@ -279,6 +279,7 @@ function player() {
   const m = document.createElement(audio ? "audio" : "video");
   // "#t=0.001": the first frame shows before it plays
   m.src = audio ? D.raw : D.raw + "#t=0.001"; m.preload = "metadata"; m.playsInline = true;
+  if (!audio && D.poster) m.poster = D.poster;
   const markers = (D.markers || []).slice().sort((a, b) => a.t - b.t);
 
   if (audio) {

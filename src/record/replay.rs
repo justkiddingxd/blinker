@@ -362,7 +362,7 @@ impl Replay {
         if segs.is_empty() {
             return Err(crate::i18n::t("буфер повтора ещё пуст").into());
         }
-        let path = super::new_path(cfg, crate::i18n::t("blinker повтор"));
+        let path = super::clip_path(cfg, crate::i18n::t("blinker повтор"), "mp4", super::game_now().as_deref());
         let duration = remux(&segs, &path, from, now, &self.rings, self.tracks.len()).map_err(|e| {
             let _ = std::fs::remove_file(&path);
             lf!("не удалось сохранить повтор: {e}", "could not save the replay: {e}")

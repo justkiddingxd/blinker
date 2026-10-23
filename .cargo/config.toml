@@ -1,0 +1,17 @@
+[env]
+# whisper.cpp (subtitles from speech) is built for any x86-64 CPU of the last
+# ten years (AVX2), not tuned to the machine that builds it: a release made
+# on a CI runner must run everywhere. ARM ignores these.
+GGML_NATIVE = "OFF"
+GGML_AVX = "ON"
+GGML_AVX2 = "ON"
+GGML_FMA = "ON"
+GGML_F16C = "ON"
+GGML_AVX512 = "OFF"
+# Optimized: with MSVC the cmake crate replaces these with flags that have no
+# /O2, and the speech model then runs ten times slower. Written so that both
+# cl.exe and clang take them.
+CMAKE_C_FLAGS_RELEASE = "-O2 -DNDEBUG -MD"
+CMAKE_CXX_FLAGS_RELEASE = "-O2 -DNDEBUG -MD"
+CMAKE_C_FLAGS_RELWITHDEBINFO = "-O2 -DNDEBUG -MD"
+CMAKE_CXX_FLAGS_RELWITHDEBINFO = "-O2 -DNDEBUG -MD"

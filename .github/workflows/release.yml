@@ -12,7 +12,8 @@
 #   BLINKER_P12_PASSWORD  its password
 # Without them the app is signed ad hoc (a warning on the run).
 #
-# The release notes are the version's section of CHANGELOG.md. Last,
+# The release notes are the English half of the version's section of
+# CHANGELOG.md. Last,
 # blinker.cool/version.json gets the new version (the apps' update check).
 #
 # "Run workflow" by hand builds the files without releasing them.
@@ -30,6 +31,9 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      # whisper.cpp's bindings are made with the runner's LLVM
+      LIBCLANG_PATH: 'C:\Program Files\LLVM\bin'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -104,7 +108,13 @@ jobs:
         run: |
           v="${GITHUB_REF_NAME#v}"
           # the lines under "## <version>" up to the next "## "
-          awk -v v="$v" '$0 == "## " v { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md > notes.md
+          awk -v v="$v" '$0 == "## " v { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md > section.md
+          # the English half (after "---"); a section in one language as it is
+          if grep -qx -- '---' section.md; then
+            awk 'f; /^---$/ { f = 1 }' section.md > notes.md
+          else
+            cp section.md notes.md
+          fi
           if [ ! -s notes.md ]; then
             echo "::error::CHANGELOG.md has no section for $v"
             exit 1
@@ -143,3 +153,30 @@ jobs:
           printf '%s\n' "$SITE_KNOWN_HOSTS" > ~/.ssh/known_hosts
           rsync -t -e "ssh -i $HOME/.ssh/site -o IdentitiesOnly=yes -o BatchMode=yes" version.json "blinker-deploy@$SITE_HOST:/"
           rm -f ~/.ssh/site
+
+  # A note in blinker's Discord channel: the release is out, or what broke.
+  # Repository secret DISCORD_BOT_TOKEN: the bot's token (it must be able to
+  # post in the channel). Without it the note is skipped.
+  discord:
+    needs: [windows, macos, release]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Post to Discord
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          CHANNEL: "1563174255905083504"
+          WIN: ${{ needs.windows.result }}
+          MAC: ${{ needs.macos.result }}
+          REL: ${{ needs.release.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$DISCORD_BOT_TOKEN" ]; then
+            echo "no DISCORD_BOT_TOKEN secret: no note"
+            exit 0
+          fi
+          python3 .github/scripts/discord_note.py > body.json
+          curl -fsS -X POST "https://discord.com/api/v10/channels/$CHANNEL/messages" \
+            -H "Authorization: Bot $DISCORD_BOT_TOKEN" -H "Content-Type: application/json" \
+            --data @body.json > /dev/null

@@ -176,101 +176,326 @@ pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
 }
 
 // ---------------------------------------------------------------------------
-// Logo: a four-point sparkle (a blink of light) on graphite; the title bars
-// show the same sparkle without the tile.
+// Logo: a white "B" on a graphite tile, a four-point star (a blink of light)
+// cut out of it, and a red dot of recording tucked into its corner. Laid out
+// in tile units (0..1); the tray shows the dot only while the replay runs.
 
-pub fn logo(size: u32) -> image::RgbaImage {
-    let s = size as f32;
-    let mut pm = sk::Pixmap::new(size, size).expect("logo size");
-    let mut bg = sk::Paint::default();
-    bg.anti_alias = true;
-    bg.set_color_rgba8(0x1C, 0x1C, 0x1A, 255);
-    if let Some(p) = rounded_rect_path(0.0, 0.0, s, s, s * 0.12) {
-        pm.fill_path(&p, &bg, sk::FillRule::Winding, sk::Transform::identity(), None);
+/// The B: left, top, right, bottom and its corner radius.
+const B_BOX: (f32, f32, f32, f32) = (0.205, 0.225, 0.795, 0.785);
+const B_R: f32 = 0.11;
+/// The pinch on its right side: height, depth and half its length.
+const B_WAIST: (f32, f32, f32) = (0.515, 0.04, 0.06);
+/// The star cut out of it: center and radius.
+const B_STAR: (f32, f32, f32) = (0.5, 0.5, 0.18);
+/// The red dot's center.
+const DOT_AT: (f32, f32) = (0.825, 0.21);
+
+/// The dot's radius and the bite it takes out of the B.
+#[derive(Clone, Copy)]
+struct Dot {
+    r: f32,
+    bite: f32,
+}
+const DOT: Dot = Dot { r: 0.072, bite: 0.158 };
+
+const GLYPH_TOP: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
+const GLYPH_BOTTOM: Color32 = Color32::from_rgb(0xE2, 0xE1, 0xDC);
+const DOT_TOP: Color32 = Color32::from_rgb(0xFF, 0x4D, 0x44);
+const DOT_BOTTOM: Color32 = Color32::from_rgb(0xE0, 0x24, 0x1E);
+
+/// Circle arc from angle `a0` to `a1` (radians, y down) as cubics.
+fn arc_to(pb: &mut sk::PathBuilder, cx: f32, cy: f32, r: f32, a0: f32, a1: f32) {
+    let n = ((a1 - a0).abs() / std::f32::consts::FRAC_PI_2).ceil().max(1.0) as usize;
+    let step = (a1 - a0) / n as f32;
+    let k = 4.0 / 3.0 * (step / 4.0).tan();
+    for i in 0..n {
+        let (s, e) = (a0 + step * i as f32, a0 + step * (i + 1) as f32);
+        let (p0, p3) = ((s.cos(), s.sin()), (e.cos(), e.sin()));
+        pb.cubic_to(
+            cx + r * (p0.0 - k * p0.1),
+            cy + r * (p0.1 + k * p0.0),
+            cx + r * (p3.0 + k * p3.1),
+            cy + r * (p3.1 - k * p3.0),
+            cx + r * p3.0,
+            cy + r * p3.1,
+        );
     }
-    fill_sparkle(&mut pm, s * 0.33);
-    pixmap_to_image(&pm)
 }
 
-/// The macOS app icon: the same tile on Apple's icon grid (a margin around a
-/// rounder square, soft shadow), so it sits well next to other Dock icons.
-pub fn app_icon(size: u32) -> image::RgbaImage {
-    let s = size as f32;
-    let mut pm = sk::Pixmap::new(size, size).expect("icon size");
-    let (inset, side) = (s * 100.0 / 1024.0, s * 824.0 / 1024.0);
-    let radius = side * 0.225;
-    for (grow, alpha) in [(s * 0.012, 34u8), (s * 0.006, 40u8)] {
-        let mut shadow = sk::Paint::default();
-        shadow.anti_alias = true;
-        shadow.set_color_rgba8(0, 0, 0, alpha);
-        if let Some(p) = rounded_rect_path(inset - grow, inset - grow + s * 0.012, side + grow * 2.0, side + grow * 2.0, radius + grow) {
-            pm.fill_path(&p, &shadow, sk::FillRule::Winding, sk::Transform::identity(), None);
+/// The B with the star cut out (even-odd), in tile units; `bite`: the bite
+/// the dot takes out of its corner.
+fn glyph_path(bite: Option<f32>) -> sk::Path {
+    let (l, t, r, b) = B_BOX;
+    let k = 0.552_284_8 * B_R;
+    let mut pb = sk::PathBuilder::new();
+    pb.move_to(l + B_R, t);
+    match bite {
+        Some(rn) => {
+            // the top and right edges meet the bite's circle; small fillets
+            let (cx, cy) = DOT_AT;
+            let f = 0.022;
+            let xt = cx - (rn * rn - (t - cy).powi(2)).sqrt();
+            let yr = cy + (rn * rn - (r - cx).powi(2)).sqrt();
+            let (a0, a1) = ((t - cy).atan2(xt - cx) - f / rn, (yr - cy).atan2(r - cx) + f / rn);
+            pb.line_to(xt - f, t);
+            pb.quad_to(xt, t, cx + rn * a0.cos(), cy + rn * a0.sin());
+            arc_to(&mut pb, cx, cy, rn, a0, a1);
+            pb.quad_to(r, yr, r, yr + f);
+        }
+        None => {
+            pb.line_to(r - B_R, t);
+            pb.cubic_to(r - B_R + k, t, r, t + B_R - k, r, t + B_R);
         }
     }
-    let mut bg = sk::Paint::default();
-    bg.anti_alias = true;
-    bg.set_color_rgba8(0x1C, 0x1C, 0x1A, 255);
-    if let Some(p) = rounded_rect_path(inset, inset, side, side, radius) {
-        pm.fill_path(&p, &bg, sk::FillRule::Winding, sk::Transform::identity(), None);
-        let mut edge = sk::Paint::default();
-        edge.anti_alias = true;
-        edge.set_color_rgba8(0x2B, 0x2B, 0x28, 255);
-        let st = sk::Stroke { width: (s / 512.0).max(1.0), ..Default::default() };
-        pm.stroke_path(&p, &edge, &st, sk::Transform::identity(), None);
-    }
-    fill_sparkle(&mut pm, side * 0.33);
-    pixmap_to_image(&pm)
+    let (wy, wd, wh) = B_WAIST;
+    pb.line_to(r, wy - wh);
+    pb.cubic_to(r, wy - wh * 0.45, r - wd, wy - wh * 0.35, r - wd, wy);
+    pb.cubic_to(r - wd, wy + wh * 0.35, r, wy + wh * 0.45, r, wy + wh);
+    pb.line_to(r, b - B_R);
+    pb.cubic_to(r, b - B_R + k, r - B_R + k, b, r - B_R, b);
+    pb.line_to(l + B_R, b);
+    pb.cubic_to(l + B_R - k, b, l, b - B_R + k, l, b - B_R);
+    pb.line_to(l, t + B_R);
+    pb.cubic_to(l, t + B_R - k, l + B_R - k, t, l + B_R, t);
+    pb.close();
+    star(&mut pb, B_STAR.0, B_STAR.1, B_STAR.2, 0.17);
+    pb.finish().expect("logo glyph")
 }
 
-/// Just the sparkle, filling a transparent `size`² square.
-pub fn mark_image(size: u32) -> image::RgbaImage {
-    mark_image_in(size, ACCENT)
-}
-
-/// The sparkle in another color (the red tray icon while the replay runs).
-pub fn mark_image_in(size: u32, color: Color32) -> image::RgbaImage {
-    let mut pm = sk::Pixmap::new(size, size).expect("mark size");
-    fill_sparkle_in(&mut pm, size as f32 * 0.5, color);
-    pixmap_to_image(&pm)
-}
-
-/// The logo tile with a sparkle of `color`.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
-pub fn logo_in(size: u32, color: Color32) -> image::RgbaImage {
-    let s = size as f32;
-    let mut pm = sk::Pixmap::new(size, size).expect("logo size");
-    let mut bg = sk::Paint::default();
-    bg.anti_alias = true;
-    bg.set_color_rgba8(0x1C, 0x1C, 0x1A, 255);
-    if let Some(p) = rounded_rect_path(0.0, 0.0, s, s, s * 0.12) {
-        pm.fill_path(&p, &bg, sk::FillRule::Winding, sk::Transform::identity(), None);
-    }
-    fill_sparkle_in(&mut pm, s * 0.33, color);
-    pixmap_to_image(&pm)
-}
-
-fn fill_sparkle(pm: &mut sk::Pixmap, r: f32) {
-    fill_sparkle_in(pm, r, ACCENT)
-}
-
-/// Sparkle of radius `r` in the middle of `pm`: four points joined by
-/// curves pulled in towards the center.
-fn fill_sparkle_in(pm: &mut sk::Pixmap, r: f32, color: Color32) {
-    let (cx, cy) = (pm.width() as f32 / 2.0, pm.height() as f32 / 2.0);
-    let w = r * 0.18;
-    let mut pb = sk::PathBuilder::new();
+/// Four points joined by curves pulled in towards the center; `plump`: how
+/// far out the curves stay (0.17 slim … 0.3 full).
+fn star(pb: &mut sk::PathBuilder, cx: f32, cy: f32, r: f32, plump: f32) {
+    let w = r * plump;
     pb.move_to(cx, cy - r);
     pb.quad_to(cx + w, cy - w, cx + r, cy);
     pb.quad_to(cx + w, cy + w, cx, cy + r);
     pb.quad_to(cx - w, cy + w, cx - r, cy);
     pb.quad_to(cx - w, cy - w, cx, cy - r);
     pb.close();
-    let mut accent = sk::Paint::default();
-    accent.anti_alias = true;
-    accent.set_color_rgba8(color.r(), color.g(), color.b(), 255);
-    if let Some(p) = pb.finish() {
-        pm.fill_path(&p, &accent, sk::FillRule::Winding, sk::Transform::identity(), None);
+}
+
+fn circle_path(cx: f32, cy: f32, r: f32) -> sk::Path {
+    sk::PathBuilder::from_circle(cx, cy, r).expect("circle")
+}
+
+/// A path as SVG path data, scaled by `s` (the Mac icon's layers).
+#[cfg(test)]
+fn svg_data(path: &sk::Path, s: f32) -> String {
+    use std::fmt::Write;
+    let mut d = String::new();
+    let p = |v: f32| format!("{:.2}", v * s);
+    for seg in path.segments() {
+        let _ = match seg {
+            sk::PathSegment::MoveTo(a) => write!(d, "M{} {}", p(a.x), p(a.y)),
+            sk::PathSegment::LineTo(a) => write!(d, "L{} {}", p(a.x), p(a.y)),
+            sk::PathSegment::QuadTo(a, b) => write!(d, "Q{} {} {} {}", p(a.x), p(a.y), p(b.x), p(b.y)),
+            sk::PathSegment::CubicTo(a, b, c) => write!(d, "C{} {} {} {} {} {}", p(a.x), p(a.y), p(b.x), p(b.y), p(c.x), p(c.y)),
+            sk::PathSegment::Close => write!(d, "Z"),
+        };
     }
+    d
+}
+
+fn solid(c: Color32, a: u8) -> sk::Paint<'static> {
+    let mut p = sk::Paint::default();
+    p.anti_alias = true;
+    p.set_color_rgba8(c.r(), c.g(), c.b(), a);
+    p
+}
+
+/// Top-to-bottom gradient between `y0` and `y1`.
+fn vertical(c0: Color32, c1: Color32, y0: f32, y1: f32) -> sk::Paint<'static> {
+    let mut p = solid(c0, 255);
+    let stop = |o: f32, c: Color32| sk::GradientStop::new(o, sk::Color::from_rgba8(c.r(), c.g(), c.b(), c.a()));
+    if let Some(sh) = sk::LinearGradient::new(
+        sk::Point::from_xy(0.0, y0),
+        sk::Point::from_xy(0.0, y1),
+        vec![stop(0.0, c0), stop(1.0, c1)],
+        sk::SpreadMode::Pad,
+        sk::Transform::identity(),
+    ) {
+        p.shader = sh;
+    }
+    p
+}
+
+/// A soft shadow of `path` (drawn with `ts`), `dy` lower, blurred by `blur` px.
+fn soft_shadow(pm: &mut sk::Pixmap, path: &sk::Path, rule: sk::FillRule, ts: sk::Transform, blur: f32, dy: f32, alpha: u8) {
+    let Some(mut sh) = sk::Pixmap::new(pm.width(), pm.height()) else { return };
+    sh.fill_path(path, &solid(Color32::BLACK, alpha), rule, ts.post_translate(0.0, dy), None);
+    blur_alpha(&mut sh, blur);
+    pm.draw_pixmap(0, 0, sh.as_ref(), &sk::PixmapPaint::default(), sk::Transform::identity(), None);
+}
+
+/// Three box blurs over the alpha (the pixmap holds black only), close to
+/// a gaussian of about `radius`.
+fn blur_alpha(pm: &mut sk::Pixmap, radius: f32) {
+    let r = (radius / 2.0).round().max(1.0) as i32;
+    let (w, h) = (pm.width() as i32, pm.height() as i32);
+    let mut a: Vec<f32> = pm.data().chunks_exact(4).map(|p| p[3] as f32).collect();
+    let mut tmp = vec![0f32; a.len()];
+    let pass = |src: &[f32], dst: &mut [f32], len: i32, lines: i32, at: &dyn Fn(i32, i32) -> usize| {
+        for line in 0..lines {
+            let mut sum = 0.0;
+            for i in -r..=r {
+                sum += src[at(line, i.clamp(0, len - 1))];
+            }
+            for i in 0..len {
+                dst[at(line, i)] = sum / (2 * r + 1) as f32;
+                sum += src[at(line, (i + r + 1).min(len - 1))] - src[at(line, (i - r).max(0))];
+            }
+        }
+    };
+    for _ in 0..3 {
+        pass(&a, &mut tmp, w, h, &|y, x| (y * w + x) as usize);
+        pass(&tmp, &mut a, h, w, &|x, y| (y * w + x) as usize);
+    }
+    for (px, v) in pm.data_mut().chunks_exact_mut(4).zip(a) {
+        px[..3].fill(0);
+        px[3] = v.round().clamp(0.0, 255.0) as u8;
+    }
+}
+
+/// How the tile looks: flat graphite with soft shadows (Windows), or glass
+/// with a lit rim (the Mac, as its Liquid Glass icon looks).
+#[derive(Clone, Copy, PartialEq)]
+enum Finish {
+    Classic,
+    Glass,
+}
+
+/// The tile at `(x, y)`, `side` wide, onto `pm`, with the B and maybe the dot.
+fn paint_logo(pm: &mut sk::Pixmap, x: f32, y: f32, side: f32, radius: f32, dot: Option<Dot>, finish: Finish) {
+    let id = sk::Transform::identity();
+    let ts = sk::Transform::from_row(side, 0.0, 0.0, side, x, y);
+    let big = side >= 40.0;
+    let Some(tile) = rounded_rect_path(x, y, side, side, radius) else { return };
+    let (top, bottom) = match finish {
+        Finish::Classic => (Color32::from_rgb(0x2C, 0x2C, 0x2B), Color32::from_rgb(0x11, 0x11, 0x11)),
+        Finish::Glass => (Color32::from_rgb(0x35, 0x37, 0x3D), Color32::from_rgb(0x14, 0x15, 0x18)),
+    };
+    pm.fill_path(&tile, &vertical(top, bottom, y, y + side), sk::FillRule::Winding, id, None);
+    // (a square tile is a full-bleed background: no edge to light)
+    if big && radius > 0.0 {
+        // light along the top edge; glass: a rim lit from above all round
+        let (a0, a1, width) = match finish {
+            Finish::Classic => (34, 0, (side / 256.0).max(1.0)),
+            Finish::Glass => (150, 40, (side / 90.0).max(1.0)),
+        };
+        let rim = vertical(Color32::from_white_alpha(a0), Color32::from_white_alpha(a1), y, y + side * 0.6);
+        if let Some(edge) = rounded_rect_path(x + width / 2.0, y + width / 2.0, side - width, side - width, radius - width / 2.0) {
+            pm.stroke_path(&edge, &rim, &sk::Stroke { width, ..Default::default() }, id, None);
+        }
+        if finish == Finish::Glass {
+            // a faint sheen over the upper half
+            let sheen = vertical(Color32::from_white_alpha(16), Color32::from_white_alpha(0), y, y + side * 0.5);
+            pm.fill_path(&tile, &sheen, sk::FillRule::Winding, id, None);
+        }
+    }
+    let glyph = glyph_path(dot.map(|d| d.bite));
+    let Some(glyph_px) = glyph.clone().transform(ts) else { return };
+    if big {
+        soft_shadow(pm, &glyph_px, sk::FillRule::EvenOdd, id, side * 0.035, side * 0.018, 120);
+    }
+    let (gt, gb) = (y + B_BOX.1 * side, y + B_BOX.3 * side);
+    pm.fill_path(&glyph_px, &vertical(GLYPH_TOP, GLYPH_BOTTOM, gt, gb), sk::FillRule::EvenOdd, id, None);
+    if let Some(d) = dot {
+        let (cx, cy, r) = (x + DOT_AT.0 * side, y + DOT_AT.1 * side, d.r * side);
+        let disc = circle_path(cx, cy, r);
+        if big {
+            soft_shadow(pm, &disc, sk::FillRule::Winding, id, side * 0.03, side * 0.012, 110);
+        }
+        pm.fill_path(&disc, &vertical(DOT_TOP, DOT_BOTTOM, cy - r, cy + r), sk::FillRule::Winding, id, None);
+        if big {
+            let glint = circle_path(cx - r * 0.32, cy - r * 0.38, r * 0.3);
+            pm.fill_path(&glint, &solid(Color32::WHITE, 60), sk::FillRule::Winding, id, None);
+        }
+    }
+}
+
+/// The app icon (Windows, the site, the README): the tile with the dot. Big
+/// sizes keep a margin for the tile's shadow.
+pub fn logo(size: u32) -> image::RgbaImage {
+    let s = size as f32;
+    let mut pm = sk::Pixmap::new(size, size).expect("logo size");
+    let m = if size >= 64 { s * 0.035 } else { 0.0 };
+    let side = s - 2.0 * m;
+    if m > 0.0
+        && let Some(t) = rounded_rect_path(m, m, side, side, side * 0.225)
+    {
+        soft_shadow(&mut pm, &t, sk::FillRule::Winding, sk::Transform::identity(), m * 0.9, m * 0.35, 120);
+    }
+    paint_logo(&mut pm, m, m, side, side * 0.225, Some(DOT), Finish::Classic);
+    pixmap_to_image(&pm)
+}
+
+/// The tray icon (the Windows tray, a Mac's menu bar): the white star on a
+/// graphite tile, plain enough to read at 16 px, and a red dot in its corner
+/// while the replay records. `inset`: room around the tile.
+pub fn tray_icon(size: u32, live: bool, inset: f32) -> image::RgbaImage {
+    let (s, id) = (size as f32, sk::Transform::identity());
+    let mut pm = sk::Pixmap::new(size, size).expect("tray icon size");
+    let (o, side) = (inset, s - 2.0 * inset);
+    let radius = side * 0.24;
+    if let Some(tile) = rounded_rect_path(o, o, side, side, radius) {
+        let fill = vertical(Color32::from_rgb(0x2E, 0x2E, 0x2D), Color32::from_rgb(0x12, 0x12, 0x12), o, o + side);
+        pm.fill_path(&tile, &fill, sk::FillRule::Winding, id, None);
+    }
+    if side >= 24.0 {
+        let width = (side / 32.0).max(1.0);
+        let rim = vertical(Color32::from_white_alpha(40), Color32::from_white_alpha(6), o, o + side);
+        if let Some(edge) = rounded_rect_path(o + width / 2.0, o + width / 2.0, side - width, side - width, radius - width / 2.0) {
+            pm.stroke_path(&edge, &rim, &sk::Stroke { width, ..Default::default() }, id, None);
+        }
+    }
+    let mut pb = sk::PathBuilder::new();
+    star(&mut pb, o + side * 0.5, o + side * 0.5, side * 0.29, 0.26);
+    if let Some(p) = pb.finish() {
+        pm.fill_path(&p, &vertical(GLYPH_TOP, GLYPH_BOTTOM, o + side * 0.2, o + side * 0.8), sk::FillRule::Winding, id, None);
+    }
+    if live {
+        let (cx, cy, r) = (o + side * 0.79, o + side * 0.21, side * 0.11);
+        pm.fill_path(&circle_path(cx, cy, r), &vertical(DOT_TOP, DOT_BOTTOM, cy - r, cy + r), sk::FillRule::Winding, id, None);
+    }
+    pixmap_to_image(&pm)
+}
+
+/// The macOS app icon: the glass tile on Apple's icon grid (a margin around
+/// a rounder square, soft shadow), so it sits well next to other Dock icons.
+pub fn app_icon(size: u32) -> image::RgbaImage {
+    let s = size as f32;
+    let mut pm = sk::Pixmap::new(size, size).expect("icon size");
+    let (inset, side) = (s * 100.0 / 1024.0, s * 824.0 / 1024.0);
+    let radius = side * 0.225;
+    if let Some(t) = rounded_rect_path(inset, inset, side, side, radius) {
+        soft_shadow(&mut pm, &t, sk::FillRule::Winding, sk::Transform::identity(), s * 0.025, s * 0.012, 110);
+    }
+    paint_logo(&mut pm, inset, inset, side, radius, Some(DOT), Finish::Glass);
+    pixmap_to_image(&pm)
+}
+
+/// The B alone in the accent color, filling a transparent `size`² square
+/// (title bars, notes).
+pub fn mark_image(size: u32) -> image::RgbaImage {
+    let s = size as f32;
+    let (l, t, r, b) = B_BOX;
+    let k = s * 0.94 / (r - l).max(b - t);
+    let ts = sk::Transform::from_row(k, 0.0, 0.0, k, s / 2.0 - (l + r) / 2.0 * k, s / 2.0 - (t + b) / 2.0 * k);
+    let mut pm = sk::Pixmap::new(size, size).expect("mark size");
+    pm.fill_path(&glyph_path(None), &solid(ACCENT, 255), sk::FillRule::EvenOdd, ts, None);
+    pixmap_to_image(&pm)
+}
+
+/// The four-point star alone in `color` (the "Clipped!" badge, the replay toast).
+pub fn sparkle_image(size: u32, color: Color32) -> image::RgbaImage {
+    let s = size as f32;
+    let mut pm = sk::Pixmap::new(size, size).expect("mark size");
+    let mut pb = sk::PathBuilder::new();
+    star(&mut pb, s / 2.0, s / 2.0, s / 2.0, 0.17);
+    if let Some(p) = pb.finish() {
+        pm.fill_path(&p, &solid(color, 255), sk::FillRule::Winding, sk::Transform::identity(), None);
+    }
+    pixmap_to_image(&pm)
 }
 
 pub fn rounded_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<sk::Path> {
@@ -369,5 +594,70 @@ mod tests {
             super::app_icon(base).save(dir.join(format!("icon_{base}x{base}.png"))).unwrap();
             super::app_icon(base * 2).save(dir.join(format!("icon_{base}x{base}@2x.png"))).unwrap();
         }
+    }
+
+    /// The Discord app's icon: `BLINKER_TEST_DISCORD` = the PNG (1024 px).
+    /// Discord shows it at 16 px next to a name in a voice channel: the tray's
+    /// big star, full bleed (Discord rounds it itself).
+    #[test]
+    fn discord_icon() {
+        use super::{Color32, GLYPH_BOTTOM, GLYPH_TOP, sk, vertical};
+        let Ok(out) = std::env::var("BLINKER_TEST_DISCORD") else { return };
+        let s = 1024.0;
+        let mut pm = sk::Pixmap::new(1024, 1024).unwrap();
+        let bg = vertical(Color32::from_rgb(0x2E, 0x2E, 0x2D), Color32::from_rgb(0x12, 0x12, 0x12), 0.0, s);
+        pm.fill_rect(sk::Rect::from_xywh(0.0, 0.0, s, s).unwrap(), &bg, sk::Transform::identity(), None);
+        let mut pb = sk::PathBuilder::new();
+        super::star(&mut pb, s / 2.0, s / 2.0, s * 0.36, 0.26);
+        let fill = vertical(GLYPH_TOP, GLYPH_BOTTOM, s * 0.14, s * 0.86);
+        pm.fill_path(&pb.finish().unwrap(), &fill, sk::FillRule::Winding, sk::Transform::identity(), None);
+        super::pixmap_to_image(&pm).save(out).unwrap();
+    }
+
+    /// The big picture of the Discord status (`site/assets/discord-logo.png`):
+    /// `BLINKER_TEST_DISCORD_LOGO` = the PNG. The B without the dot (the
+    /// corner badge already says "recording"), full bleed and large.
+    #[test]
+    fn discord_logo() {
+        let Ok(out) = std::env::var("BLINKER_TEST_DISCORD_LOGO") else { return };
+        let s = 512.0;
+        let mut pm = super::sk::Pixmap::new(512, 512).unwrap();
+        super::paint_logo(&mut pm, -s * 0.1, -s * 0.1, s * 1.2, 0.0, None, super::Finish::Classic);
+        super::pixmap_to_image(&pm).save(out).unwrap();
+    }
+
+    /// The same as `assets/macos/blinker.icns` without `iconutil`:
+    /// `BLINKER_TEST_ICNS` = the file to write (PNG entries).
+    #[test]
+    fn icns() {
+        let Ok(out) = std::env::var("BLINKER_TEST_ICNS") else { return };
+        let mut body = Vec::new();
+        for (kind, size) in [(b"icp4", 16u32), (b"icp5", 32), (b"ic11", 32), (b"ic12", 64), (b"ic07", 128), (b"ic13", 256), (b"ic08", 256), (b"ic14", 512), (b"ic09", 512), (b"ic10", 1024)] {
+            let mut png = Vec::new();
+            super::app_icon(size).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+            body.extend_from_slice(kind);
+            body.extend_from_slice(&(png.len() as u32 + 8).to_be_bytes());
+            body.extend_from_slice(&png);
+        }
+        let mut icns = b"icns".to_vec();
+        icns.extend_from_slice(&(body.len() as u32 + 8).to_be_bytes());
+        icns.extend_from_slice(&body);
+        std::fs::write(out, icns).unwrap();
+    }
+
+    /// The layers of the Liquid Glass icon (`assets/macos/Blinker.icon`):
+    /// `BLINKER_TEST_ICON_LAYERS` = its Assets folder.
+    #[test]
+    fn icon_layers() {
+        let Ok(dir) = std::env::var("BLINKER_TEST_ICON_LAYERS") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        let svg = |body: String| format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1024\" height=\"1024\" viewBox=\"0 0 1024 1024\">
+  {body}
+</svg>
+");
+        let glyph = super::svg_data(&super::glyph_path(Some(super::DOT.bite)), 1024.0);
+        std::fs::write(dir.join("glyph.svg"), svg(format!("<path fill-rule=\"evenodd\" d=\"{glyph}\" fill=\"#FFFFFF\"/>"))).unwrap();
+        let (x, y, r) = (super::DOT_AT.0 * 1024.0, super::DOT_AT.1 * 1024.0, super::DOT.r * 1024.0);
+        std::fs::write(dir.join("dot.svg"), svg(format!("<circle cx=\"{x:.1}\" cy=\"{y:.1}\" r=\"{r:.1}\" fill=\"#F2352D\"/>"))).unwrap();
     }
 }

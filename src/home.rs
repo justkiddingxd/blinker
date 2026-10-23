@@ -18,7 +18,7 @@ pub const TITLE: &str = "blinker · настройки";
 /// Named event the tray sets to show an already running settings process.
 pub const SHOW_EVENT: &str = "Local\\BlinkerSettingsShow";
 /// The settings window has one size.
-const SIZE: (f32, f32) = (820.0, 580.0);
+const SIZE: (f32, f32) = (820.0, 620.0);
 /// The strip at the top that drags the window (the window buttons sit in it).
 const TITLE_BAR_H: f32 = 48.0;
 const NAV_W: f32 = 204.0;
@@ -83,6 +83,10 @@ pub fn run(shared: &Arc<Shared>, tab: HomeTab) {
             },
             check: None,
             install: None,
+            speech_install: None,
+            speech_error: None,
+            ocr_install: None,
+            ocr_error: None,
             shared: shared2,
             tab,
             recording: None,
@@ -100,6 +104,7 @@ pub fn run(shared: &Arc<Shared>, tab: HomeTab) {
             changelog_open: false,
             mics: None,
             shown: None,
+            tray_drag: None,
             page_at: 0.0,
         }
     });
@@ -124,6 +129,10 @@ fn watch_show_requests(
                     // Cloaked until fresh frames are drawn (no stale page or white flash).
                     win::cloak(h, true);
                     win::show_window(h, true);
+                } else {
+                    // open already, maybe minimized or behind others: a
+                    // minimized window draws no frames, so not left to `ui`
+                    win::raise(h);
                 }
                 ctx.request_repaint();
             } else if hidden.load(Ordering::SeqCst) && !win::window_class_exists("BlinkerShell") {
@@ -136,26 +145,43 @@ fn watch_show_requests(
 pub fn tab_arg(tab: HomeTab) -> &'static str {
     match tab {
         HomeTab::Capture => "capture",
+        HomeTab::Notify => "notify",
+        HomeTab::Text => "text",
         HomeTab::Record => "record",
         HomeTab::Replay => "replay",
-        HomeTab::Upload => "upload",
-        HomeTab::Notify => "notify",
-        HomeTab::Sound => "sound",
+        HomeTab::Editor => "editor",
         HomeTab::Storage => "storage",
+        HomeTab::Upload => "upload",
         HomeTab::Hotkeys => "hotkeys",
+        HomeTab::Tray => "tray",
+        HomeTab::Integrations => "integrations",
         HomeTab::System => "system",
     }
 }
 
+/// The request (`--settings update`, the request file) that opens the
+/// settings and installs the new version (`blinker://update`).
+pub const UPDATE_ARG: &str = "update";
+/// That request came: the settings start the update on their next frame.
+pub static UPDATE_ASKED: AtomicBool = AtomicBool::new(false);
+
 pub fn tab_from_arg(arg: &str) -> HomeTab {
+    if arg == UPDATE_ARG {
+        UPDATE_ASKED.store(true, Ordering::SeqCst);
+        return HomeTab::System;
+    }
     match arg {
-        "notify" => HomeTab::Notify,
+        // the shutter sound lives with the card now
+        "notify" | "sound" => HomeTab::Notify,
+        "text" => HomeTab::Text,
         "record" => HomeTab::Record,
         "replay" => HomeTab::Replay,
-        "upload" => HomeTab::Upload,
-        "sound" => HomeTab::Sound,
+        "editor" => HomeTab::Editor,
         "storage" => HomeTab::Storage,
+        "upload" => HomeTab::Upload,
         "hotkeys" => HomeTab::Hotkeys,
+        "tray" => HomeTab::Tray,
+        "integrations" => HomeTab::Integrations,
         "system" => HomeTab::System,
         _ => HomeTab::Capture,
     }
@@ -189,6 +215,357 @@ impl KeyTarget {
     }
 }
 
+/// Something picked up in the tray menu editor.
+#[derive(Clone, Copy, PartialEq)]
+enum TrayPiece {
+    Item(crate::tray::TrayItem),
+    Separator,
+}
+
+impl TrayPiece {
+    fn icon(self) -> Icon {
+        match self {
+            TrayPiece::Item(i) => i.icon(),
+            TrayPiece::Separator => Icon::Line,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            TrayPiece::Item(i) => i.label(),
+            TrayPiece::Separator => l("разделитель", "separator"),
+        }
+    }
+}
+
+/// Where it was picked up: a tile (row, place), a row of the list, or the
+/// spare pieces.
+#[derive(Clone, Copy, PartialEq)]
+enum TrayFrom {
+    Tile(usize, usize),
+    List(usize),
+    Spare,
+}
+
+/// Where it would land.
+#[derive(Clone, Copy, PartialEq)]
+enum TrayDrop {
+    Tile(usize, usize),
+    NewRow,
+    List(usize),
+    /// Back among the spare pieces: out of the menu.
+    Remove,
+}
+
+#[derive(Clone, Copy)]
+struct TrayDrag {
+    piece: TrayPiece,
+    from: TrayFrom,
+}
+
+/// `drag`'s piece moved to `to` in `menu` (rows of tiles left empty go).
+fn tray_move(menu: &mut crate::tray::TrayMenu, drag: TrayDrag, to: TrayDrop) {
+    use crate::tray::{Entry, TileRow};
+    let mut to = to;
+    match drag.from {
+        TrayFrom::Tile(r, i) => {
+            menu.tiles[r].items.remove(i);
+            if let TrayDrop::Tile(tr, ti) = to
+                && tr == r
+                && ti > i
+            {
+                to = TrayDrop::Tile(tr, ti - 1);
+            }
+        }
+        TrayFrom::List(i) => {
+            menu.list.remove(i);
+            if let TrayDrop::List(ti) = to
+                && ti > i
+            {
+                to = TrayDrop::List(ti - 1);
+            }
+        }
+        TrayFrom::Spare => {}
+    }
+    match (to, drag.piece) {
+        (TrayDrop::Tile(r, i), TrayPiece::Item(item)) => {
+            let row = &mut menu.tiles[r].items;
+            row.insert(i.min(row.len()), item);
+        }
+        (TrayDrop::NewRow, TrayPiece::Item(item)) => menu.tiles.push(TileRow { title: String::new(), items: vec![item] }),
+        (TrayDrop::List(i), piece) => {
+            let entry = match piece {
+                TrayPiece::Item(item) => Entry::Item(item),
+                TrayPiece::Separator => Entry::Separator,
+            };
+            menu.list.insert(i.min(menu.list.len()), entry);
+        }
+        _ => {}
+    }
+    menu.tiles.retain(|r| !r.items.is_empty());
+}
+
+impl HomeApp {
+    /// The tray menu drawn as it opens, and beside it what else can go in:
+    /// pieces are dragged between the tiles, the list and the spare ones.
+    fn tray_editor(&mut self, ui: &mut egui::Ui) {
+        use crate::tray::{Entry, TileRow, TrayItem, TrayMenu};
+        const TILE: f32 = 56.0;
+        const GAP: f32 = 4.0;
+        const PAD: f32 = 10.0;
+        const ROW_H: f32 = 30.0;
+        const SEP_H: f32 = 11.0;
+        const HEAD_H: f32 = 18.0;
+        const NEW_ROW_H: f32 = 30.0;
+        let menu = self.cfg.tray_menu.clone();
+        let drag = self.tray_drag;
+        let pointer = ui.ctx().pointer_latest_pos();
+        let released = ui.input(|i| i.pointer.primary_released() || !i.pointer.primary_down());
+
+        // the menu's size, the spare pieces laid out beside it
+        let menu_w = PAD * 2.0 + TileRow::MAX as f32 * TILE + (TileRow::MAX - 1) as f32 * GAP;
+        let list_h: f32 = menu.list.iter().map(|e| if *e == Entry::Separator { SEP_H } else { ROW_H }).sum();
+        let menu_h = PAD + menu.tiles.len() as f32 * (HEAD_H + TILE + 8.0) + NEW_ROW_H + 8.0 + SEP_H + list_h + PAD;
+        let width = ui.available_width();
+        let spare_w = (width - 16.0 - menu_w - 20.0 - 16.0).max(140.0);
+        let p = ui.painter().clone();
+        let spare: Vec<TrayPiece> = TrayItem::ALL.into_iter().filter(|i| !menu.has(*i)).map(TrayPiece::Item).chain([TrayPiece::Separator]).collect();
+        let mut chips = Vec::new();
+        let (mut cx, mut cy) = (0.0f32, 26.0f32);
+        for piece in &spare {
+            let g = p.layout_no_wrap(piece.label().to_string(), font(12.0), TEXT2);
+            let w = 34.0 + g.size().x;
+            if cx + w > spare_w && cx > 0.0 {
+                cx = 0.0;
+                cy += 34.0;
+            }
+            chips.push((Rect::from_min_size(pos2(cx, cy), vec2(w, 28.0)), *piece, g));
+            cx += w + 6.0;
+        }
+        // under them: room for a note, and the reset at the bottom
+        let spare_h = cy + 28.0 + 30.0 + 40.0;
+        let (area, _) = ui.allocate_exact_size(vec2(width, menu_h.max(spare_h)), Sense::hover());
+        let panel = Rect::from_min_size(area.min + vec2(16.0, 0.0), vec2(menu_w, menu_h));
+        let spare_zone = Rect::from_min_max(pos2(panel.right() + 20.0, area.top()), pos2(area.right() - 16.0, area.bottom()));
+
+        let mut start = None;
+        let picked = |from: TrayFrom| drag.is_some_and(|d| d.from == from);
+        let ctx = ui.ctx().clone();
+        let mut grab = |resp: &egui::Response, piece: TrayPiece, from: TrayFrom| {
+            if resp.drag_started() {
+                start = Some(TrayDrag { piece, from });
+            }
+            let hot = resp.hovered() && drag.is_none();
+            if hot {
+                ctx.set_cursor_icon(CursorIcon::Grab);
+            }
+            hot
+        };
+
+        // the menu, as dark as the real one
+        p.rect_filled(panel, 10, BG);
+        p.rect_stroke(panel, 10, Stroke::new(1.0, LINE_HI), StrokeKind::Inside);
+        let mut y = panel.top() + PAD;
+        let mut rows: Vec<(Rect, Vec<Rect>)> = Vec::new();
+        let mut titles = Vec::new();
+        for (r, row) in menu.tiles.iter().enumerate() {
+            // the heading, changed in place
+            let head = Rect::from_min_size(pos2(panel.left() + PAD + 2.0, y), vec2(menu_w - 2.0 * PAD - 2.0, HEAD_H - 2.0));
+            let mut text = row.heading().to_string();
+            let edit = egui::TextEdit::singleline(&mut text)
+                .id_salt(("tray-head", r))
+                .frame(egui::Frame::NONE)
+                .font(font_medium(11.0))
+                .text_color(DIM)
+                .hint_text(l("без заголовка", "no heading"));
+            if ui.put(head, edit).changed() {
+                titles.push((r, text));
+            }
+            y += HEAD_H;
+            let mut rects = Vec::new();
+            for (i, item) in row.items.iter().enumerate() {
+                let rect = Rect::from_min_size(pos2(panel.left() + PAD + i as f32 * (TILE + GAP), y), egui::Vec2::splat(TILE));
+                rects.push(rect);
+                let from = TrayFrom::Tile(r, i);
+                let resp = ui.interact(rect, ui.scope_id().with(("tray-tile", r, i)), Sense::drag());
+                let hot = grab(&resp, TrayPiece::Item(*item), from);
+                let a = if picked(from) { 0.25 } else { 1.0 };
+                p.rect_filled(rect, 8, if hot { ui::hover_fill().gamma_multiply(2.2) } else { ui::hover_fill() }.gamma_multiply(a));
+                icons::paint(&p, Rect::from_center_size(rect.center() - vec2(0.0, 8.0), egui::Vec2::splat(18.0)), item.icon(), 16.0, TEXT2.gamma_multiply(a));
+                p.text(pos2(rect.center().x, rect.bottom() - 12.0), egui::Align2::CENTER_CENTER, item.tile_label(), font(11.0), DIM.gamma_multiply(a));
+            }
+            rows.push((Rect::from_min_max(pos2(panel.left(), y - 4.0), pos2(panel.right(), y + TILE + 4.0)), rects));
+            y += TILE + 8.0;
+        }
+        // room for one more row of tiles
+        let new_row = Rect::from_min_size(pos2(panel.left() + PAD, y), vec2(menu_w - 2.0 * PAD, NEW_ROW_H));
+        let carrying_item = drag.is_some_and(|d| matches!(d.piece, TrayPiece::Item(_)));
+        let edge = if carrying_item { DIM } else { LINE_HI };
+        p.extend(egui::Shape::dashed_line(
+            &[new_row.left_top(), new_row.right_top(), new_row.right_bottom(), new_row.left_bottom(), new_row.left_top()],
+            Stroke::new(1.0, edge),
+            4.0,
+            3.0,
+        ));
+        p.text(new_row.center(), egui::Align2::CENTER_CENTER, l("+ новый ряд плиток", "+ a new row of tiles"), font(11.5), if carrying_item { DIM } else { FAINT });
+        y += NEW_ROW_H + 8.0;
+        p.hline(panel.x_range().shrink(PAD), y + SEP_H / 2.0, Stroke::new(1.0, LINE));
+        y += SEP_H;
+        // the list
+        let list_top = y;
+        let mut list = Vec::new();
+        for (i, e) in menu.list.iter().enumerate() {
+            let h = if *e == Entry::Separator { SEP_H } else { ROW_H };
+            let rect = Rect::from_min_size(pos2(panel.left() + 4.0, y), vec2(menu_w - 8.0, h));
+            list.push(rect);
+            let from = TrayFrom::List(i);
+            let piece = match e {
+                Entry::Item(item) => TrayPiece::Item(*item),
+                Entry::Separator => TrayPiece::Separator,
+            };
+            let resp = ui.interact(rect, ui.scope_id().with(("tray-row", i)), Sense::drag());
+            let hot = grab(&resp, piece, from);
+            let a = if picked(from) { 0.25 } else { 1.0 };
+            if hot {
+                p.rect_filled(rect, 6, ui::hover_fill());
+            }
+            match e {
+                Entry::Separator => {
+                    p.hline(rect.x_range().shrink(8.0), rect.center().y, Stroke::new(1.0, if hot { DIM } else { LINE_HI }.gamma_multiply(a)));
+                }
+                Entry::Item(item) => {
+                    // the replay's row shows only while the replay is on
+                    let off = *item == TrayItem::Replay && !self.cfg.replay_enabled;
+                    icons::paint(&p, Rect::from_center_size(pos2(rect.left() + 16.0, rect.center().y), egui::Vec2::splat(15.0)), item.icon(), 14.0, if off { FAINT } else { TEXT2 }.gamma_multiply(a));
+                    let label = if off { lf!("{} · при включённом повторе", "{} · with the replay on", item.label()) } else { item.label().to_string() };
+                    p.text(pos2(rect.left() + 34.0, rect.center().y), egui::Align2::LEFT_CENTER, label, font(12.5), if off { FAINT } else { TEXT }.gamma_multiply(a));
+                    let key = item.hotkey().map(|k| crate::hotkey::display_parts(self.cfg.primary_binding(k)).join(" ")).unwrap_or_default();
+                    if !off && !key.is_empty() {
+                        p.text(pos2(rect.right() - 10.0, rect.center().y), egui::Align2::RIGHT_CENTER, key, mono(10.5), FAINT.gamma_multiply(a));
+                    }
+                }
+            }
+            y += h;
+        }
+
+        // the spare pieces
+        p.text(spare_zone.left_top(), egui::Align2::LEFT_TOP, l("ещё можно добавить", "can be added"), font_medium(12.0), DIM);
+        for (rel, piece, g) in chips {
+            let rect = rel.translate(spare_zone.min.to_vec2());
+            let resp = ui.interact(rect, ui.scope_id().with(("tray-spare", piece.label())), Sense::drag());
+            let hot = grab(&resp, piece, TrayFrom::Spare);
+            p.rect_filled(rect, 14, if hot { ui::hover_fill().gamma_multiply(2.2) } else { ui::hover_fill() });
+            p.rect_stroke(rect, 14, Stroke::new(1.0, LINE), StrokeKind::Inside);
+            icons::paint(&p, Rect::from_center_size(pos2(rect.left() + 15.0, rect.center().y), egui::Vec2::splat(13.0)), piece.icon(), 12.0, DIM);
+            p.galley(pos2(rect.left() + 26.0, rect.center().y - g.size().y / 2.0), g, TEXT2);
+        }
+
+        // where it would land
+        let target = drag.zip(pointer).and_then(|(d, pt)| {
+            let item = match d.piece {
+                TrayPiece::Item(i) => Some(i),
+                TrayPiece::Separator => None,
+            };
+            if spare_zone.contains(pt) {
+                let can = d.from != TrayFrom::Spare && !item.is_some_and(|i| i.locked());
+                return can.then_some(TrayDrop::Remove);
+            }
+            if !panel.expand(14.0).contains(pt) {
+                return None;
+            }
+            if item.is_some() {
+                for (r, (band, rects)) in rows.iter().enumerate() {
+                    if band.contains(pt) {
+                        let same_row = matches!(d.from, TrayFrom::Tile(sr, _) if sr == r);
+                        if rects.len() >= TileRow::MAX && !same_row {
+                            return None;
+                        }
+                        return Some(TrayDrop::Tile(r, rects.iter().filter(|t| t.center().x < pt.x).count()));
+                    }
+                }
+                if new_row.expand(5.0).contains(pt) {
+                    return Some(TrayDrop::NewRow);
+                }
+            }
+            (pt.y >= list_top - 8.0).then(|| TrayDrop::List(list.iter().filter(|r| r.center().y < pt.y).count()))
+        });
+        let fg = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("tray-drop")));
+        match target {
+            Some(TrayDrop::Tile(r, i)) => {
+                let (band, rects) = &rows[r];
+                let x = match (rects.get(i), rects.last()) {
+                    (Some(t), _) => t.left() - GAP / 2.0,
+                    (None, Some(last)) => last.right() + GAP / 2.0,
+                    (None, None) => panel.left() + PAD,
+                };
+                fg.vline(x, band.y_range().shrink(4.0), Stroke::new(2.0, ACCENT));
+            }
+            Some(TrayDrop::NewRow) => {
+                fg.rect_filled(new_row, 6, ACCENT.gamma_multiply(0.1));
+                fg.rect_stroke(new_row, 6, Stroke::new(1.0, ACCENT), StrokeKind::Inside);
+            }
+            Some(TrayDrop::List(i)) => {
+                let y = match (list.get(i), list.last()) {
+                    (Some(r), _) => r.top(),
+                    (None, Some(last)) => last.bottom(),
+                    (None, None) => list_top,
+                };
+                fg.hline(panel.x_range().shrink(8.0), y, Stroke::new(2.0, ACCENT));
+            }
+            Some(TrayDrop::Remove) => {
+                fg.rect_stroke(spare_zone.expand(6.0), 10, Stroke::new(1.0, ACCENT.gamma_multiply(0.7)), StrokeKind::Inside);
+            }
+            None => {}
+        }
+        // settings and quit don't leave
+        if let (Some(d), Some(pt)) = (drag, pointer)
+            && spare_zone.contains(pt)
+            && matches!(d.piece, TrayPiece::Item(i) if i.locked())
+        {
+            p.text(pos2(spare_zone.left(), spare_zone.top() + cy + 28.0 + 16.0), egui::Align2::LEFT_CENTER, l("это убрать нельзя", "this one stays"), font(12.0), DANGER);
+        }
+        // back to the menu blinker comes with
+        let reset = Rect::from_min_max(pos2(spare_zone.left(), spare_zone.bottom() - 30.0), spare_zone.right_bottom());
+        let mut row = ui.new_child(egui::UiBuilder::new().max_rect(reset).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        let changed = self.cfg.tray_menu != TrayMenu::default();
+        row.add_enabled_ui(changed && drag.is_none(), |ui| {
+            if ui::button(ui, l("сбросить", "reset"), ui::Kind::Ghost)
+                .on_hover_text(l("вернуть меню, как было в blinker", "back to blinker's own menu"))
+                .clicked()
+            {
+                self.cfg.tray_menu = TrayMenu::default();
+            }
+        });
+        // the piece in hand follows the pointer
+        if let (Some(d), Some(pt)) = (drag, pointer) {
+            ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+            let tip = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("tray-ghost")));
+            let g = tip.layout_no_wrap(d.piece.label().to_string(), font(12.0), TEXT);
+            let r = Rect::from_min_size(pt + vec2(12.0, 10.0), vec2(34.0 + g.size().x, 28.0));
+            tip.add(egui::epaint::Shadow { offset: [0, 4], blur: 14, spread: 0, color: egui::Color32::from_black_alpha(120) }.as_shape(r, 14));
+            tip.rect_filled(r, 14, PANEL);
+            tip.rect_stroke(r, 14, Stroke::new(1.0, ACCENT.gamma_multiply(0.6)), StrokeKind::Inside);
+            icons::paint(&tip, Rect::from_center_size(pos2(r.left() + 15.0, r.center().y), egui::Vec2::splat(13.0)), d.piece.icon(), 12.0, ACCENT);
+            tip.galley(pos2(r.left() + 26.0, r.center().y - g.size().y / 2.0), g, TEXT);
+        }
+
+        for (r, text) in titles {
+            if let Some(row) = self.cfg.tray_menu.tiles.get_mut(r) {
+                row.title = text;
+            }
+        }
+        if released {
+            // let go: it lands (or goes back where it was)
+            if let (Some(d), Some(t)) = (drag, target) {
+                tray_move(&mut self.cfg.tray_menu, d, t);
+            }
+            self.tray_drag = None;
+        } else if let Some(s) = start {
+            self.tray_drag = Some(s);
+        }
+    }
+}
+
 /// Size of everything under `dir` (date / pics / videos subfolders included).
 /// A binding being recorded: which action, and which slot (None = new one).
 #[derive(Clone, Copy, PartialEq)]
@@ -218,6 +595,12 @@ struct HomeApp {
     update: Arc<Mutex<Option<String>>>,
     /// An update being installed (after "update blinker").
     install: Option<Arc<crate::update::Install>>,
+    /// A speech model downloading (subtitles from speech).
+    speech_install: Option<(crate::vedit::speech::Model, Arc<crate::vedit::speech::Job>)>,
+    speech_error: Option<String>,
+    /// The text model coming down (Windows).
+    ocr_install: Option<Arc<crate::paddle::Install>>,
+    ocr_error: Option<String>,
     /// "Check for updates" being asked or answered.
     check: Option<Arc<Mutex<crate::update::Check>>>,
     content_rect: Rect,
@@ -239,6 +622,8 @@ struct HomeApp {
     changelog_open: bool,
     /// The microphones there are (read when the page opens).
     mics: Option<Vec<(String, String)>>,
+    /// A piece of the tray menu being dragged in its editor.
+    tray_drag: Option<TrayDrag>,
     /// Page currently on screen and when it started appearing.
     shown: Option<HomeTab>,
     page_at: f64,
@@ -269,12 +654,12 @@ impl HomeApp {
                 if cfg!(target_os = "macos") {
                     ui.add_space(TITLE_BAR_H - 4.0);
                 }
-                let h = if cfg!(target_os = "macos") { 30.0 } else { TITLE_BAR_H };
+                let h = if cfg!(target_os = "macos") { 36.0 } else { TITLE_BAR_H };
                 ui.allocate_ui_with_layout(vec2(r.width(), h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = 7.0;
-                    ui.add_space(8.0);
-                    brand_mark(ui, 20.0);
-                    ui.label(egui::RichText::new("blinker").font(font_semibold(15.0)).color(TEXT));
+                    ui.spacing_mut().item_spacing.x = 9.0;
+                    ui.add_space(6.0);
+                    brand_mark(ui, 30.0);
+                    ui.label(egui::RichText::new("blinker").font(font_semibold(17.0)).color(TEXT));
                 });
                 ui.spacing_mut().item_spacing.y = 2.0;
                 let plate = ui.painter().add(egui::Shape::Noop);
@@ -282,14 +667,15 @@ impl HomeApp {
                 let groups: [(&str, &[(HomeTab, Icon, &str)]); 3] = [
                     (
                         l("снимки", "screenshots"),
-                        &[
-                            (HomeTab::Capture, Icon::Region, t("захват")),
-                            (HomeTab::Sound, Icon::Sound, t("звук")),
-                        ],
+                        &[(HomeTab::Capture, Icon::Region, t("захват")), (HomeTab::Text, Icon::Scan, l("текст и qr-коды", "text and qr codes"))],
                     ),
                     (
                         l("видео", "video"),
-                        &[(HomeTab::Record, Icon::Record, t("запись")), (HomeTab::Replay, Icon::Repeat, t("повтор"))],
+                        &[
+                            (HomeTab::Record, Icon::Record, t("запись")),
+                            (HomeTab::Replay, Icon::Repeat, t("повтор")),
+                            (HomeTab::Editor, Icon::Cut, l("редактор видео", "video editor")),
+                        ],
                     ),
                     (
                         l("общее", "general"),
@@ -298,6 +684,8 @@ impl HomeApp {
                             (HomeTab::Storage, Icon::Save, t("сохранение")),
                             (HomeTab::Upload, Icon::Upload, t("загрузка")),
                             (HomeTab::Hotkeys, Icon::Keys, t("горячие клавиши")),
+                            (HomeTab::Tray, Icon::Menu, l("меню трея", "tray menu")),
+                            (HomeTab::Integrations, Icon::Link, l("интеграции", "integrations")),
                             (HomeTab::System, Icon::Settings, t("система")),
                         ],
                     ),
@@ -331,6 +719,17 @@ impl HomeApp {
         let newer = self.update.lock().unwrap().clone();
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
             ui.spacing_mut().item_spacing.y = 8.0;
+            // the bottom line: where blinker lives
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                ui.add_space(8.0);
+                if brand_link(ui, crate::brand::Mark::GitHub, "github", crate::update::REPO_URL).clicked() {
+                    win::open_url(crate::update::REPO_URL);
+                }
+                if brand_link(ui, crate::brand::Mark::Discord, "discord", l("сервер blinker в discord", "blinker's discord server")).clicked() {
+                    crate::discord::open_invite();
+                }
+            });
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 ui.add_space(8.0);
@@ -344,16 +743,6 @@ impl HomeApp {
                 }
                 if resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(l("история версий", "release notes")).clicked() {
                     self.changelog_open = true;
-                }
-                let g = ui.painter().layout_no_wrap("github".into(), mono(10.5), egui::Color32::PLACEHOLDER);
-                let (rect, resp) = ui.allocate_exact_size(g.size(), Sense::click());
-                let col = if resp.hovered() { TEXT } else { DIM };
-                ui.painter().galley(rect.min, g, col);
-                if resp.hovered() {
-                    ui.painter().hline(rect.x_range(), rect.bottom() + 0.5, Stroke::new(1.0, col));
-                }
-                if resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(crate::update::REPO_URL).clicked() {
-                    win::open_url(crate::update::REPO_URL);
                 }
             });
             use crate::update::Stage;
@@ -373,6 +762,9 @@ impl HomeApp {
                 }
                 (Some(Stage::Installing), _) => note(ui, format!("  {}", l("установка…", "installing…")), DIM),
                 (Some(Stage::Restarting), _) => note(ui, format!("  {}", l("перезапуск…", "restarting…")), DIM),
+                (Some(Stage::Failed(e)), _) if e == crate::update::LATEST => {
+                    note(ui, format!("  {}", l("у тебя последняя версия", "this is the latest version")), DIM);
+                }
                 (Some(Stage::Failed(e)), _) => {
                     if ui::button_h(ui, l("скачать с сайта", "get it from the site"), ui::Kind::Ghost, 26.0).clicked() {
                         win::open_url(crate::update::SITE_URL);
@@ -429,13 +821,16 @@ impl HomeApp {
                     self.nvidia_note(ui);
                     match self.tab {
                         HomeTab::Capture => self.capture_page(ui),
+                        HomeTab::Notify => self.notify_page(ui),
+                        HomeTab::Text => self.text_page(ui),
                         HomeTab::Record => self.record_page(ui),
                         HomeTab::Replay => self.replay_page(ui),
-                        HomeTab::Upload => self.upload_page(ui),
-                        HomeTab::Notify => self.notify_page(ui),
-                        HomeTab::Sound => self.sound_page(ui),
+                        HomeTab::Editor => self.editor_page(ui),
                         HomeTab::Storage => self.storage_page(ui),
+                        HomeTab::Upload => self.upload_page(ui),
                         HomeTab::Hotkeys => self.hotkeys_page(ui),
+                        HomeTab::Tray => self.tray_page(ui),
+                        HomeTab::Integrations => self.integrations_page(ui),
                         HomeTab::System => self.system_page(ui),
                     }
                 });
@@ -478,7 +873,7 @@ impl HomeApp {
             });
         ui.add_space(14.0);
         if go {
-            self.tab = HomeTab::System;
+            self.tab = HomeTab::Integrations;
             self.nvidia_open = true;
         }
         if go || done {
@@ -519,6 +914,23 @@ impl HomeApp {
                     self.cfg.tour_done = !self.cfg.tour_done;
                 }
             });
+            // a Mac tells the parts of a window apart through Accessibility
+            #[cfg(target_os = "macos")]
+            {
+                let allowed = win::ax_trusted(false);
+                let sub = if allowed {
+                    l("клик выделяет часть окна: страницу, список. alt + клик — окно целиком", "a click takes part of a window: the page, a list. alt + click takes the whole window")
+                } else {
+                    l("чтобы клик выделял часть окна (например, страницу без вкладок), нужен «универсальный доступ»", "for a click to take part of a window (say, the page without the tabs), blinker needs Accessibility")
+                };
+                ui::setting_row(ui, l("части окон", "parts of windows"), sub, |ui| {
+                    if allowed {
+                        ui.label(egui::RichText::new(l("разрешено", "allowed")).font(font(12.5)).color(FAINT));
+                    } else if ui::button(ui, l("разрешить", "allow"), ui::Kind::Ghost).clicked() {
+                        win::ax_trusted(true);
+                    }
+                });
+            }
         });
         ui::group(ui, t("лупа"), |ui| {
             ui::setting_row(ui, t("лупа"), t("увеличенный кусок экрана у курсора"), |ui| {
@@ -533,6 +945,7 @@ impl HomeApp {
             };
             ui::setting_row(ui, t("масштаб лупы"), &loupe, |_| {});
         });
+        self.sound_group(ui);
     }
 
     fn record_page(&mut self, ui: &mut egui::Ui) {
@@ -655,11 +1068,6 @@ impl HomeApp {
             ui.add_space(8.0);
         });
 
-        ui::group(ui, l("после остановки", "after stopping"), |ui| {
-            ui::setting_row(ui, t("открывать редактор"), "", |ui| {
-                ui::toggle(ui, &mut self.cfg.rec_open_editor);
-            });
-        });
     }
 
     fn replay_page(&mut self, ui: &mut egui::Ui) {
@@ -851,8 +1259,8 @@ impl HomeApp {
         ui.add_space(16.0);
         let note = match (mode, self.cfg.upload_custom.is_some()) {
             (_, true) => l(
-                "загрузчик перенесён из sharex. другой подключается в разделе «система».",
-                "the uploader came from sharex. another one is picked in “system”.",
+                "загрузчик перенесён из sharex. другой подключается в разделе «интеграции».",
+                "the uploader came from sharex. another one is picked in “integrations”.",
             ),
             (UploadMode::Default, _) => l(
                 "post.blinker.cool — наш сервер: без регистрации, файлы живут 3 дня, видео до 100 мб. свой такой же можно поднять из папки server в репозитории.",
@@ -892,17 +1300,21 @@ impl HomeApp {
         }
     }
 
+    /// The card after a capture or a recording.
     fn notify_page(&mut self, ui: &mut egui::Ui) {
-        Self::page_title(ui, t("уведомление"), t("превью после снимка"));
+        Self::page_title(ui, t("уведомление"), l("превью после снимка и записи", "a preview after a capture or a recording"));
         ui::group(ui, "", |ui| {
-            ui::setting_row(ui, t("показывать после снимка"), t("его можно перетащить как файл"), |ui| {
-                ui::toggle(ui, &mut self.cfg.show_toast);
-            });
-        });
-        if !self.cfg.show_toast {
-            return;
-        }
-        ui::group(ui, l("вид", "look"), |ui| {
+            ui::setting_row(
+                ui,
+                l("показывать превью", "show the preview"),
+                l("его можно перетащить как файл, правый клик закрывает", "drag it out as a file, a right click dismisses it"),
+                |ui| {
+                    ui::toggle(ui, &mut self.cfg.show_toast);
+                },
+            );
+            if !self.cfg.show_toast {
+                return;
+            }
             ui::setting_row(ui, t("где появляться"), corner_name(self.cfg.toast_corner), |ui| {
                 corner_picker(ui, &mut self.cfg.toast_corner);
             });
@@ -917,8 +1329,6 @@ impl HomeApp {
             ui::setting_row(ui, t("подпись под превью"), t("формат и размер файла"), |ui| {
                 ui::toggle(ui, &mut self.cfg.toast_caption);
             });
-        });
-        ui::group(ui, l("время", "timing"), |ui| {
             ui::setting_row(ui, t("длительность"), l("при наведении не пропадает", "stays while hovered"), |ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 let label = lf!("{:.0} с", "{:.0} s", self.cfg.toast_seconds);
@@ -929,18 +1339,16 @@ impl HomeApp {
         });
     }
 
-    fn sound_page(&mut self, ui: &mut egui::Ui) {
-        Self::page_title(ui, t("звук"), t("щелчок при снимке"));
-        ui::group(ui, "", |ui| {
+    /// The click when a capture is taken.
+    fn sound_group(&mut self, ui: &mut egui::Ui) {
+        let mut preview = false;
+        ui::group(ui, t("звук"), |ui| {
             ui::setting_row(ui, t("звук при снимке"), "", |ui| {
                 ui::toggle(ui, &mut self.cfg.sound_enabled);
             });
-        });
-        if !self.cfg.sound_enabled {
-            return;
-        }
-        let mut preview = false;
-        ui::group(ui, "", |ui| {
+            if !self.cfg.sound_enabled {
+                return;
+            }
             ui::setting_row(ui, l("какой звук", "which sound"), "", |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 let mut kinds: Vec<SoundKind> = SoundKind::BUILTIN.to_vec();
@@ -1022,6 +1430,17 @@ impl HomeApp {
             ui::setting_row(ui, t("раскладывать по датам"), &layout, |ui| {
                 ui::toggle(ui, &mut self.cfg.sort_by_date);
             });
+            // games are recognized on Windows only
+            if cfg!(windows) {
+                ui::setting_row(
+                    ui,
+                    l("клипы из игр — в папку игры", "clips from games in the game's folder"),
+                    l("blinker / games / Dota 2, и в названии файла игра", "blinker / games / Dota 2, and the game in the file's name"),
+                    |ui| {
+                        ui::toggle(ui, &mut self.cfg.sort_by_game);
+                    },
+                );
+            }
         });
         ui::group(ui, l("снимки", "screenshots"), |ui| {
             let fmt_desc = match self.cfg.format {
@@ -1077,7 +1496,7 @@ impl HomeApp {
         let groups: [(&str, &[HotkeyAction]); 2] = [
             (
                 l("скриншоты", "screenshots"),
-                &[HotkeyAction::Region, HotkeyAction::Screen, HotkeyAction::Window, HotkeyAction::Last],
+                &[HotkeyAction::Region, HotkeyAction::Screen, HotkeyAction::Window, HotkeyAction::Last, HotkeyAction::Pick, HotkeyAction::Text],
             ),
             (
                 t("запись"),
@@ -1187,31 +1606,221 @@ impl HomeApp {
         });
     }
 
-    fn system_page(&mut self, ui: &mut egui::Ui) {
-        Self::page_title(ui, t("система"), t("запуск, трей, язык"));
+    /// Subtitles from speech in the video editor: the models, put in or taken
+    /// out here (nothing is downloaded until asked).
+    fn speech_group(&mut self, ui: &mut egui::Ui) {
+        use crate::vedit::speech::{self, Model};
+        let done = self.speech_install.as_ref().map(|(_, job)| job.result.lock().unwrap().take());
+        match done {
+            Some(Some(r)) => {
+                self.speech_error = r.err();
+                self.speech_install = None;
+            }
+            Some(None) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(200)),
+            None => {}
+        }
+        ui::group(ui, l("субтитры из речи", "subtitles from speech"), |ui| {
+            for m in Model::ALL {
+                let installing = self.speech_install.as_ref().filter(|(im, _)| *im == m).map(|(_, j)| j.fraction());
+                let state = match installing {
+                    Some(f) => lf!("скачивается {:.0}%", "downloading {:.0}%", f * 100.0),
+                    None if m.ready() => l("установлена", "installed").to_string(),
+                    None => l("не установлена", "not installed").to_string(),
+                };
+                ui::setting_row(ui, m.label(), &format!("{} · {state}", m.desc()), |ui| {
+                    if installing.is_some() {
+                        return;
+                    }
+                    if m.ready() {
+                        if ui::button(ui, l("удалить", "remove"), ui::Kind::Ghost).clicked() {
+                            speech::remove(m);
+                        }
+                    } else {
+                        ui.add_enabled_ui(self.speech_install.is_none(), |ui| {
+                            if ui::button(ui, l("установить", "install"), ui::Kind::Ghost).clicked() {
+                                self.speech_error = None;
+                                self.speech_install = Some((m, speech::install(ui.ctx(), m)));
+                            }
+                        });
+                    }
+                });
+            }
+            let hint = match &self.speech_error {
+                Some(e) => lf!("не установилась: {e}", "didn't install: {e}"),
+                None => l(
+                    "нужна только для «распознать речь» в редакторе видео. работает на этом компьютере, без интернета",
+                    "only for “recognize speech” in the video editor. it runs on this computer, offline",
+                )
+                .to_string(),
+            };
+            ui.label(egui::RichText::new(hint).font(font(12.0)).color(FAINT));
+        });
+    }
+
+    /// The text recognition model (Windows; a Mac has Vision).
+    fn ocr_group(&mut self, ui: &mut egui::Ui) {
+        let done = self.ocr_install.as_ref().map(|job| job.result.lock().unwrap().take());
+        match done {
+            Some(Some(r)) => {
+                self.ocr_error = r.err();
+                self.ocr_install = None;
+            }
+            Some(None) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(200)),
+            None => {}
+        }
+        ui::group(ui, l("распознавание текста", "text recognition"), |ui| {
+            let ready = crate::paddle::ready();
+            let state = match &self.ocr_install {
+                Some(job) => lf!("скачивается {:.0}%", "downloading {:.0}%", job.fraction() * 100.0),
+                None if ready => l("установлена", "installed").to_string(),
+                None => l("не установлена", "not installed").to_string(),
+            };
+            let title = lf!("paddleocr · {} мб", "paddleocr · {} mb", crate::paddle::SIZE_MB);
+            let desc = lf!("русский, украинский, белорусский, английский · {state}", "Russian, Ukrainian, Belarusian, English · {state}");
+            ui::setting_row(ui, &title, &desc, |ui| {
+                if self.ocr_install.is_some() {
+                    return;
+                }
+                if ready {
+                    if ui::button(ui, l("удалить", "remove"), ui::Kind::Ghost).clicked() {
+                        crate::paddle::remove();
+                    }
+                } else if ui::button(ui, l("установить", "install"), ui::Kind::Ghost).clicked() {
+                    self.ocr_error = None;
+                    self.ocr_install = Some(crate::paddle::install(ui.ctx()));
+                }
+            });
+            let hint = match &self.ocr_error {
+                Some(e) => lf!("не установилась: {e}", "didn't install: {e}"),
+                None => l(
+                    "без неё текст не распознаётся. всё считается на этом компьютере, без интернета",
+                    "text isn't read without it. it all runs on this computer, offline",
+                )
+                .to_string(),
+            };
+            ui.label(egui::RichText::new(hint).font(font(12.0)).color(FAINT));
+        });
+    }
+
+    /// Text and QR codes read off the screen.
+    fn text_page(&mut self, ui: &mut egui::Ui) {
+        let hk = crate::hotkey::display_parts(self.cfg.primary_binding(HotkeyAction::Text)).join(" ");
+        let sub = if hk.is_empty() {
+            l("«распознать текст» в панели захвата", "“recognize text” in the capture panel").to_string()
+        } else {
+            lf!("{hk} или «распознать текст» в панели захвата", "{hk} or “recognize text” in the capture panel")
+        };
+        Self::page_title(ui, l("текст и qr-коды", "text and qr codes"), &sub);
+        if cfg!(windows) {
+            self.ocr_group(ui);
+        } else {
+            ui::group(ui, l("распознавание текста", "text recognition"), |ui| {
+                ui::setting_row(ui, l("распознаёт macos", "macos reads it"), l("vision встроен в систему: ставить ничего не нужно", "vision is part of the system: nothing to install"), |_| {});
+            });
+        }
+        ui::group(ui, l("qr-коды", "qr codes"), |ui| {
+            ui::setting_row(
+                ui,
+                l("читать qr-коды", "read qr codes"),
+                l("при снимке под каждым кодом — куда он ведёт и кнопка «перейти»", "on a capture, under each code: where it leads, and an \"open\" button"),
+                |ui| {
+                    ui::toggle(ui, &mut self.cfg.read_qr);
+                },
+            );
+        });
+    }
+
+    /// The video editor: whether it opens after a recording, and its
+    /// subtitles from speech.
+    fn editor_page(&mut self, ui: &mut egui::Ui) {
+        Self::page_title(ui, l("редактор видео", "video editor"), l("обрезка, монтаж, текст и субтитры", "trimming, cutting, text and subtitles"));
+        ui::group(ui, l("после записи", "after a recording"), |ui| {
+            ui::setting_row(ui, t("открывать редактор"), l("сразу после остановки записи", "as soon as a recording stops"), |ui| {
+                ui::toggle(ui, &mut self.cfg.rec_open_editor);
+            });
+        });
+        self.speech_group(ui);
+    }
+
+    /// The tray: what clicks on its icon do, and its menu, laid out by
+    /// dragging.
+    fn tray_page(&mut self, ui: &mut egui::Ui) {
+        Self::page_title(ui, l("меню трея", "tray menu"), l("клики по значку и что в меню", "clicks on the icon and what's in the menu"));
+        ui::group(ui, l("клики по значку", "clicks on the icon"), |ui| {
+            // a Mac menu bar icon has no double click: the first click opens its menu
+            let mut rows = vec![(l("левый клик", "left click"), "tray-left", &mut self.cfg.tray_click)];
+            if !cfg!(target_os = "macos") {
+                rows.push((l("двойной клик", "double click"), "tray-double", &mut self.cfg.tray_double_click));
+            }
+            rows.push((l("правый клик", "right click"), "tray-right", &mut self.cfg.tray_right_click));
+            for (title, id, value) in rows {
+                ui::setting_row(ui, title, "", |ui| {
+                    egui::ComboBox::from_id_salt(id)
+                        .selected_text(egui::RichText::new(value.label()).font(font(12.5)).color(TEXT))
+                        .width(170.0)
+                        .height(400.0)
+                        .show_ui(ui, |ui| {
+                            for a in TrayAction::ALL {
+                                ui.selectable_value(value, a, egui::RichText::new(a.label()).font(font(12.5)));
+                            }
+                        });
+                });
+            }
+            if self.cfg.tray_click != TrayAction::Menu && self.cfg.tray_right_click != TrayAction::Menu {
+                ui::setting_row(
+                    ui,
+                    l("меню трея не открыть", "the tray menu is unreachable"),
+                    l("поставь «показать меню» на одну из кнопок", "set “show menu” on one of the buttons"),
+                    |_| {},
+                );
+            }
+        });
+        ui::group(ui, l("меню", "the menu"), |ui| {
+            ui.add_space(12.0);
+            self.tray_editor(ui);
+            ui.add_space(12.0);
+        });
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(l(
+                        "перетаскивай пункты: в плитки сверху, в список или вправо, чтобы убрать. заголовок ряда меняется по клику. настройки и выход остаются всегда. во время записи вместо плиток — «стоп» и «пауза». «сбросить» вернёт меню, как было",
+                        "drag items into the tiles on top, into the list, or to the right to take them out. click a row's heading to change it. settings and quit always stay. while recording, the tiles give way to “stop” and “pause”. “reset” brings the menu back as it was",
+                    ))
+                    .font(font(12.0))
+                    .color(FAINT),
+                )
+                .wrap(),
+            );
+        });
+    }
+
+    /// Other apps: Discord, ShareX, NVIDIA.
+    fn integrations_page(&mut self, ui: &mut egui::Ui) {
+        Self::page_title(ui, l("интеграции", "integrations"), l("discord, sharex и другие программы", "discord, sharex and other apps"));
         let found = self.sharex.get_or_insert_with(crate::sharex::detect).clone();
         // found ShareX goes first: a new user brings it over in one click
         if found.is_some() {
             self.sharex_group(ui, found.clone());
         }
-        ui::group(ui, "язык · language", |ui| {
-            // the language names stay in their own language
-            ui::setting_row(ui, l("язык интерфейса", "interface language"), "", |ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                let system = if cfg!(target_os = "macos") { l("как в системе", "system") } else { l("как в windows", "system") };
-                for (code, label) in [("en", "english"), ("ru", "русский"), ("", system)] {
-                    if ui::filter(ui, label, self.cfg.lang == code).clicked() {
-                        self.cfg.lang = code.to_string();
-                        crate::i18n::apply(code);
-                    }
-                }
-            });
-        });
-        ui::group(ui, l("запуск", "startup"), |ui| {
-            let title = if cfg!(target_os = "macos") { t("открывать при входе в систему") } else { t("запуск вместе с windows") };
-            ui::setting_row(ui, title, "", |ui| {
-                ui::toggle(ui, &mut self.cfg.autostart);
-            });
+        ui::group(ui, "discord", |ui| {
+            ui::setting_row(
+                ui,
+                l("статус в discord", "discord status"),
+                l("логотип blinker и кнопка на blinker.cool, пока blinker запущен", "the blinker logo and a blinker.cool button while blinker runs"),
+                |ui| {
+                    ui::toggle(ui, &mut self.cfg.discord_presence);
+                },
+            );
+            if self.cfg.discord_presence {
+                ui::setting_row(ui, l("показывать игру", "show the game"), l("«clipping dota 2» и значок игры, пока она запущена", "“clipping dota 2” and the game's icon while it runs"), |ui| {
+                    ui::toggle(ui, &mut self.cfg.discord_game);
+                });
+                ui::setting_row(ui, l("показывать статистику", "show the numbers"), l("сколько снимков и клипов за сегодня", "how many screenshots and clips today"), |ui| {
+                    ui::toggle(ui, &mut self.cfg.discord_stats);
+                });
+            }
         });
         if self.nvidia {
             ui::group(ui, "nvidia", |ui| {
@@ -1231,23 +1840,29 @@ impl HomeApp {
                 }
             });
         }
-        ui::group(ui, "discord", |ui| {
-            ui::setting_row(
-                ui,
-                l("статус в discord", "discord status"),
-                l("логотип blinker и кнопка на blinker.cool, пока blinker запущен", "the blinker logo and a blinker.cool button while blinker runs"),
-                |ui| {
-                    ui::toggle(ui, &mut self.cfg.discord_presence);
-                },
-            );
-            if self.cfg.discord_presence {
-                ui::setting_row(ui, l("показывать игру", "show the game"), l("«clipping dota 2» и значок игры, пока она запущена", "“clipping dota 2” and the game's icon while it runs"), |ui| {
-                    ui::toggle(ui, &mut self.cfg.discord_game);
-                });
-                ui::setting_row(ui, l("показывать статистику", "show the numbers"), l("сколько снимков и клипов за сегодня", "how many screenshots and clips today"), |ui| {
-                    ui::toggle(ui, &mut self.cfg.discord_stats);
-                });
-            }
+        if found.is_none() {
+            self.sharex_group(ui, None);
+        }
+    }
+
+    fn system_page(&mut self, ui: &mut egui::Ui) {
+        Self::page_title(ui, t("система"), l("язык, запуск, обновления", "language, startup, updates"));
+        ui::group(ui, l("основное", "basics"), |ui| {
+            // the language names stay in their own language
+            ui::setting_row(ui, "язык · language", "", |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                let system = if cfg!(target_os = "macos") { l("как в системе", "system") } else { l("как в windows", "system") };
+                for (code, label) in [("en", "english"), ("ru", "русский"), ("", system)] {
+                    if ui::filter(ui, label, self.cfg.lang == code).clicked() {
+                        self.cfg.lang = code.to_string();
+                        crate::i18n::apply(code);
+                    }
+                }
+            });
+            let title = if cfg!(target_os = "macos") { t("открывать при входе в систему") } else { t("запуск вместе с windows") };
+            ui::setting_row(ui, title, "", |ui| {
+                ui::toggle(ui, &mut self.cfg.autostart);
+            });
         });
         ui::group(ui, l("обновления", "updates"), |ui| {
             let newer = self.update.lock().unwrap().clone();
@@ -1285,38 +1900,6 @@ impl HomeApp {
                 },
             );
         });
-        ui::group(ui, l("значок в трее", "tray icon"), |ui| {
-            // a Mac menu bar icon has no double click: the first click opens its menu
-            let mut rows = vec![(l("левый клик", "left click"), "tray-left", &mut self.cfg.tray_click)];
-            if !cfg!(target_os = "macos") {
-                rows.push((l("двойной клик", "double click"), "tray-double", &mut self.cfg.tray_double_click));
-            }
-            rows.push((l("правый клик", "right click"), "tray-right", &mut self.cfg.tray_right_click));
-            for (title, id, value) in rows {
-                ui::setting_row(ui, title, "", |ui| {
-                    egui::ComboBox::from_id_salt(id)
-                        .selected_text(egui::RichText::new(value.label()).font(font(12.5)).color(TEXT))
-                        .width(170.0)
-                        .height(400.0)
-                        .show_ui(ui, |ui| {
-                            for a in TrayAction::ALL {
-                                ui.selectable_value(value, a, egui::RichText::new(a.label()).font(font(12.5)));
-                            }
-                        });
-                });
-            }
-            if self.cfg.tray_click != TrayAction::Menu && self.cfg.tray_right_click != TrayAction::Menu {
-                ui::setting_row(
-                    ui,
-                    l("меню трея не открыть", "the tray menu is unreachable"),
-                    l("поставь «показать меню» на одну из кнопок", "set “show menu” on one of the buttons"),
-                    |_| {},
-                );
-            }
-        });
-        if found.is_none() {
-            self.sharex_group(ui, None);
-        }
         ui.add_space(18.0);
         ui.label(egui::RichText::new(format!("blinker {}", env!("CARGO_PKG_VERSION"))).font(mono(11.0)).color(FAINT));
         // the config file: a click shows it in its folder
@@ -1369,7 +1952,7 @@ impl HomeApp {
                         ui.set_width(w - 48.0);
                         ui.set_height(h - 40.0);
                         ui.horizontal(|ui| {
-                            brand_mark(ui, 26.0);
+                            brand_mark(ui, 36.0);
                             ui.add_space(4.0);
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -1516,7 +2099,32 @@ impl UploadMode {
     }
 }
 
-/// The logo tile (sparkle on graphite) of `size` points.
+/// A link with another brand's mark before its name.
+fn brand_link(ui: &mut egui::Ui, mark: crate::brand::Mark, name: &str, tip: &str) -> egui::Response {
+    let g = ui.painter().layout_no_wrap(name.into(), mono(10.5), egui::Color32::PLACEHOLDER);
+    let icon = 12.0;
+    let size = vec2(icon + 5.0 + g.size().x, g.size().y.max(icon));
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let col = if resp.hovered() { TEXT } else { DIM };
+    let px = (icon * ui.ctx().pixels_per_point()).round() as u32;
+    let key = egui::Id::unique(("brand", mark as u8, px));
+    let tex = ui.data(|d| d.get_temp::<egui::TextureHandle>(key)).unwrap_or_else(|| {
+        let t = ui.ctx().load_texture("brand", theme::color_image(&mark.image(px)), egui::TextureOptions::LINEAR);
+        ui.data_mut(|d| d.insert_temp(key, t.clone()));
+        t
+    });
+    let ir = Rect::from_min_size(pos2(rect.left(), rect.center().y - icon / 2.0), vec2(icon, icon));
+    ui.painter().image(tex.id(), ir, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), col);
+    let tx = pos2(ir.right() + 5.0, rect.center().y - g.size().y / 2.0);
+    let text_w = g.size().x;
+    ui.painter().galley(tx, g, col);
+    if resp.hovered() {
+        ui.painter().hline(tx.x..=tx.x + text_w, rect.bottom() + 0.5, Stroke::new(1.0, col));
+    }
+    resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(tip)
+}
+
+/// The logo tile of `size` points.
 fn brand_mark(ui: &mut egui::Ui, size: f32) {
     let (r, _) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
     let px = (size * ui.ctx().pixels_per_point()).round() as u32;
@@ -1767,6 +2375,11 @@ impl eframe::App for HomeApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // blinker://update: the footer shows how it goes (or that this is
+        // the latest version)
+        if UPDATE_ASKED.swap(false, Ordering::SeqCst) && self.install.is_none() {
+            self.install = Some(crate::update::install(&ctx));
+        }
         if let Some(tab) = self.request.lock().unwrap().take() {
             self.tab = tab;
             self.cfg = self.shared.config();
@@ -1862,27 +2475,42 @@ fn pill_picker(ui: &mut egui::Ui, place: &mut config::PillPlace, whole: bool) {
     if !whole {
         p.rect_stroke(screen, 9, Stroke::new(1.0, LINE), StrokeKind::Inside);
     }
-    // the taskbar: apps in the middle, the tray and the clock on the right
-    let bar = Rect::from_min_max(pos2(screen.left(), screen.bottom() - 13.0), screen.max);
-    p.rect_filled(bar, egui::CornerRadius { nw: 0, ne: 0, sw: 9, se: 9 }, egui::Color32::from_rgb(0x24, 0x24, 0x22));
-    for i in -2..=2 {
-        p.rect_filled(Rect::from_center_size(pos2(bar.center().x + i as f32 * 10.0, bar.center().y), egui::Vec2::splat(6.0)), 2, egui::Color32::from_rgb(0x46, 0x46, 0x42));
-    }
-    for i in 0..3 {
-        p.circle_filled(pos2(bar.right() - 38.0 + i as f32 * 6.0, bar.center().y), 1.5, FAINT);
-    }
-    p.rect_filled(Rect::from_center_size(pos2(bar.right() - 13.0, bar.center().y), vec2(13.0, 4.0)), 1, FAINT);
+    // a Mac: the menu bar on top, the Dock below; Windows: the taskbar with
+    // the apps in the middle, the tray and the clock on the right
+    let work = if cfg!(target_os = "macos") {
+        let menu = Rect::from_min_max(screen.min, pos2(screen.right(), screen.top() + 8.0));
+        p.rect_filled(menu, egui::CornerRadius { nw: 9, ne: 9, sw: 0, se: 0 }, egui::Color32::from_rgb(0x24, 0x24, 0x22));
+        for i in 0..3 {
+            p.circle_filled(pos2(menu.right() - 30.0 + i as f32 * 7.0, menu.center().y), 1.5, FAINT);
+        }
+        let dock = Rect::from_center_size(pos2(screen.center().x, screen.bottom() - 9.0), vec2(56.0, 11.0));
+        p.rect_filled(dock, 4, egui::Color32::from_rgb(0x2A, 0x2A, 0x27));
+        for i in -2..=2 {
+            p.rect_filled(Rect::from_center_size(pos2(dock.center().x + i as f32 * 10.0, dock.center().y), egui::Vec2::splat(6.0)), 2, egui::Color32::from_rgb(0x46, 0x46, 0x42));
+        }
+        Rect::from_min_max(pos2(screen.left(), menu.bottom()), pos2(screen.right(), dock.top())).shrink(6.0)
+    } else {
+        let bar = Rect::from_min_max(pos2(screen.left(), screen.bottom() - 13.0), screen.max);
+        p.rect_filled(bar, egui::CornerRadius { nw: 0, ne: 0, sw: 9, se: 9 }, egui::Color32::from_rgb(0x24, 0x24, 0x22));
+        for i in -2..=2 {
+            p.rect_filled(Rect::from_center_size(pos2(bar.center().x + i as f32 * 10.0, bar.center().y), egui::Vec2::splat(6.0)), 2, egui::Color32::from_rgb(0x46, 0x46, 0x42));
+        }
+        for i in 0..3 {
+            p.circle_filled(pos2(bar.right() - 38.0 + i as f32 * 6.0, bar.center().y), 1.5, FAINT);
+        }
+        p.rect_filled(Rect::from_center_size(pos2(bar.right() - 13.0, bar.center().y), vec2(13.0, 4.0)), 1, FAINT);
+        Rect::from_min_max(screen.min, pos2(screen.right(), bar.top())).shrink(6.0)
+    };
 
     // where each choice puts the pill (spots relative to the little screen,
     // so scrolling the page doesn't send the pill gliding)
     // the real pill, about a third of the little screen wide
     let pw = (w * 0.3).round();
     let size = vec2(pw, (pw * 40.0 / 170.0).round());
-    let work = Rect::from_min_max(screen.min, pos2(screen.right(), bar.top())).shrink(6.0);
     let spot = |pl: PillPlace| -> Rect {
         match pl.anchor() {
             Some((fx, fy)) => Rect::from_min_size(pos2(work.left() + (work.width() - size.x) * fx, work.top() + (work.height() - size.y) * fy), size),
-            // by the tray
+            // by the tray (a Mac: the corner over the Dock)
             None if whole => Rect::from_min_size(work.right_bottom() - size, size),
             None => Rect::from_center_size(pos2(recorded.center().x, recorded.bottom() + 5.0 + size.y / 2.0), size),
         }
@@ -1968,4 +2596,43 @@ fn nvidia_steps(ui: &mut egui::Ui) {
             .color(FAINT),
         );
     });
+}
+
+#[cfg(test)]
+mod tray_editor_tests {
+    use super::{TrayDrag, TrayDrop, TrayFrom, TrayPiece, tray_move};
+    use crate::tray::{Entry, TrayItem, TrayMenu};
+
+    /// Moving pieces around the tray menu: within a row, from a row to the
+    /// list, from the spare ones, out of the menu; an emptied row goes.
+    #[test]
+    fn pieces_move() {
+        let mut m = TrayMenu::default();
+        // "window" before "area" in the first row
+        tray_move(&mut m, TrayDrag { piece: TrayPiece::Item(TrayItem::Window), from: TrayFrom::Tile(0, 2) }, TrayDrop::Tile(0, 0));
+        assert_eq!(m.tiles[0].items, [TrayItem::Window, TrayItem::Region, TrayItem::Screen]);
+        // "area" to the end of its own row
+        tray_move(&mut m, TrayDrag { piece: TrayPiece::Item(TrayItem::Region), from: TrayFrom::Tile(0, 1) }, TrayDrop::Tile(0, 3));
+        assert_eq!(m.tiles[0].items, [TrayItem::Window, TrayItem::Screen, TrayItem::Region]);
+        // the color picker from the spare ones to the top of the list
+        tray_move(&mut m, TrayDrag { piece: TrayPiece::Item(TrayItem::Pick), from: TrayFrom::Spare }, TrayDrop::List(0));
+        assert_eq!(m.list[0], Entry::Item(TrayItem::Pick));
+        // a list row down past two others
+        tray_move(&mut m, TrayDrag { piece: TrayPiece::Item(TrayItem::Pick), from: TrayFrom::List(0) }, TrayDrop::List(3));
+        assert_eq!(m.list[2], Entry::Item(TrayItem::Pick));
+        // the video row emptied tile by tile: it goes
+        for _ in 0..3 {
+            let item = m.tiles[1].items[0];
+            tray_move(&mut m, TrayDrag { piece: TrayPiece::Item(item), from: TrayFrom::Tile(1, 0) }, TrayDrop::Remove);
+        }
+        assert_eq!(m.tiles.len(), 1);
+        // a tile into a row of its own
+        tray_move(&mut m, TrayDrag { piece: TrayPiece::Item(TrayItem::Region), from: TrayFrom::Tile(0, 2) }, TrayDrop::NewRow);
+        assert_eq!(m.tiles.len(), 2);
+        assert_eq!(m.tiles[1].items, [TrayItem::Region]);
+        // a separator from the spare ones
+        let n = m.list.len();
+        tray_move(&mut m, TrayDrag { piece: TrayPiece::Separator, from: TrayFrom::Spare }, TrayDrop::List(n));
+        assert_eq!(m.list.last(), Some(&Entry::Separator));
+    }
 }

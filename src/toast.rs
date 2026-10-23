@@ -590,6 +590,10 @@ impl eframe::App for ToastApp {
         if !clicked_button && !over_button && img_resp.clicked() {
             self.close(&ctx, ToastResult::Edit);
         }
+        // a right click anywhere on the card dismisses it
+        if ctx.input(|i| i.pointer.secondary_clicked() && i.pointer.interact_pos().is_some_and(|p| card.contains(p))) {
+            self.close(&ctx, ToastResult::Closed);
+        }
         self.paint_feedback(&painter, img_rect, now, alpha);
 
         // caption: what it is and where it stands, a close button

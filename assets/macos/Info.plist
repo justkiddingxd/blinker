@@ -22,6 +22,17 @@
     <string>@VERSION@</string>
     <key>CFBundleVersion</key>
     <string>@VERSION@</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>cool.blinker.link</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>blinker</string>
+            </array>
+        </dict>
+    </array>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.productivity</string>
     <key>LSMinimumSystemVersion</key>

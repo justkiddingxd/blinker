@@ -57,7 +57,10 @@ pub(crate) fn pill_position(area: IRect, monitor: &Monitor, size: (i32, i32), sc
         let g = px(12.0);
         let right = work.right() - size.0 - g;
         let bottom = work.bottom() - size.1 - g;
-        return if work.y > mon.y {
+        return if cfg!(target_os = "macos") {
+            // a Mac's menu bar has no room for it: the bottom corner, off the Dock
+            (right, bottom)
+        } else if work.y > mon.y {
             // taskbar on top: the tray is in its right end
             (right, work.y + g)
         } else if work.x > mon.x {
@@ -243,6 +246,7 @@ mod place_tests {
     use crate::win::{IRect, Monitor};
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn whole_screen_sits_by_the_tray() {
         let mon = IRect::new(0, 0, 1920, 1080);
         let size = (150, 30);

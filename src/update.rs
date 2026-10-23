@@ -245,10 +245,13 @@ fn run_install(job: &Install, ctx: &egui::Context) -> Result<(), String> {
     install_files(fetch_release()?, |stage| set(job, ctx, stage))
 }
 
+/// What a needless install says: not a failure, nothing to do.
+pub const LATEST: &str = "latest";
+
 /// Downloads `release` and puts it in place of this app (not restarted yet).
 fn install_files(release: Release, stage: impl Fn(Stage)) -> Result<(), String> {
     if !is_newer(&release.tag) {
-        return Err(crate::i18n::l("это уже последняя версия", "this is already the latest version").into());
+        return Err(LATEST.into());
     }
     let (url, size) = release.asset.ok_or_else(|| lf!("в релизе нет файла {ASSET}", "the release has no {ASSET}"))?;
     let file = download_path()?;
@@ -281,6 +284,7 @@ pub fn auto(shared: std::sync::Arc<crate::runtime::Shared>) {
                             match install_files(release, |_| {}) {
                                 Ok(()) => {
                                     crate::config::log::error(format!("auto update: {tag} installed, restarting"));
+                                    shared.quiet_restart.store(true, std::sync::atomic::Ordering::SeqCst);
                                     shared.push(crate::runtime::Command::Restart);
                                     return;
                                 }
@@ -460,21 +464,24 @@ fn restart_app() {
     if crate::win::window_class_exists("BlinkerShell") {
         crate::win::post_to_window_class("BlinkerShell", crate::runtime::WM_RESTART);
     } else {
-        relaunch();
+        relaunch(false);
     }
     std::thread::sleep(Duration::from_millis(300));
     std::process::exit(0);
 }
 
-/// Starts blinker again from its (new) files; it waits for this instance to end.
-pub fn relaunch() {
+/// Starts blinker again from its (new) files; it waits for this instance to
+/// end. `quiet`: just the tray, no window and nothing brought forward.
+pub fn relaunch(quiet: bool) {
+    let args: &[&str] = if quiet { &["--relaunch", "--background"] } else { &["--relaunch"] };
     #[cfg(target_os = "macos")]
     if let Some(app) = bundle() {
-        let _ = std::process::Command::new("/usr/bin/open").arg("-n").arg(&app).args(["--args", "--relaunch"]).spawn();
+        // -g: the app isn't activated (that would pull a full-screen app off its space)
+        let _ = std::process::Command::new("/usr/bin/open").arg("-n").args(quiet.then_some("-g")).arg(&app).arg("--args").args(args).spawn();
         return;
     }
     if let Ok(exe) = std::env::current_exe() {
-        let _ = std::process::Command::new(exe).arg("--relaunch").spawn();
+        let _ = std::process::Command::new(exe).args(args).spawn();
     }
 }
 

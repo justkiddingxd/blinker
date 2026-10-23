@@ -97,6 +97,8 @@ pub type PanelCb = extern "C" fn(ctx: *mut c_void, event: c_int, x: f64, y: f64)
 pub type TimerCb = extern "C" fn(ctx: *mut c_void);
 pub type ClickCb = extern "C" fn(x: f64, y: f64, right: c_int);
 pub type KeyCb = extern "C" fn(keycode: u16, down: c_int, flags: u64);
+/// A line of recognized text: the text, its box as fractions (top-left origin).
+pub type OcrCb = extern "C" fn(ctx: *mut c_void, text: *const c_char, x: f64, y: f64, w: f64, h: f64);
 pub type ProgressCb = extern "C" fn(ctx: *mut c_void, fraction: f64);
 
 unsafe extern "C" {
@@ -107,6 +109,7 @@ unsafe extern "C" {
     pub fn bk_set_activation_policy(regular: c_int);
     pub fn bk_run_idle();
     pub fn bk_on_reopen(cb: NotifyCb);
+    pub fn bk_on_url(cb: NotifyCb);
     pub fn bk_wake_main();
     pub fn bk_trim_memory();
     pub fn bk_displays(out: *mut Display, max: c_int) -> c_int;
@@ -162,6 +165,9 @@ unsafe extern "C" {
     pub fn bk_frontmost_window(out: *mut Win) -> c_int;
     pub fn bk_screen_access(request: c_int) -> c_int;
     pub fn bk_pid_is_ours(pid: c_int) -> c_int;
+    pub fn bk_ax_trusted(prompt: c_int) -> c_int;
+    pub fn bk_ocr(rgba: *const u8, w: c_int, h: c_int, ctx: *mut c_void, cb: OcrCb) -> c_int;
+    pub fn bk_window_parts(pid: c_int, x: f64, y: f64, w: f64, h: f64, out: *mut f64, max: c_int) -> c_int;
     pub fn bk_capture_display(
         display: u32,
         sx: f64,

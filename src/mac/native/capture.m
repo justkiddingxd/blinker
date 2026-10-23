@@ -1,7 +1,9 @@
 // Screenshots (ScreenCaptureKit) and the list of windows on screen.
 
 #import <AppKit/AppKit.h>
+#import <ApplicationServices/ApplicationServices.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
+#import <Vision/Vision.h>
 #include <libproc.h>
 #include "bk.h"
 
@@ -62,6 +64,133 @@ int bk_frontmost_window(bk_win *out) {
             }
         }
         return 0;
+    }
+}
+
+typedef void (*bk_ocr_cb)(void *ctx, const char *text, double x, double y, double w, double h);
+
+/// The text in an RGBA picture (Vision, accurate, Russian and English with the
+/// language guessed): `cb` per line with its box as fractions of the picture,
+/// origin top left. Returns the number of lines, -1 when Vision failed.
+int bk_ocr(const uint8_t *rgba, int w, int h, void *ctx, bk_ocr_cb cb) {
+    @autoreleasepool {
+        CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+        CGContextRef bc = CGBitmapContextCreate((void *)rgba, w, h, 8, (size_t)w * 4, cs, kCGImageAlphaPremultipliedLast);
+        CGImageRef img = bc ? CGBitmapContextCreateImage(bc) : NULL;
+        int n = -1;
+        if (img) {
+            VNRecognizeTextRequest *req = [VNRecognizeTextRequest new];
+            req.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
+            req.usesLanguageCorrection = YES;
+            req.automaticallyDetectsLanguage = YES;
+            req.recognitionLanguages = @[ @"ru-RU", @"en-US" ];
+            VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:img options:@{}];
+            NSError *err = nil;
+            if ([handler performRequests:@[ req ] error:&err]) {
+                n = 0;
+                for (VNRecognizedTextObservation *o in req.results) {
+                    VNRecognizedText *t = [o topCandidates:1].firstObject;
+                    if (!t) continue;
+                    CGRect b = o.boundingBox;  // fractions, origin bottom left
+                    cb(ctx, t.string.UTF8String, b.origin.x, 1.0 - b.origin.y - b.size.height, b.size.width, b.size.height);
+                    n++;
+                }
+            }
+            CGImageRelease(img);
+        }
+        if (bc) CGContextRelease(bc);
+        CGColorSpaceRelease(cs);
+        return n;
+    }
+}
+
+/// The Accessibility permission (for parts of windows); `prompt`: ask for
+/// it (System Settings opens on the list).
+int bk_ax_trusted(int prompt) {
+    if (!prompt) return AXIsProcessTrusted() ? 1 : 0;
+    NSDictionary *o = @{(__bridge id)kAXTrustedCheckOptionPrompt : @YES};
+    return AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)o) ? 1 : 0;
+}
+
+static int ax_frame(AXUIElementRef e, CGRect *r) {
+    CFTypeRef p = NULL, s = NULL;
+    int ok = 0;
+    if (AXUIElementCopyAttributeValue(e, kAXPositionAttribute, &p) == kAXErrorSuccess &&
+        AXUIElementCopyAttributeValue(e, kAXSizeAttribute, &s) == kAXErrorSuccess) {
+        CGPoint pt;
+        CGSize sz;
+        if (AXValueGetValue((AXValueRef)p, kAXValueTypeCGPoint, &pt) && AXValueGetValue((AXValueRef)s, kAXValueTypeCGSize, &sz)) {
+            *r = (CGRect){pt, sz};
+            ok = 1;
+        }
+    }
+    if (p) CFRelease(p);
+    if (s) CFRelease(s);
+    return ok;
+}
+
+static NSString *ax_role(AXUIElementRef e) {
+    CFTypeRef v = NULL;
+    if (AXUIElementCopyAttributeValue(e, kAXRoleAttribute, &v) != kAXErrorSuccess || !v) return nil;
+    return (__bridge_transfer NSString *)v;
+}
+
+/// Parts of the window at `x,y,w,h` (points) of process `pid` worth taking
+/// alone, like the page in a browser, a list or an editor: frames into `out`
+/// as x, y, w, h. Nothing without the Accessibility permission; a slow app
+/// gets 80 ms.
+int bk_window_parts(int pid, double x, double y, double w, double h, double *out, int max) {
+    if (!AXIsProcessTrusted()) return 0;
+    @autoreleasepool {
+        AXUIElementRef app = AXUIElementCreateApplication(pid);
+        if (!app) return 0;
+        AXUIElementSetMessagingTimeout(app, 0.05f);
+        CFTypeRef wins = NULL;
+        int n = 0;
+        if (AXUIElementCopyAttributeValue(app, kAXWindowsAttribute, &wins) == kAXErrorSuccess && wins) {
+            NSArray *list = (__bridge NSArray *)wins;
+            id window = nil;
+            for (id c in list) {
+                CGRect r;
+                if (ax_frame((__bridge AXUIElementRef)c, &r) && fabs(r.origin.x - x) < 2 && fabs(r.origin.y - y) < 2 &&
+                    fabs(r.size.width - w) < 2 && fabs(r.size.height - h) < 2) {
+                    window = c;
+                    break;
+                }
+            }
+            // panes worth a shot of their own, and what to look inside
+            NSSet *parts = [NSSet setWithArray:@[ @"AXScrollArea", @"AXWebArea", @"AXTable", @"AXOutline", @"AXBrowser", @"AXTextArea", @"AXList" ]];
+            NSSet *leaves = [NSSet setWithArray:@[ @"AXWebArea", @"AXTable", @"AXOutline", @"AXBrowser", @"AXTextArea", @"AXList" ]];
+            NSMutableArray *queue = window ? [NSMutableArray arrayWithObject:@[ window, @0 ]] : [NSMutableArray array];
+            CFAbsoluteTime until = CFAbsoluteTimeGetCurrent() + 0.08;
+            int seen = 0;
+            while (queue.count > 0 && n < max && seen < 400 && CFAbsoluteTimeGetCurrent() < until) {
+                NSArray *item = queue.firstObject;
+                [queue removeObjectAtIndex:0];
+                AXUIElementRef e = (__bridge AXUIElementRef)item[0];
+                int depth = [item[1] intValue];
+                seen++;
+                NSString *role = ax_role(e);
+                CGRect r;
+                if (depth > 0 && role && [parts containsObject:role] && ax_frame(e, &r) && r.size.width >= 80 && r.size.height >= 48 &&
+                    r.size.width * r.size.height < w * h * 0.96) {
+                    out[n * 4] = r.origin.x;
+                    out[n * 4 + 1] = r.origin.y;
+                    out[n * 4 + 2] = r.size.width;
+                    out[n * 4 + 3] = r.size.height;
+                    n++;
+                }
+                if (depth >= 12 || (role && [leaves containsObject:role])) continue;
+                CFTypeRef kids = NULL;
+                if (AXUIElementCopyAttributeValue(e, kAXChildrenAttribute, &kids) == kAXErrorSuccess && kids) {
+                    for (id k in (__bridge NSArray *)kids) [queue addObject:@[ k, @(depth + 1) ]];
+                    CFRelease(kids);
+                }
+            }
+            CFRelease(wins);
+        }
+        CFRelease(app);
+        return n;
     }
 }
 
