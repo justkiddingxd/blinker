@@ -178,6 +178,9 @@ h2 { font-weight: 600; font-size: clamp(30px, 3.6vw, 44px); line-height: 1.08; l
 /* a category: its words on one side, its picture on the other */
 .cat { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 56px; align-items: center; padding: 56px 0; border-top: 1px solid var(--line-soft); scroll-margin-top: 70px; }
 .cat:nth-of-type(even) .words { order: 2; }
+/* a wide window (the video editor): its words above, the picture across */
+.cat.wide { grid-template-columns: minmax(0, 1fr); gap: 32px; }
+.cat.wide .words { order: 0; max-width: 760px; }
 @media (max-width: 900px) { .cat { grid-template-columns: minmax(0, 1fr); gap: 28px; } .cat:nth-of-type(even) .words { order: 0; } }
 .num { font-family: "Fira Mono", monospace; font-size: 13px; color: var(--faint); display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .num i { width: 8px; height: 8px; border-radius: 50%; }
@@ -206,6 +209,14 @@ h2 { font-weight: 600; font-size: clamp(30px, 3.6vw, 44px); line-height: 1.08; l
 }
 .stage > * { position: relative; z-index: 1; }
 .tag { position: absolute; z-index: 2; font-size: 12px; color: var(--dim); background: rgba(22, 22, 21, .8); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
+
+/* real pictures of blinker: windows grabbed, the demo's frames and videos */
+.stage.media { min-height: 0; padding: 0; background: var(--canvas); }
+.stage.media::after { display: none; }
+.stage.media img, .stage.media video { display: block; width: 100%; height: auto; }
+.stage.media video { aspect-ratio: 1000 / 640; background: var(--bg); }
+.stage.pair { display: grid; gap: 14px; padding: 18px; background: radial-gradient(120% 80% at 80% 0%, rgba(255, 255, 255, .045), transparent 60%), linear-gradient(180deg, var(--panel), var(--canvas)); }
+.stage.pair img { border-radius: 10px; box-shadow: 0 14px 40px rgba(0, 0, 0, .45); }
 
 /* 01: a selection over a page, the tools under it */
 .v-shot { display: grid; place-items: center; padding: 36px 28px; }
@@ -490,13 +501,6 @@ footer .grow { flex: 1; }
       </div>
 
       <figure class="reel">
-        <div class="tabs">
-          <div class="seg" role="group" aria-label="demo">
-            <button type="button" data-demo="0" data-t="tab_shot">снимок</button>
-            <button type="button" data-demo="1" data-t="tab_rec">запись</button>
-            <button type="button" data-demo="2" data-t="tab_replay">повтор</button>
-          </div>
-        </div>
         <div class="window">
           <div class="bar">
             <span class="lights"><i></i><i></i><i></i></span>
@@ -506,11 +510,6 @@ footer .grow { flex: 1; }
             <video id="demo" src="../assets/demo-ru.mp4?v=__V__" width="1000" height="640" autoplay muted loop playsinline preload="auto"></video>
           </div>
         </div>
-        <figcaption>
-          <span data-cap="0"><b data-t="cap_shot_h">Снимок области.</b> <span data-t="cap_shot">Выделил, поставил стрелку и номера шагов, размыл почту, скопировал.</span></span>
-          <span data-cap="1" hidden><b data-t="cap_rec_h">Запись экрана.</b> <span data-t="cap_rec">Выделил область, записал с таймером, остановил. Видео сохранилось в папку.</span></span>
-          <span data-cap="2" hidden><b data-t="cap_replay_h">Повтор.</b> <span data-t="cap_replay">Нажал</span> <kbd class="only-mac">⌥⇧⌘7</kbd><kbd class="only-win">Ctrl+Alt+PrtSc</kbd><span data-t="cap_replay2">, и последние секунды экрана сохранились в видео.</span></span>
-        </figcaption>
       </figure>
     </div>
   </div>
@@ -531,26 +530,7 @@ footer .grow { flex: 1; }
             <li><svg class="i"><use href="#i-frame"/></svg><span data-t="c1_l4">Красивый снимок: скриншот на фоне с тенью.</span></li>
           </ul>
         </div>
-        <div class="stage v-shot" aria-hidden="true">
-          <div class="page">
-            <i class="h"></i><i></i><i class="m"></i><i class="s"></i><i></i><i class="m"></i><i class="s"></i><i></i>
-            <div class="sel">
-              <span class="size mono">640 × 360</span>
-              <svg viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M5 90 L88 14" stroke="#e5484d" stroke-width="5" vector-effect="non-scaling-stroke" fill="none" stroke-linecap="round"/><path d="M64 12 L90 12 L88 38" stroke="#e5484d" stroke-width="5" vector-effect="non-scaling-stroke" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              <span class="step" style="left:8%;top:12%">1</span>
-              <span class="step" style="left:80%;top:8%">2</span>
-              <span class="blur"></span>
-            </div>
-          </div>
-          <div class="tools">
-            <span class="on"><svg class="i"><use href="#i-arrow"/></svg></span>
-            <span><svg class="i"><use href="#i-pen"/></svg></span>
-            <span><svg class="i"><use href="#i-text"/></svg></span>
-            <span><svg class="i"><use href="#i-blur"/></svg></span>
-            <span><svg class="i"><use href="#i-pin"/></svg></span>
-            <span><svg class="i"><use href="#i-copy"/></svg></span>
-          </div>
-        </div>
+        <div class="stage media"><img data-img="shot" alt="" loading="lazy" decoding="async"></div>
       </article>
 
       <!-- 02 -->
@@ -559,27 +539,31 @@ footer .grow { flex: 1; }
           <h3 data-t="c2_h">Запись экрана</h3>
           <p data-t="c2">Записывает область, окно или весь экран в MP4. Кодирует видеокарта, поэтому запись почти не нагружает процессор. Звук системы и микрофон пишутся на разные дорожки.</p>
           <ul class="list">
-            <li><svg class="i"><use href="#i-repeat"/></svg><span data-t="c2_l1">Повтор: blinker держит в памяти последние минуты экрана, сохранить их можно одной клавишей.</span></li>
+            <li><svg class="i"><use href="#i-pause"/></svg><span data-t="c2_l1">Во время записи на экране плашка с таймером и паузой. Где она стоит, выбирается в настройках.</span></li>
             <li><svg class="i"><use href="#i-mouse"/></svg><span data-t="c2_l2">В видео можно показывать клики и нажатые сочетания клавиш.</span></li>
             <li><svg class="i"><use href="#i-gif"/></svg><span data-t="c2_l3">GIF записывается сразу, без конвертации.</span></li>
             <li><svg class="i"><use href="#i-game"/></svg><span data-t="c2_l4">Записи из игр сами раскладываются по папкам с названием игры (Windows).</span></li>
           </ul>
         </div>
-        <div class="stage v-video" aria-hidden="true">
-          <div class="game">
-            <div class="keys"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>B</kbd></div>
-            <span class="click"></span>
-            <div class="hud"><span class="rec"></span><span>00:42</span><span class="b"><svg class="i"><use href="#i-pause"/></svg></span><span class="b"><svg class="i"><use href="#i-stop"/></svg></span></div>
-          </div>
-          <div class="tracks">
-            <div class="track"><span data-t="v_sys">звук системы</span><div class="wave" data-wave="1"></div></div>
-            <div class="track"><span data-t="v_mic">микрофон</span><div class="wave" data-wave="2"></div></div>
-          </div>
+        <div class="stage media"><video data-video="record" muted loop playsinline preload="none"></video></div>
+      </article>
+
+      <article class="cat up" id="c-replay">
+        <div class="words">
+          <h3 data-t="c7_h">Мгновенный повтор</h3>
+          <p data-t="c7">blinker постоянно держит в памяти последние минуты экрана. Если произошло что-то, что хочется сохранить, нажимаешь клавишу, и эти минуты становятся видео. Сколько хранить, от 10 секунд до 30 минут, задаётся в настройках.</p>
+          <ul class="list">
+            <li><svg class="i"><use href="#i-rec"/></svg><span data-t="c7_l1">Пока повтор пишется, на значке в трее горит красная точка.</span></li>
+            <li><svg class="i"><use href="#i-mic"/></svg><span data-t="c7_l2">Звук системы и микрофон включаются отдельно.</span></li>
+            <li><svg class="i"><use href="#i-repeat"/></svg><span data-t="c7_l3">После сохранения повтор может начинаться заново, чтобы клипы не повторяли друг друга.</span></li>
+            <li><svg class="i"><use href="#i-keys"/></svg><span><span data-t="c7_l4">Сохранить повтор:</span> <kbd class="only-win">Ctrl+Alt+PrtSc</kbd><kbd class="only-mac">⌥⇧⌘7</kbd></span></li>
+          </ul>
         </div>
+        <div class="stage media"><video data-video="replay" muted loop playsinline preload="none"></video></div>
       </article>
 
       <!-- 03 -->
-      <article class="cat up" id="c-edit">
+      <article class="cat wide up" id="c-edit">
         <div class="words">
           <h3 data-t="c3_h">Редактор видео</h3>
           <p data-t="c3">Открывается после записи. В нём можно обрезать видео, вырезать куски, ускорить или замедлить часть, перевести в вертикальный формат 9:16 и сохранить в MP4 или GIF.</p>
@@ -590,20 +574,7 @@ footer .grow { flex: 1; }
             <li><svg class="i"><use href="#i-zoom"/></svg><span data-t="c3_l4">Приближение кадра и плавный наезд камеры.</span></li>
           </ul>
         </div>
-        <div class="stage v-edit" aria-hidden="true">
-          <div class="preview">
-            <div class="frame"><span class="t" data-t="v_title">вот это поворот</span><span class="cap" data-t="v_cap">СМОТРИ СЮДА</span></div>
-            <div class="phone"><b>9:16</b><span></span></div>
-          </div>
-          <div class="timeline" id="tl">
-            <div class="lane"><span class="n" data-t="v_l_text">текст</span><span class="blk" style="left:6%;width:26%;background:var(--blue)" data-t="v_title">вот это поворот</span></div>
-            <div class="lane"><span class="n" data-t="v_l_pic">картинка</span><span class="blk" style="left:40%;width:18%;background:var(--violet)">logo.png</span></div>
-            <div class="lane"><span class="n" data-t="v_l_video">видео</span><span class="strip"></span><span class="speed"><b>2×</b></span></div>
-            <div class="lane"><span class="n" data-t="v_l_sub">субтитры</span><span class="blk" style="left:2%;width:20%;background:var(--accent)" data-t="v_s1">смотри сюда</span><span class="blk" style="left:24%;width:24%;background:var(--accent)" data-t="v_s2">и вот тут</span><span class="blk" style="left:62%;width:26%;background:var(--accent)" data-t="v_s3">готово</span></div>
-            <div class="lane"><span class="n" data-t="v_l_music">музыка</span><span class="blk" style="left:0;width:96%;background:var(--green)">track.mp3</span></div>
-            <span class="playhead"></span>
-          </div>
-        </div>
+        <div class="stage media"><img data-img="editor" alt="" loading="lazy" decoding="async"></div>
       </article>
 
       <!-- 04 -->
@@ -617,16 +588,7 @@ footer .grow { flex: 1; }
             <li><svg class="i"><use href="#i-pipette"/></svg><span data-t="c4_l3">Если в QR-коде адрес криптокошелька, blinker покажет сеть и даст скопировать адрес. Пипетка копирует цвет пикселя в hex.</span></li>
           </ul>
         </div>
-        <div class="stage v-read" aria-hidden="true">
-          <div class="qrbox">
-            <div class="qr"><svg id="qr" viewBox="0 0 25 25" shape-rendering="crispEdges"></svg><span class="br"><i></i><i></i><i></i><i></i></span><span class="sweep"></span></div>
-            <div class="qrcard"><span class="tile"><svg class="i"><use href="#i-link"/></svg></span><span class="w"><b>blinker.cool</b><span>/update</span></span><span class="go"><span data-t="v_go">перейти</span><svg class="i" style="width:13px;height:13px"><use href="#i-arrow"/></svg></span></div>
-          </div>
-          <div class="ocr">
-            <div class="head"><span class="dot"><svg class="i" style="width:13px;height:13px"><use href="#i-scan"/></svg></span><span><b data-t="v_ocr_h">текст с картинки</b><br><span data-t="v_ocr_s">4 строки · всё уже в буфере</span></span></div>
-            <div class="pic"><span data-t="v_o1">Заказ №4815 оплачен</span><span data-t="v_o2">Итого: 12 990 ₽</span><span>support@shop.example</span><span data-t="v_o3">Доставка в среду</span></div>
-          </div>
-        </div>
+        <div class="stage media pair"><img data-img="ocr" alt="" loading="lazy" decoding="async"><img data-img="qr" alt="" loading="lazy" decoding="async"></div>
       </article>
 
       <!-- 05 -->
@@ -641,11 +603,7 @@ footer .grow { flex: 1; }
             <li><svg class="i"><use href="#i-history"/></svg><span data-t="c5_l4">В истории видны все снимки, записи и загрузки.</span></li>
           </ul>
         </div>
-        <div class="stage v-share" aria-hidden="true">
-          <div class="msg"><span class="ava"></span><div class="bubble" data-t="v_m1">покажи, где у тебя это включается?</div></div>
-          <div class="msg me"><span class="ava"></span><div class="bubble"><a href="#" tabindex="-1">post.blinker.cool/v/7Kq2</a><div class="embed"><small>post.blinker.cool · 0:12</small><div class="vid"></div></div></div></div>
-          <div class="toast"><div class="img"></div><span>png · 1280 × 720 · 214 КБ</span></div>
-        </div>
+        <div class="stage media"><img data-img="upload" alt="" loading="lazy" decoding="async"></div>
       </article>
 
       <!-- 06 -->
@@ -660,29 +618,7 @@ footer .grow { flex: 1; }
             <li><svg class="i"><use href="#i-update"/></svg><span data-t="c6_l4">Обновляется сам, но не во время записи.</span></li>
           </ul>
         </div>
-        <div class="stage v-tray" aria-hidden="true">
-          <div class="menu">
-            <h6 data-t="v_t_shot">скриншот</h6>
-            <div class="mt">
-              <span><svg class="i"><use href="#i-region"/></svg><small data-t="v_t_area">область</small></span>
-              <span class="drag"><svg class="i"><use href="#i-scan"/></svg><small data-t="v_t_text">текст</small></span>
-              <span><svg class="i"><use href="#i-window"/></svg><small data-t="v_t_win">окно</small></span>
-            </div>
-            <h6 data-t="v_t_video">видео</h6>
-            <div class="mt">
-              <span><svg class="i"><use href="#i-rec"/></svg><small data-t="v_t_area">область</small></span>
-              <span><svg class="i"><use href="#i-screen"/></svg><small data-t="v_t_screen">экран</small></span>
-              <span><svg class="i"><use href="#i-gif"/></svg><small>gif</small></span>
-            </div>
-            <div class="ml">
-              <div><svg class="i"><use href="#i-repeat"/></svg><span data-t="v_t_replay">сохранить повтор</span><em class="only-win">Ctrl+Alt+PrtSc</em><em class="only-mac">⌥⇧⌘7</em></div>
-              <div><svg class="i"><use href="#i-pipette"/></svg><span data-t="v_t_pick">пипетка</span><em class="only-win">Ctrl+Alt+C</em><em class="only-mac">⌃⌥⌘C</em></div>
-              <hr>
-              <div><svg class="i"><use href="#i-folder"/></svg><span data-t="v_t_folder">папка со снимками</span></div>
-              <div><svg class="i"><use href="#i-settings"/></svg><span data-t="v_t_settings">настройки</span></div>
-            </div>
-          </div>
-        </div>
+        <div class="stage media"><img data-img="tray" alt="" loading="lazy" decoding="async"></div>
       </article>
     </div>
   </section>
@@ -813,16 +749,6 @@ footer .grow { flex: 1; }
       dl_win_meta: "Windows 10 / 11 · one .exe",
       other_win: "or for Windows",
       other_mac: "or for macOS",
-      tab_shot: "screenshot",
-      tab_rec: "recording",
-      tab_replay: "replay",
-      cap_shot_h: "Area capture.",
-      cap_shot: "Select, add an arrow and numbered steps, blur the email, copy.",
-      cap_rec_h: "Screen recording.",
-      cap_rec: "Select an area, record with a timer, stop. The video is saved to the folder.",
-      cap_replay_h: "Instant replay.",
-      cap_replay: "Press",
-      cap_replay2: ", and the last seconds of the screen are saved as a video.",
       c1_k: "screenshots",
       c2_k: "video",
       c3_k: "video editor",
@@ -837,62 +763,39 @@ footer .grow { flex: 1; }
       c1_l4: "Beauty shot: the screenshot on a background with a shadow.",
       c2_h: "Screen recording",
       c2: "Records an area, a window or the whole screen to MP4. The graphics card does the encoding, so recording barely loads the processor. System sound and the microphone go on separate tracks.",
-      c2_l1: "Replay: blinker keeps the last minutes of the screen in memory, and one key saves them.",
+      c2_l1: "While recording, a pill with a timer and pause sits on the screen. Where it goes is set in settings.",
       c2_l2: "Clicks and pressed key combos can be shown in the video.",
       c2_l3: "GIFs are recorded directly, no converting.",
       c2_l4: "Recordings made in games go into folders named after the game (Windows).",
-      v_sys: "system sound",
-      v_mic: "microphone",
+      c7_h: "Instant replay",
+      c7: "blinker keeps the last minutes of the screen in memory all the time. When something happens that you want to keep, press the key and those minutes become a video. How long to keep, from 10 seconds to 30 minutes, is set in settings.",
+      c7_l1: "While the replay records, the tray icon shows a red dot.",
+      c7_l2: "System sound and the microphone are turned on separately.",
+      c7_l3: "After a save the replay can start over, so clips don’t repeat each other.",
+      c7_l4: "Save the replay:",
       c3_h: "Video editor",
       c3: "Opens after a recording. You can trim the video, cut pieces out, speed up or slow down a part, turn it vertical 9:16 and save it as MP4 or GIF.",
       c3_l1: "Subtitles from speech are recognized by Whisper on your computer. The model is downloaded separately.",
       c3_l2: "Text over the video with simple animations.",
       c3_l3: "Music and pictures can be added.",
       c3_l4: "Zoom on the frame and a slow camera push-in.",
-      v_title: "plot twist",
-      v_cap: "LOOK HERE",
-      v_l_text: "text",
-      v_l_pic: "picture",
-      v_l_video: "video",
-      v_l_sub: "subtitles",
-      v_l_music: "music",
-      v_s1: "look here",
-      v_s2: "and here",
-      v_s3: "done",
       c4_h: "Text and QR codes",
       c4: "Select an area with text and blinker reads it. The text is copied right away, and single lines can be selected and copied in the window.",
       c4_l1: "On Windows text is read by PaddleOCR (Russian, English, Ukrainian, Belarusian), on macOS by the built-in Vision.",
       c4_l2: "QR codes on the screen are found automatically. A link gets an “open” button.",
       c4_l3: "If a QR code holds a crypto wallet address, blinker shows the network and lets you copy the address. The color picker copies a pixel’s color as hex.",
-      v_go: "open",
-      v_ocr_h: "text from the picture",
-      v_ocr_s: "4 lines · all on the clipboard",
-      v_o1: "Order #4815 is paid",
-      v_o2: "Total: $129.90",
-      v_o3: "Delivery on Wednesday",
       c5_h: "Uploads and links",
       c5: "A shot or a recording can be uploaded to a server, and the link lands on your clipboard. Video links play right in Discord and Telegram.",
       c5_l1: "post.blinker.cool needs no sign-up. Files are kept for 3 days, videos up to 100 MB.",
       c5_l2: "You can connect your own server or a ShareX uploader (.sxcu).",
       c5_l3: "After a shot a preview appears in the corner. It can be dragged into a chat or a folder.",
       c5_l4: "The history shows every shot, recording and upload.",
-      v_m1: "where do you turn that on?",
       c6_h: "Settings",
       c6: "Hotkeys, folders, file formats and the tray menu are set up in one window. If you used ShareX before, its settings move over with one button.",
       c6_l1: "The tray menu is put together by dragging items.",
       c6_l2: "One action can have several key combos.",
       c6_l3: "The Discord status shows what you’re recording and in which game.",
       c6_l4: "Updates itself, but never during a recording.",
-      v_t_shot: "screenshot",
-      v_t_area: "area",
-      v_t_text: "text",
-      v_t_win: "window",
-      v_t_video: "video",
-      v_t_screen: "screen",
-      v_t_replay: "save the replay",
-      v_t_pick: "color picker",
-      v_t_folder: "captures folder",
-      v_t_settings: "settings",
       inst_h: "Install",
       mac_sub: "blinker isn’t signed with a paid Apple certificate, so macOS holds it back on the first launch. Below is how to allow it.",
       win_sub: "One file, no installer.",
@@ -965,10 +868,12 @@ footer .grow { flex: 1; }
   var noMacDemos = false;
   var lang, os, demo = 0, release = null;
   function t(k) { return (T[lang] && T[lang][k]) || RU[k] || ""; }
-  function demoSrc(d) {
+  // a video of the demo mode: this language, this system's look
+  function clipSrc(kind) {
     var mac = os === "mac" && !noMacDemos;
-    return "../assets/" + DEMOS[d] + "-" + lang + (mac ? "-mac" : "") + ".mp4?v=" + V;
+    return "../assets/" + kind + "-" + lang + (mac ? "-mac" : "") + ".mp4?v=" + V;
   }
+  function demoSrc(d) { return clipSrc(DEMOS[d]); }
 
   function pickLang() {
     try {
@@ -1001,8 +906,6 @@ footer .grow { flex: 1; }
     });
     document.querySelectorAll("[data-lang]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-lang") === lang)); });
     document.querySelectorAll("button[data-os]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-os") === os)); });
-    document.querySelectorAll("[data-demo]").forEach(function (b) { b.setAttribute("aria-pressed", String(+b.getAttribute("data-demo") === demo)); });
-    document.querySelectorAll("[data-cap]").forEach(function (el) { el.hidden = +el.getAttribute("data-cap") !== demo; });
     var video = document.getElementById("demo");
     var src = demoSrc(demo);
     if (video.getAttribute("src") !== src) {
@@ -1010,6 +913,7 @@ footer .grow { flex: 1; }
       var playing = video.play();
       if (playing && playing.catch) playing.catch(function () {});
     }
+    blockMedia();
     document.title = lang === "ru" ? "blinker · скриншоты, запись экрана и монтаж" : "blinker · screenshots, screen recording and editing";
     var a = release && release.assets && release.assets[ASSET[os]];
     var href = a ? a.url : "https://github.com/" + REPO + "/releases/latest/download/" + ASSET[os];
@@ -1049,55 +953,40 @@ footer .grow { flex: 1; }
     render();
   });
 
-  // the footage: ← → on the keyboard, a swipe on a phone
-  function step(d) { demo = (demo + d + DEMOS.length) % DEMOS.length; render(); }
-  document.addEventListener("keydown", function (e) {
-    if (e.altKey || e.ctrlKey || e.metaKey || /input|textarea|select/i.test(e.target.tagName)) return;
-    if (e.key === "ArrowLeft") step(-1);
-    else if (e.key === "ArrowRight") step(1);
-  });
-  var screen = document.getElementById("screen"), x0 = null;
-  screen.addEventListener("touchstart", function (e) { x0 = e.touches[0].clientX; }, { passive: true });
-  screen.addEventListener("touchend", function (e) {
-    if (x0 === null) return;
-    var dx = e.changedTouches[0].clientX - x0;
-    x0 = null;
-    if (Math.abs(dx) > 40) step(dx < 0 ? 1 : -1);
-  });
   document.getElementById("demo").addEventListener("error", function () {
     if (!noMacDemos && /-mac\.mp4/.test(this.getAttribute("src") || "")) { noMacDemos = true; render(); }
   });
 
-  // the pictures: sound waves and a QR code, drawn once
-  var seed = 7;
-  function rnd() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
-  document.querySelectorAll("[data-wave]").forEach(function (w) {
-    var quiet = w.getAttribute("data-wave") === "2";
-    for (var i = 0; i < 64; i++) {
-      var bar = document.createElement("i");
-      var h = quiet ? (i > 18 && i < 40 ? 20 + rnd() * 60 : 4 + rnd() * 8) : 25 + Math.abs(Math.sin(i * .35)) * 55 + rnd() * 20;
-      bar.style.height = Math.min(100, h) + "%";
-      w.appendChild(bar);
-    }
-  });
-  (function qr() {
-    var svg = document.getElementById("qr"), n = 25, cells = "";
-    function finder(x, y) {
-      cells += '<path d="M' + x + ' ' + y + 'h7v7h-7z M' + (x + 1) + ' ' + (y + 1) + 'v5h5v-5z" fill-rule="evenodd"/>';
-      cells += '<rect x="' + (x + 2) + '" y="' + (y + 2) + '" width="3" height="3"/>';
-    }
-    finder(0, 0); finder(n - 7, 0); finder(0, n - 7);
-    for (var y = 0; y < n; y++) for (var x = 0; x < n; x++) {
-      var inFinder = (x < 8 && y < 8) || (x > n - 9 && y < 8) || (x < 8 && y > n - 9);
-      if (!inFinder && rnd() > .52) cells += '<rect x="' + x + '" y="' + y + '" width="1" height="1"/>';
-    }
-    svg.innerHTML = '<g fill="#161615">' + cells + "</g>";
-  })();
-  // the playhead runs the timeline's width
-  var tl = document.getElementById("tl");
-  function tlWidth() { tl.style.setProperty("--w", tl.clientWidth + "px"); }
-  tlWidth();
-  window.addEventListener("resize", tlWidth);
+  // the blocks' pictures: in this language; videos load and play once in view
+  function blockMedia() {
+    document.querySelectorAll("[data-img]").forEach(function (im) {
+      var src = "../assets/land/" + im.getAttribute("data-img") + "-" + lang + ".webp?v=" + V;
+      if (im.getAttribute("src") !== src) im.setAttribute("src", src);
+    });
+    document.querySelectorAll("[data-video]").forEach(function (v) {
+      var src = clipSrc(v.getAttribute("data-video"));
+      if (v.getAttribute("data-src") === src) return;
+      v.setAttribute("data-src", src);
+      if (v.getAttribute("src")) v.setAttribute("src", src);
+    });
+  }
+  if ("IntersectionObserver" in window) {
+    var vio = new IntersectionObserver(function (es) {
+      es.forEach(function (e) {
+        var v = e.target;
+        if (e.isIntersecting) {
+          if (v.getAttribute("src") !== v.getAttribute("data-src")) v.setAttribute("src", v.getAttribute("data-src"));
+          var pl = v.play();
+          if (pl && pl.catch) pl.catch(function () {});
+        } else {
+          v.pause();
+        }
+      });
+    }, { rootMargin: "200px 0px" });
+    document.querySelectorAll("[data-video]").forEach(function (v) { vio.observe(v); });
+  } else {
+    document.querySelectorAll("[data-video]").forEach(function (v) { v.setAttribute("src", v.getAttribute("data-src") || ""); v.autoplay = true; });
+  }
 
   // things come up as they scroll in; the header gets its line once scrolled
   if ("IntersectionObserver" in window) {
@@ -1117,15 +1006,6 @@ footer .grow { flex: 1; }
   if (!found) document.documentElement.setAttribute("data-away", "");
   render();
 
-  window.addEventListener("load", function () {
-    DEMOS.forEach(function (_, d) {
-      if (d === demo) return;
-      var l = document.createElement("link");
-      l.rel = "prefetch";
-      l.href = demoSrc(d);
-      document.head.appendChild(l);
-    });
-  });
 
   // what's released: the site's own version.json, else GitHub's API
   function fromGitHub() {
