@@ -2,6 +2,18 @@
 
 Each version's section has a Russian half, `---`, then an English one: the app shows the one of its language, and GitHub's release notes (and the Discord note) are the English half (`.github/workflows/release.yml`).
 
+## 0.4.3
+
+- Меню настроек больше не наезжает на версию и ссылки внизу: когда разделы не помещаются, они прокручиваются, а низ с версией, GitHub, Discord и «обновить до …» остаётся на месте. Открытый раздел сам прокручивается в видимую часть.
+- Окно распознанного текста: кнопки больше не закрывают заголовок — он и строка статуса сокращаются многоточием, а в узком окне «копировать всё» становится значком.
+- Мак: у окна распознанного текста шапка — стекло прямо на рабочем столе, вокруг картинки окно прозрачное.
+
+---
+
+- The settings menu no longer runs into the version and links at its bottom: when the sections don't fit they scroll, and the bottom with the version, GitHub, Discord and "update to …" stays in place. The open section scrolls into view.
+- The recognized-text window: the buttons no longer cover the title — it and the status line are cut short with "…", and in a narrow window "copy all" becomes an icon.
+- Mac: the recognized-text window's header is a pane of glass right on the desktop, and the window is clear around the picture.
+
 ## 0.4.2
 
 **Снимки**
