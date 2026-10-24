@@ -250,10 +250,10 @@ pub fn run(path: PathBuf, x: i32, y: i32) {
             theme::apply(&cc.egui_ctx);
             let hwnd = win::hwnd_of(cc);
             if let Some(h) = hwnd {
-                // macOS 26: the window frosted, the header a pane of glass in it
+                // macOS 26: the header a pane of glass right on the desktop,
+                // the window clear around it and the picture
                 #[cfg(target_os = "macos")]
                 if theme::glass() {
-                    win::window_backdrop(h, 0x161615, crate::home::GLASS_TINT);
                     win::window_glass(h, (6.0, 5.0, rect.w as f32 / scale - 12.0, HEADER - 9.0), 15.0, 0);
                 }
                 win::cloak(h, true);
@@ -364,17 +364,38 @@ impl TextApp {
                 lf!("{n} {word} · всё уже в буфере", "{n} {en} · all of it is on the clipboard")
             }
         };
-        p.text(pos2(bar.left() + 48.0, bar.center().y - 8.0), egui::Align2::LEFT_CENTER, crate::i18n::l("текст с картинки", "text from the picture"), font_medium(13.0), TEXT);
-        p.text(pos2(bar.left() + 48.0, bar.center().y + 9.0), egui::Align2::LEFT_CENTER, status, font(11.5), DIM);
+        // the buttons first, right to left; the text gets what they leave
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(8.0, 6.0))).layout(egui::Layout::right_to_left(egui::Align::Center)));
         child.spacing_mut().item_spacing.x = 4.0;
         if ui::icon_button(&mut child, Icon::Close, crate::i18n::l("закрыть  esc", "close  esc"), 30.0, false, ui::Kind::Ghost).clicked() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
-        if self.lines.as_ref().is_some_and(|l| !l.is_empty()) && ui::button(&mut child, crate::i18n::l("копировать всё", "copy all"), ui::Kind::Accent).clicked() {
-            self.copy_all(&ctx);
+        if self.lines.as_ref().is_some_and(|l| !l.is_empty()) {
+            let label = crate::i18n::l("копировать всё", "copy all");
+            // a narrow window: the icon alone
+            let copy = if bar.width() < 380.0 {
+                ui::icon_button(&mut child, Icon::Copy, label, 30.0, false, ui::Kind::Accent)
+            } else {
+                ui::button(&mut child, label, ui::Kind::Accent)
+            };
+            if copy.clicked() {
+                self.copy_all(&ctx);
+            }
         }
+        let text_right = child.min_rect().left() - 10.0;
+        let max_w = (text_right - (bar.left() + 48.0)).max(20.0);
+        let title = elided(&p, crate::i18n::l("текст с картинки", "text from the picture"), font_medium(13.0), TEXT, max_w);
+        let status = elided(&p, &status, font(11.5), DIM, max_w);
+        p.galley(pos2(bar.left() + 48.0, bar.center().y - 8.0 - title.size().y / 2.0), title, TEXT);
+        p.galley(pos2(bar.left() + 48.0, bar.center().y + 9.0 - status.size().y / 2.0), status, DIM);
     }
+}
+
+/// `text` on one line, cut with "…" to fit `max_w`.
+fn elided(p: &egui::Painter, text: &str, font: egui::FontId, color: Color32, max_w: f32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(max_w);
+    p.layout_job(job)
 }
 
 impl TextApp {

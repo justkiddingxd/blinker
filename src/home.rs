@@ -668,6 +668,19 @@ impl HomeApp {
                     brand_mark(ui, 30.0);
                     ui.label(egui::RichText::new("blinker").font(font_semibold(17.0)).color(TEXT));
                 });
+                // the footer keeps its place at the bottom; the sections
+                // scroll above it when the window is too short for them
+                egui::Panel::bottom("nav-footer")
+                    .resizable(false)
+                    .show_separator_line(false)
+                    .frame(egui::Frame::new().fill(egui::Color32::TRANSPARENT).inner_margin(egui::Margin { left: 0, right: 0, top: 10, bottom: 0 }))
+                    .show(ui, |ui| self.nav_footer(ui));
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.nav_sections(ui));
+            });
+    }
+
+    /// The sections of the sidebar, in groups, with the plate under the open one.
+    fn nav_sections(&mut self, ui: &mut egui::Ui) {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 let plate = ui.painter().add(egui::Shape::Noop);
                 let mut selected_rect = None;
@@ -701,6 +714,10 @@ impl HomeApp {
                     ui::nav_caption(ui, caption);
                     for &(tab, icon, label) in items {
                         let resp = ui::nav_item(ui, icon, label, self.tab == tab);
+                        // a section just opened (from the tray, say): bring it into view
+                        if self.tab == tab && self.shown != Some(tab) {
+                            resp.scroll_to_me(None);
+                        }
                         if resp.clicked() {
                             self.tab = tab;
                         }
@@ -715,8 +732,6 @@ impl HomeApp {
                     let rect = Rect::from_min_size(pos2(r.left(), y), r.size());
                     ui.painter().set(plate, egui::Shape::rect_filled(rect, ui::control_radius(rect.height(), 7.0), ui::plate()));
                 }
-                self.nav_footer(ui);
-            });
     }
 
     /// Bottom of the sections: the version, a link to GitHub and, when a
@@ -724,67 +739,65 @@ impl HomeApp {
     /// "system" page).
     fn nav_footer(&mut self, ui: &mut egui::Ui) {
         let newer = self.update.lock().unwrap().clone();
-        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-            ui.spacing_mut().item_spacing.y = 8.0;
-            // the bottom line: where blinker lives
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 12.0;
-                ui.add_space(8.0);
-                if brand_link(ui, crate::brand::Mark::GitHub, "github", crate::update::REPO_URL).clicked() {
-                    win::open_url(crate::update::REPO_URL);
+        ui.spacing_mut().item_spacing.y = 8.0;
+        use crate::update::Stage;
+        let stage = self.install.as_ref().map(|j| j.stage());
+        let note = |ui: &mut egui::Ui, text: String, color: egui::Color32| {
+            ui.add(egui::Label::new(egui::RichText::new(text).font(mono(10.5)).color(color)).wrap());
+        };
+        match (stage, newer) {
+            (Some(Stage::Downloading(done, total)), _) => {
+                let f = if total > 0 { (done as f32 / total as f32).clamp(0.0, 1.0) } else { 0.0 };
+                let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width() - 8.0, 3.0), Sense::hover());
+                let bar = bar.translate(vec2(8.0, 0.0));
+                ui.painter().rect_filled(bar, 1.5, LINE);
+                ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * f, bar.height())), 1.5, ACCENT);
+                note(ui, lf!("  загрузка {:.0}%", "  downloading {:.0}%", f * 100.0), DIM);
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
+            }
+            (Some(Stage::Installing), _) => note(ui, format!("  {}", l("установка…", "installing…")), DIM),
+            (Some(Stage::Restarting), _) => note(ui, format!("  {}", l("перезапуск…", "restarting…")), DIM),
+            (Some(Stage::Failed(e)), _) if e == crate::update::LATEST => {
+                note(ui, format!("  {}", l("у тебя последняя версия", "this is the latest version")), DIM);
+            }
+            (Some(Stage::Failed(e)), _) => {
+                note(ui, format!("  {e}"), DANGER);
+                if ui::button_h(ui, l("скачать с сайта", "get it from the site"), ui::Kind::Ghost, 26.0).clicked() {
+                    win::open_url(crate::update::SITE_URL);
                 }
-                if brand_link(ui, crate::brand::Mark::Discord, "discord", l("сервер blinker в discord", "blinker's discord server")).clicked() {
-                    crate::discord::open_invite();
+            }
+            (None, Some(v)) => {
+                let tip = l("скачать и перезапустить", "download it and restart");
+                if update_row(ui, &v).on_hover_text(tip).clicked() {
+                    self.install = Some(crate::update::install(ui.ctx()));
                 }
-            });
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                ui.add_space(8.0);
-                // the version opens the changelog
-                let version = ui.painter().layout_no_wrap(format!("blinker {}", crate::update::current()), mono(10.5), egui::Color32::PLACEHOLDER);
-                let (rect, resp) = ui.allocate_exact_size(version.size(), Sense::click());
-                let col = if resp.hovered() { TEXT } else { FAINT };
-                ui.painter().galley(rect.min, version, col);
-                if resp.hovered() {
-                    ui.painter().hline(rect.x_range(), rect.bottom() + 0.5, Stroke::new(1.0, col));
-                }
-                if resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(l("история версий", "release notes")).clicked() {
-                    self.changelog_open = true;
-                }
-            });
-            use crate::update::Stage;
-            let stage = self.install.as_ref().map(|j| j.stage());
-            let note = |ui: &mut egui::Ui, text: String, color: egui::Color32| {
-                ui.add(egui::Label::new(egui::RichText::new(text).font(mono(10.5)).color(color)).wrap());
-            };
-            match (stage, newer) {
-                (Some(Stage::Downloading(done, total)), _) => {
-                    let f = if total > 0 { (done as f32 / total as f32).clamp(0.0, 1.0) } else { 0.0 };
-                    let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width() - 8.0, 3.0), Sense::hover());
-                    let bar = bar.translate(vec2(8.0, 0.0));
-                    ui.painter().rect_filled(bar, 1.5, LINE);
-                    ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * f, bar.height())), 1.5, ACCENT);
-                    note(ui, lf!("  загрузка {:.0}%", "  downloading {:.0}%", f * 100.0), DIM);
-                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
-                }
-                (Some(Stage::Installing), _) => note(ui, format!("  {}", l("установка…", "installing…")), DIM),
-                (Some(Stage::Restarting), _) => note(ui, format!("  {}", l("перезапуск…", "restarting…")), DIM),
-                (Some(Stage::Failed(e)), _) if e == crate::update::LATEST => {
-                    note(ui, format!("  {}", l("у тебя последняя версия", "this is the latest version")), DIM);
-                }
-                (Some(Stage::Failed(e)), _) => {
-                    if ui::button_h(ui, l("скачать с сайта", "get it from the site"), ui::Kind::Ghost, 26.0).clicked() {
-                        win::open_url(crate::update::SITE_URL);
-                    }
-                    note(ui, format!("  {e}"), DANGER);
-                }
-                (None, Some(v)) => {
-                    let tip = l("скачать и перезапустить", "download it and restart");
-                    if update_row(ui, &v).on_hover_text(tip).clicked() {
-                        self.install = Some(crate::update::install(ui.ctx()));
-                    }
-                }
-                (None, None) => {}
+            }
+            (None, None) => {}
+        }
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.add_space(8.0);
+            // the version opens the changelog
+            let version = ui.painter().layout_no_wrap(format!("blinker {}", crate::update::current()), mono(10.5), egui::Color32::PLACEHOLDER);
+            let (rect, resp) = ui.allocate_exact_size(version.size(), Sense::click());
+            let col = if resp.hovered() { TEXT } else { FAINT };
+            ui.painter().galley(rect.min, version, col);
+            if resp.hovered() {
+                ui.painter().hline(rect.x_range(), rect.bottom() + 0.5, Stroke::new(1.0, col));
+            }
+            if resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(l("история версий", "release notes")).clicked() {
+                self.changelog_open = true;
+            }
+        });
+        // the bottom line: where blinker lives
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 12.0;
+            ui.add_space(8.0);
+            if brand_link(ui, crate::brand::Mark::GitHub, "github", crate::update::REPO_URL).clicked() {
+                win::open_url(crate::update::REPO_URL);
+            }
+            if brand_link(ui, crate::brand::Mark::Discord, "discord", l("сервер blinker в discord", "blinker's discord server")).clicked() {
+                crate::discord::open_invite();
             }
         });
     }
