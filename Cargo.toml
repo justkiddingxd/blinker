@@ -1,6 +1,6 @@
 [package]
 name = "blinker"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2024"
 description = "Fast, quiet screenshot and screen recording tool for Windows and macOS"
 license = "GPL-3.0-only"
@@ -78,6 +78,8 @@ windows-numerics = "0.3.1"
 windows-collections = "0.3.2"
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Kernel",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Dwm",
     "Win32_UI_WindowsAndMessaging",

@@ -58,6 +58,27 @@ use std::sync::Arc;
 ///   lightweight processes, so they live independently of captures.
 fn main() {
     win::init_process();
+    {
+        let args: Vec<String> = std::env::args().collect();
+        let has = |f: &str| args.iter().any(|a| a == f);
+        let role = [
+            ("--settings", "settings"),
+            ("--history", "history"),
+            ("--pin", "pin"),
+            ("--text", "text"),
+            ("--video", "video"),
+            ("--edit", "editor"),
+            ("--toast", "toast"),
+            ("--demo", "demo"),
+            ("--quit", "quit"),
+        ]
+        .into_iter()
+        .find(|(f, _)| has(f))
+        .map_or("tray", |(_, r)| r);
+        config::log::start(role);
+        #[cfg(windows)]
+        win::log_native_crashes();
+    }
     media::mark_main_thread();
     let args: Vec<String> = std::env::args().collect();
     let has = |flag: &str| args.iter().any(|a| a == flag);
@@ -182,6 +203,7 @@ fn main() {
     }
 
     let restart = controller(&shared);
+    config::log::info(if restart { "exit: restarting (an update or a restart asked for)" } else { "exit: quit" });
 
     output::wait_pending();
     shell.shutdown();

@@ -29,6 +29,23 @@ pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// A crash in native code (an access violation and the like) writes its
+/// code and where in blinker.exe it happened into the log, then goes on as
+/// it would (Windows' report, the process ends).
+pub fn log_native_crashes() {
+    use windows_sys::Win32::System::Diagnostics::Debug::{EXCEPTION_POINTERS, SetUnhandledExceptionFilter};
+    unsafe extern "system" fn on_crash(info: *const EXCEPTION_POINTERS) -> i32 {
+        unsafe {
+            let rec = if info.is_null() { null_mut() } else { (*info).ExceptionRecord };
+            let (code, addr) = if rec.is_null() { (0, 0) } else { ((*rec).ExceptionCode as u32, (*rec).ExceptionAddress as usize) };
+            let base = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(null()) as usize;
+            crate::config::log::error(format!("crash: exception 0x{code:08x} at blinker.exe+0x{:x}", addr.wrapping_sub(base)));
+        }
+        0 // EXCEPTION_CONTINUE_SEARCH
+    }
+    unsafe { SetUnhandledExceptionFilter(Some(on_crash)) };
+}
+
 pub fn init_process() {
     unsafe {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);

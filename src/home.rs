@@ -1884,6 +1884,24 @@ impl HomeApp {
                 ui::toggle(ui, &mut self.cfg.autostart);
             });
         });
+        ui::group(ui, l("журнал работы", "log"), |ui| {
+            let path = config::log::path();
+            ui::setting_row(
+                ui,
+                l("журнал", "the log"),
+                l("запуски, ошибки и падения blinker: пригодится, если что-то сломалось", "blinker's starts, errors and crashes: handy when something broke"),
+                |ui| {
+                    if ui::button(ui, l("показать", "show"), ui::Kind::Ghost).clicked() {
+                        if path.exists() {
+                            win::reveal_in_explorer(&path);
+                        } else if let Some(dir) = path.parent() {
+                            let _ = std::fs::create_dir_all(dir);
+                            win::open_path(dir);
+                        }
+                    }
+                },
+            );
+        });
         ui::group(ui, l("обновления", "updates"), |ui| {
             let newer = self.update.lock().unwrap().clone();
             let state = self.check.as_ref().map(|c| c.lock().unwrap().clone());

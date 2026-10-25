@@ -2,6 +2,16 @@
 
 Each version's section has a Russian half, `---`, then an English one: the app shows the one of its language, and GitHub's release notes (and the Discord note) are the English half (`.github/workflows/release.yml`).
 
+## 0.4.4
+
+**Прочее**
+- Журнал работы: запуски и выходы каждого процесса blinker, ошибки и падения (паника с местом в коде, сбой в нативном коде) пишутся в файл. На Windows — %LOCALAPPDATA%\Blinker\logs\blinker.log, на маке — ~/Library/Logs/Blinker/blinker.log. Кнопка «показать» в настройках → система. Если blinker закрылся сам, этот файл объяснит почему.
+
+---
+
+**Other**
+- A log: the starts and exits of each blinker process, its errors and crashes (a panic with its place in the code, a failure in native code) are written to a file. On Windows it's %LOCALAPPDATA%\Blinker\logs\blinker.log, on a Mac ~/Library/Logs/Blinker/blinker.log. The "show" button in settings → system. If blinker closed by itself, this file says why.
+
 ## 0.4.3
 
 - Меню настроек больше не наезжает на версию и ссылки внизу: когда разделы не помещаются, они прокручиваются, а низ с версией, GitHub, Discord и «обновить до …» остаётся на месте. Открытый раздел сам прокручивается в видимую часть.

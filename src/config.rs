@@ -909,17 +909,88 @@ pub fn save(cfg: &Config) {
 }
 
 pub mod log {
-    pub fn error(msg: impl AsRef<str>) {
-        eprintln!("[blinker] {}", msg.as_ref());
-        // an app started from Finder has no terminal: ~/Library/Logs/Blinker
+    //! blinker's log: a line per start and exit of each process, its errors,
+    //! and what took it down (a panic with its place in the code, a crash in
+    //! native code). Windows: %LOCALAPPDATA%\Blinker\logs\blinker.log; a Mac:
+    //! ~/Library/Logs/Blinker/blinker.log (where its native layer writes too).
+    //! Past 2 MB the file becomes blinker.old.log and a new one starts.
+
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::sync::OnceLock;
+
+    /// What this process is ("tray", "settings", "text"…), for every line.
+    static ROLE: OnceLock<&'static str> = OnceLock::new();
+
+    pub fn path() -> PathBuf {
         #[cfg(target_os = "macos")]
-        info(msg);
+        let dir = dirs::home_dir().unwrap_or_else(std::env::temp_dir).join("Library/Logs/Blinker");
+        #[cfg(not(target_os = "macos"))]
+        let dir = super::cache_dir().join("logs");
+        dir.join("blinker.log")
     }
 
-    /// A line in the macOS log file.
-    #[cfg(target_os = "macos")]
+    pub fn error(msg: impl AsRef<str>) {
+        write("error", msg.as_ref());
+    }
+
     pub fn info(msg: impl AsRef<str>) {
-        let line = crate::win::ffi::cstr(msg.as_ref());
-        unsafe { crate::win::ffi::bk_log(line.as_ptr()) };
+        write("info", msg.as_ref());
+    }
+
+    fn write(level: &str, msg: &str) {
+        eprintln!("[blinker] {msg}");
+        let path = path();
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if std::fs::metadata(&path).is_ok_and(|m| m.len() > 2 * 1024 * 1024) {
+            let _ = std::fs::rename(&path, path.with_file_name("blinker.old.log"));
+        }
+        let line = format!(
+            "{} [{} {}] {level}: {msg}\n",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+            std::process::id(),
+            ROLE.get().copied().unwrap_or("?")
+        );
+        // one write per line: the processes share the file
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = f.write_all(line.as_bytes());
+        }
+    }
+
+    /// The process starts as `role`: logged, and from now on a panic is
+    /// written down before it takes the process with it (the release build
+    /// aborts on a panic, which leaves no message anywhere else).
+    pub fn start(role: &'static str) {
+        let _ = ROLE.set(role);
+        info(format!("start {} ({})", env!("CARGO_PKG_VERSION"), std::env::consts::OS));
+        std::panic::set_hook(Box::new(|p| {
+            let what = p
+                .payload()
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| p.payload().downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "?".into());
+            let at = p.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+            let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
+            error(format!("crash: panic in thread {thread} at {at}: {what}"));
+        }));
+    }
+}
+
+#[cfg(test)]
+mod log_tests {
+    /// A panic leaves its message and place in the log.
+    #[test]
+    fn panic_is_logged() {
+        super::log::start("test");
+        let mark = format!("log test {}", std::process::id());
+        let m = mark.clone();
+        let _ = std::thread::Builder::new().name("log-test".into()).spawn(move || panic!("{m}")).unwrap().join();
+        let _ = std::panic::take_hook();
+        let text = std::fs::read_to_string(super::log::path()).unwrap();
+        let line = text.lines().rev().find(|l| l.contains(&mark)).expect("the panic's line");
+        assert!(line.contains("[") && line.contains("test]") && line.contains("crash: panic in thread log-test at src"), "{line}");
     }
 }
