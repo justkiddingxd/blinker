@@ -75,7 +75,7 @@ fn launch(shared: &Arc<Shared>) {
         .with_active(false)
         .with_position([-4000.0, -4000.0])
         .with_inner_size([1.0, 1.0]);
-    crate::runtime::run_window(shared, viewport, false, |cc| {
+    crate::runtime::run_window(shared, "settings", viewport, false, |cc| {
         if let Some(h) = win::hwnd_of(cc) {
             win::cloak(h, true);
         }

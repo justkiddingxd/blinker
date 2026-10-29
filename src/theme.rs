@@ -1,30 +1,325 @@
 //! Visual identity "Graphite": warm dark greys, one dusty snow-white accent,
 //! Fira Sans / Fira Mono embedded in the binary.
+//!
+//! What it looks like is a theme: a sheet of blinker's small CSS (`css.rs`),
+//! a built-in one with the user's `theme.css` on top. Its `--variables` are
+//! the palette below; its rules restyle parts of each window (`look`).
 
+use crate::css::{self, Look, Sheet};
 use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily, FontId, TextStyle, vec2};
-use std::sync::Arc;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Instant, SystemTime};
 use tiny_skia as sk;
 
-pub const BG: Color32 = Color32::from_rgb(0x16, 0x16, 0x15);
-pub const PANEL: Color32 = Color32::from_rgb(0x1C, 0x1C, 0x1A);
-pub const CANVAS: Color32 = Color32::from_rgb(0x12, 0x12, 0x11);
-pub const LINE: Color32 = Color32::from_rgb(0x2B, 0x2B, 0x28);
-pub const LINE_SOFT: Color32 = Color32::from_rgb(0x23, 0x23, 0x21);
-/// A brighter hairline: the edge of a raised plate.
-pub const LINE_HI: Color32 = Color32::from_rgb(0x3A, 0x3A, 0x36);
-pub const HOVER: Color32 = Color32::from_rgb(0x23, 0x23, 0x21);
-pub const ACTIVE: Color32 = Color32::from_rgb(0x2B, 0x2B, 0x28);
-pub const TEXT: Color32 = Color32::from_rgb(0xE6, 0xE4, 0xDE);
-pub const TEXT2: Color32 = Color32::from_rgb(0xB9, 0xB6, 0xAD);
-pub const DIM: Color32 = Color32::from_rgb(0x9A, 0x97, 0x8E);
-pub const FAINT: Color32 = Color32::from_rgb(0x6E, 0x6C, 0x66);
-/// Descriptions under setting titles: between DIM and FAINT.
-pub const FAINT_TEXT: Color32 = Color32::from_rgb(0x85, 0x83, 0x7C);
-/// "Dirty snow": an off-white with a little warm grey in it.
-pub const ACCENT: Color32 = Color32::from_rgb(0xD8, 0xD5, 0xCD);
-pub const ACCENT_HI: Color32 = Color32::from_rgb(0xE9, 0xE6, 0xDF);
-pub const ON_ACCENT: Color32 = Color32::from_rgb(0x16, 0x16, 0x15);
-pub const DANGER: Color32 = Color32::from_rgb(0xE5, 0x48, 0x4D);
+/// The palette: a function per color, its CSS variable and its Graphite
+/// value. The theme changes them for the window open now.
+macro_rules! palette {
+    ($($(#[$doc:meta])* $name:ident $var:literal = $r:literal $g:literal $b:literal $a:literal;)*) => {
+        static PALETTE: [AtomicU32; [$($var),*].len()] = [$(AtomicU32::new(u32::from_be_bytes([$r, $g, $b, $a]))),*];
+        /// Each color's `--variable` and Graphite value.
+        pub const TOKENS: &[(&str, [u8; 4])] = &[$(($var, [$r, $g, $b, $a])),*];
+        palette!(@fns 0usize, $($(#[$doc])* $name)*);
+    };
+    (@fns $i:expr, $(#[$doc:meta])* $name:ident $($rest:tt)*) => {
+        $(#[$doc])*
+        #[allow(non_snake_case)]
+        #[inline]
+        pub fn $name() -> Color32 {
+            token($i)
+        }
+        palette!(@fns $i + 1usize, $($rest)*);
+    };
+    (@fns $i:expr,) => {};
+}
+
+palette! {
+    BG "--bg" = 0x16 0x16 0x15 0xFF;
+    PANEL "--panel" = 0x1C 0x1C 0x1A 0xFF;
+    CANVAS "--canvas" = 0x12 0x12 0x11 0xFF;
+    LINE "--line" = 0x2B 0x2B 0x28 0xFF;
+    LINE_SOFT "--line-soft" = 0x23 0x23 0x21 0xFF;
+    /// A brighter hairline: the edge of a raised plate.
+    LINE_HI "--line-hi" = 0x3A 0x3A 0x36 0xFF;
+    HOVER "--hover" = 0x23 0x23 0x21 0xFF;
+    ACTIVE "--active" = 0x2B 0x2B 0x28 0xFF;
+    TEXT "--text" = 0xE6 0xE4 0xDE 0xFF;
+    TEXT2 "--text-2" = 0xB9 0xB6 0xAD 0xFF;
+    DIM "--dim" = 0x9A 0x97 0x8E 0xFF;
+    FAINT "--faint" = 0x6E 0x6C 0x66 0xFF;
+    /// Descriptions under setting titles: between DIM and FAINT.
+    FAINT_TEXT "--faint-text" = 0x85 0x83 0x7C 0xFF;
+    /// "Dirty snow": an off-white with a little warm grey in it.
+    ACCENT "--accent" = 0xD8 0xD5 0xCD 0xFF;
+    ACCENT_HI "--accent-hi" = 0xE9 0xE6 0xDF 0xFF;
+    ON_ACCENT "--on-accent" = 0x16 0x16 0x15 0xFF;
+    DANGER "--danger" = 0xE5 0x48 0x4D 0xFF;
+    /// The dark over the screen around a selection.
+    VEIL "--veil" = 0x0C 0x0C 0x0B 0x96;
+    /// Small dark plates over the screen: the size of a selection, hints.
+    SHADE "--shade" = 0x12 0x12 0x11 0xE1;
+}
+
+fn token(i: usize) -> Color32 {
+    let [r, g, b, a] = PALETTE[i].load(Ordering::Relaxed).to_be_bytes();
+    Color32::from_rgba_unmultiplied(r, g, b, a)
+}
+
+// ---------------------------------------------------------------------------
+// The theme: built-in themes, the user's theme.css, the window it's for.
+
+/// The built-in themes: id, Russian and English names, the sheet.
+pub const THEMES: &[(&str, &str, &str, &str)] = &[
+    ("graphite", "графит", "graphite", ""),
+    ("coal", "уголь", "coal", include_str!("../assets/themes/coal.css")),
+    ("midnight", "полночь", "midnight", include_str!("../assets/themes/midnight.css")),
+    ("forest", "лес", "forest", include_str!("../assets/themes/forest.css")),
+    ("sunset", "закат", "sunset", include_str!("../assets/themes/sunset.css")),
+    ("sakura", "сакура", "sakura", include_str!("../assets/themes/sakura.css")),
+];
+
+/// What a new theme.css starts as: every variable and element, commented
+/// (in the interface's language).
+const TEMPLATE: &str = include_str!("../assets/themes/template.css");
+const TEMPLATE_RU: &str = include_str!("../assets/themes/template-ru.css");
+
+/// The user's own sheet, on top of the chosen theme.
+pub fn user_file() -> PathBuf {
+    crate::config::app_dir().join("theme.css")
+}
+
+/// Creates theme.css from the template if there's none; its path.
+pub fn ensure_user_file() -> PathBuf {
+    let path = user_file();
+    if !path.exists() {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&path, if crate::i18n::en() { TEMPLATE } else { TEMPLATE_RU });
+    }
+    path
+}
+
+struct Theme {
+    sheet: Sheet,
+    /// The window it's for: the first node of every path.
+    scope: &'static str,
+    /// What the sheet was read from, to see it change.
+    stamp: (Option<SystemTime>, Option<SystemTime>),
+    checked: Instant,
+    cache: HashMap<(String, u8), Look>,
+}
+
+static THEME: Mutex<Option<Theme>> = Mutex::new(None);
+
+thread_local! {
+    /// The parts being drawn now, outer first (`toolbar`, then a button in it).
+    static PARTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+fn stamp() -> (Option<SystemTime>, Option<SystemTime>) {
+    let mtime = |p: PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    (crate::config::modified(), mtime(user_file()))
+}
+
+/// The chosen theme, the accent picked in the settings, theme.css.
+fn read_sheet() -> Sheet {
+    let (name, accent, own) = crate::config::theme_choice();
+    let builtin = THEMES.iter().find(|t| t.0 == name).map_or("", |t| t.3);
+    let mut sheet = Sheet::parse(builtin, &name);
+    if css::color(&accent).is_some() {
+        sheet = sheet.then(Sheet::parse(&format!(":root {{ --accent: {accent} }}"), "accent"));
+    }
+    if let Some(user) = own.then(|| std::fs::read_to_string(user_file()).ok()).flatten() {
+        sheet = sheet.then(Sheet::parse(&user, "theme.css"));
+    }
+    // into the log once per process, not on every read
+    static LOGGED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let mut logged = LOGGED.lock().unwrap();
+    if *logged != sheet.errors {
+        for e in &sheet.errors {
+            crate::config::log::info(format!("theme: {e}"));
+        }
+        logged.clone_from(&sheet.errors);
+    }
+    sheet
+}
+
+/// The palette as the sheet has it for `scope`. A theme that sets an accent
+/// but not its lighter shade or the text on it gets those worked out.
+fn set_palette(sheet: &Sheet, scope: &str) {
+    let vars = sheet.compute(&css::path(scope), 0).vars;
+    let get = |var: &str| vars.get(var).and_then(|v| css::color(v));
+    for (i, (var, rgba)) in TOKENS.iter().enumerate() {
+        let c = get(var).unwrap_or(Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]));
+        PALETTE[i].store(u32::from_be_bytes(c.to_srgba_unmultiplied()), Ordering::Relaxed);
+    }
+    if let Some(accent) = get("--accent") {
+        let idx = |v: &str| TOKENS.iter().position(|t| t.0 == v).unwrap_or(0);
+        if get("--accent-hi").is_none() {
+            PALETTE[idx("--accent-hi")].store(u32::from_be_bytes(lerp_color(accent, Color32::WHITE, 0.25).to_srgba_unmultiplied()), Ordering::Relaxed);
+        }
+        if get("--on-accent").is_none() {
+            let [r, g, b, _] = accent.to_srgba_unmultiplied();
+            let light = 0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32 > 150.0;
+            let on = if light { BG() } else { Color32::WHITE };
+            PALETTE[idx("--on-accent")].store(u32::from_be_bytes(on.to_srgba_unmultiplied()), Ordering::Relaxed);
+        }
+    }
+}
+
+/// The window being opened is `scope` ("overlay", "settings"…): its palette
+/// and its parts' looks from now on.
+pub fn set_scope(scope: &'static str) {
+    let mut t = THEME.lock().unwrap();
+    match t.as_mut() {
+        Some(t) if t.stamp == stamp() => {
+            t.scope = scope;
+            t.cache.clear();
+            set_palette(&t.sheet, scope);
+        }
+        _ => {
+            let stamp = stamp();
+            let sheet = read_sheet();
+            set_palette(&sheet, scope);
+            *t = Some(Theme { sheet, scope, stamp, checked: Instant::now(), cache: HashMap::new() });
+        }
+    }
+}
+
+/// `f` drawn as `scope` (the tray menu: no egui window of its own), then
+/// back to the window that was open.
+pub fn with_scope<R>(scope: &'static str, f: impl FnOnce() -> R) -> R {
+    let before = THEME.lock().unwrap().as_ref().map(|t| t.scope);
+    set_scope(scope);
+    let r = f();
+    if let Some(b) = before {
+        set_scope(b);
+    }
+    r
+}
+
+/// The theme read again if it changed (things drawn outside a window,
+/// which nothing else keeps up to date: the recording's pill).
+pub fn refresh() {
+    let scope = THEME.lock().unwrap().as_ref().map_or("settings", |t| t.scope);
+    set_scope(scope);
+}
+
+/// `look` of a part of `scope`, whatever window is open meanwhile.
+pub fn look_in(scope: &str, path: &str, states: u8) -> Look {
+    let t = THEME.lock().unwrap();
+    let Some(t) = t.as_ref() else { return Look::default() };
+    Look::of(&t.sheet.compute(&css::path(&format!("{scope} {path}")), states))
+}
+
+/// What went wrong reading the theme (for the settings).
+pub fn errors() -> Vec<String> {
+    THEME.lock().unwrap().as_ref().map(|t| t.sheet.errors.clone()).unwrap_or_default()
+}
+
+/// How the part `path` (from the parts being drawn: "button.icon.ghost")
+/// looks in `states` (`css::state`), in the window open now. Empty where the
+/// theme says nothing: the part keeps its own look there.
+pub fn look(path: &str, states: u8) -> Look {
+    let full = PARTS.with(|p| {
+        let p = p.borrow();
+        let mut s = String::new();
+        for part in p.iter().map(String::as_str).chain(std::iter::once(path)) {
+            if !part.is_empty() {
+                s.push(' ');
+                s.push_str(part);
+            }
+        }
+        s
+    });
+    let mut t = THEME.lock().unwrap();
+    let Some(t) = t.as_mut() else { return Look::default() };
+    let key = (full, states);
+    if let Some(l) = t.cache.get(&key) {
+        return l.clone();
+    }
+    let nodes = css::path(&format!("{}{}", t.scope, key.0));
+    let l = Look::of(&t.sheet.compute(&nodes, states));
+    t.cache.insert(key, l.clone());
+    l
+}
+
+/// A part of the window being drawn until this is dropped: looks asked for
+/// meanwhile are of things inside it (`toolbar` → `toolbar button`).
+pub struct Part(());
+
+pub fn part(name: &str) -> Part {
+    PARTS.with(|p| p.borrow_mut().push(name.to_string()));
+    Part(())
+}
+
+impl Drop for Part {
+    fn drop(&mut self) {
+        PARTS.with(|p| {
+            p.borrow_mut().pop();
+        });
+    }
+}
+
+/// Look again on the next frame (the settings just changed the theme).
+pub fn poke() {
+    if let Some(t) = THEME.lock().unwrap().as_mut() {
+        t.checked = Instant::now() - std::time::Duration::from_secs(5);
+    }
+}
+
+/// A built-in theme's colors for its card in the settings: background,
+/// panel, line, text, dim text, accent.
+pub fn preview(id: &str) -> [Color32; 6] {
+    static CARDS: std::sync::OnceLock<HashMap<&'static str, [Color32; 6]>> = std::sync::OnceLock::new();
+    let cards = CARDS.get_or_init(|| {
+        THEMES
+            .iter()
+            .map(|&(id, _, _, src)| {
+                let vars = Sheet::parse(src, id).compute(&css::path("settings"), 0).vars;
+                let get = |var: &str| {
+                    let d = TOKENS.iter().find(|t| t.0 == var).map_or([0, 0, 0, 255], |t| t.1);
+                    vars.get(var).and_then(|v| css::color(v)).unwrap_or(Color32::from_rgba_unmultiplied(d[0], d[1], d[2], d[3]))
+                };
+                (id, [get("--bg"), get("--panel"), get("--line"), get("--text"), get("--dim"), get("--accent")])
+            })
+            .collect()
+    });
+    cards.get(id).copied().unwrap_or([BG(), PANEL(), LINE(), TEXT(), DIM(), ACCENT()])
+}
+
+/// Once a second: the settings or theme.css changed → read again, repaint.
+fn watch(ctx: &egui::Context) {
+    let changed = {
+        let mut t = THEME.lock().unwrap();
+        let Some(t) = t.as_mut() else { return };
+        if t.checked.elapsed().as_secs_f32() < 1.0 {
+            false
+        } else {
+            t.checked = Instant::now();
+            let now = stamp();
+            if now == t.stamp {
+                false
+            } else {
+                t.stamp = now;
+                t.sheet = read_sheet();
+                t.cache.clear();
+                set_palette(&t.sheet, t.scope);
+                true
+            }
+        }
+    };
+    if changed {
+        style(ctx);
+        ctx.request_repaint();
+    }
+    // an idle window still looks once a second
+    ctx.request_repaint_after(std::time::Duration::from_secs(1));
+}
 
 pub static FONT_REGULAR: &[u8] = include_bytes!("../assets/fonts/FiraSans-Regular.ttf");
 pub static FONT_MEDIUM: &[u8] = include_bytes!("../assets/fonts/FiraSans-Medium.ttf");
@@ -73,9 +368,22 @@ fn install_fonts(ctx: &egui::Context) {
 }
 
 pub fn apply(ctx: &egui::Context) {
+    if THEME.lock().unwrap().is_none() {
+        set_scope("settings");
+    }
     install_fonts(ctx);
     ctx.set_theme(egui::Theme::Dark);
     ctx.options_mut(|o| o.zoom_with_keyboard = false);
+    style(ctx);
+    ctx.on_begin_pass("theme", Arc::new(|ui| watch(ui.ctx())));
+}
+
+/// The widgets' colors and shapes: the palette, the window's background
+/// (`settings { background: … }`), popups and text fields as the theme says.
+fn style(ctx: &egui::Context) {
+    let window = look("", 0);
+    let popup = look("popup", 0);
+    let input = look("input", 0);
     ctx.all_styles_mut(|s| {
         s.text_styles = [
             (TextStyle::Small, font(11.5)),
@@ -94,16 +402,16 @@ pub fn apply(ctx: &egui::Context) {
 
         let v = &mut s.visuals;
         v.dark_mode = true;
-        v.panel_fill = BG;
-        v.window_fill = PANEL;
-        v.window_stroke = egui::Stroke::new(1.0, LINE);
+        v.panel_fill = BG();
+        v.window_fill = PANEL();
+        v.window_stroke = egui::Stroke::new(1.0, LINE());
         v.window_corner_radius = 3.into();
         v.menu_corner_radius = 3.into();
-        v.extreme_bg_color = CANVAS;
-        v.faint_bg_color = PANEL;
-        v.hyperlink_color = ACCENT;
-        v.selection.bg_fill = ACCENT.gamma_multiply(0.25);
-        v.selection.stroke = egui::Stroke::new(1.0, ACCENT);
+        v.extreme_bg_color = CANVAS();
+        v.faint_bg_color = PANEL();
+        v.hyperlink_color = ACCENT();
+        v.selection.bg_fill = ACCENT().gamma_multiply(0.25);
+        v.selection.stroke = egui::Stroke::new(1.0, ACCENT());
         v.window_shadow = egui::Shadow::NONE;
         v.popup_shadow = egui::Shadow::NONE;
 
@@ -112,22 +420,22 @@ pub fn apply(ctx: &egui::Context) {
             wv.corner_radius = 3.into();
             wv.expansion = 0.0;
         }
-        w.noninteractive.bg_fill = PANEL;
-        w.noninteractive.weak_bg_fill = PANEL;
-        w.noninteractive.bg_stroke = egui::Stroke::new(1.0, LINE);
-        w.noninteractive.fg_stroke = egui::Stroke::new(1.0, DIM);
-        w.inactive.bg_fill = ACTIVE;
+        w.noninteractive.bg_fill = PANEL();
+        w.noninteractive.weak_bg_fill = PANEL();
+        w.noninteractive.bg_stroke = egui::Stroke::new(1.0, LINE());
+        w.noninteractive.fg_stroke = egui::Stroke::new(1.0, DIM());
+        w.inactive.bg_fill = ACTIVE();
         w.inactive.weak_bg_fill = Color32::TRANSPARENT;
         w.inactive.bg_stroke = egui::Stroke::NONE;
-        w.inactive.fg_stroke = egui::Stroke::new(1.0, TEXT2);
-        w.hovered.bg_fill = HOVER;
-        w.hovered.weak_bg_fill = HOVER;
+        w.inactive.fg_stroke = egui::Stroke::new(1.0, TEXT2());
+        w.hovered.bg_fill = HOVER();
+        w.hovered.weak_bg_fill = HOVER();
         w.hovered.bg_stroke = egui::Stroke::NONE;
-        w.hovered.fg_stroke = egui::Stroke::new(1.0, TEXT);
-        w.active.bg_fill = ACCENT;
-        w.active.weak_bg_fill = ACTIVE;
+        w.hovered.fg_stroke = egui::Stroke::new(1.0, TEXT());
+        w.active.bg_fill = ACCENT();
+        w.active.weak_bg_fill = ACTIVE();
         w.active.bg_stroke = egui::Stroke::NONE;
-        w.active.fg_stroke = egui::Stroke::new(1.0, TEXT);
+        w.active.fg_stroke = egui::Stroke::new(1.0, TEXT());
         w.open = w.hovered;
 
         if glass() {
@@ -153,6 +461,16 @@ pub fn apply(ctx: &egui::Context) {
             v.extreme_bg_color = Color32::from_black_alpha(70);
             s.spacing.menu_margin = egui::Margin::same(6);
         }
+        if !glass() {
+            v.panel_fill = window.bg_or(v.panel_fill);
+        }
+        v.window_fill = popup.bg_or(v.window_fill);
+        v.window_stroke = popup.border_or(v.window_stroke);
+        if let Some(r) = popup.radius {
+            v.window_corner_radius = (r as u8).into();
+            v.menu_corner_radius = (r as u8).into();
+        }
+        v.extreme_bg_color = input.bg_or(v.extreme_bg_color);
     });
 }
 
@@ -482,7 +800,7 @@ pub fn mark_image(size: u32) -> image::RgbaImage {
     let k = s * 0.94 / (r - l).max(b - t);
     let ts = sk::Transform::from_row(k, 0.0, 0.0, k, s / 2.0 - (l + r) / 2.0 * k, s / 2.0 - (t + b) / 2.0 * k);
     let mut pm = sk::Pixmap::new(size, size).expect("mark size");
-    pm.fill_path(&glyph_path(None), &solid(ACCENT, 255), sk::FillRule::EvenOdd, ts, None);
+    pm.fill_path(&glyph_path(None), &solid(ACCENT(), 255), sk::FillRule::EvenOdd, ts, None);
     pixmap_to_image(&pm)
 }
 
@@ -543,6 +861,18 @@ pub fn color_image(img: &image::RgbaImage) -> egui::ColorImage {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn themes_read_clean() {
+        for &(id, _, _, src) in super::THEMES {
+            let sheet = super::Sheet::parse(src, id);
+            assert!(sheet.errors.is_empty(), "{id}: {:?}", sheet.errors);
+        }
+        for (name, src) in [("template", super::TEMPLATE), ("template-ru", super::TEMPLATE_RU)] {
+            let sheet = super::Sheet::parse(src, name);
+            assert!(sheet.errors.is_empty(), "{name}: {:?}", sheet.errors);
+        }
+    }
+
     #[test]
     fn logo_png() {
         let Ok(out) = std::env::var("BLINKER_TEST_LOGO") else { return };

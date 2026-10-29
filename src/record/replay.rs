@@ -367,6 +367,7 @@ impl Replay {
             let _ = std::fs::remove_file(&path);
             lf!("не удалось сохранить повтор: {e}", "could not save the replay: {e}")
         })?;
+        crate::strip::file(&path);
         let thumb = crate::media::VideoReader::open(&path, 640, 360)
             .ok()
             .and_then(|(r, _)| {

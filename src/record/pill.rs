@@ -172,13 +172,20 @@ pub(crate) fn draw_pill(look: &PillLook, s: f32) -> Option<sk::Pixmap> {
     let line = sk::Stroke { width: 1.0, ..Default::default() };
 
     // the card
-    let radius = 12.0 * s;
+    theme::refresh();
+    let card = theme::look_in("record", "pill", 0);
+    let radius = card.radius_or(12.0) * s;
     if let Some(bg) = theme::rounded_rect_path(0.5, 0.5, w - 1.0, h - 1.0, radius) {
+        let panel = theme::PANEL();
         if look.glass {
-            fill(&mut pm, Some(bg), Color32::from_rgba_unmultiplied(0x1C, 0x1C, 0x1A, 90));
+            fill(&mut pm, Some(bg), card.bg_or(Color32::from_rgba_unmultiplied(panel.r(), panel.g(), panel.b(), 90)));
         } else {
-            fill(&mut pm, Some(bg.clone()), Color32::from_rgba_unmultiplied(0x1C, 0x1C, 0x1A, 250));
-            pm.stroke_path(&bg, &paint_of(theme::LINE_HI), &line, id, None);
+            fill(&mut pm, Some(bg.clone()), card.bg_or(Color32::from_rgba_unmultiplied(panel.r(), panel.g(), panel.b(), 250)));
+            let edge = card.border_or(eframe::egui::Stroke::new(1.0, theme::LINE_HI()));
+            if edge.width > 0.0 {
+                let line = sk::Stroke { width: edge.width * s.max(1.0), ..line.clone() };
+                pm.stroke_path(&bg, &paint_of(edge.color), &line, id, None);
+            }
         }
     }
 
@@ -199,7 +206,7 @@ pub(crate) fn draw_pill(look: &PillLook, s: f32) -> Option<sk::Pixmap> {
         fill(&mut pm, sk::PathBuilder::from_circle(dx, cy, r), REC);
     }
     if let Ok(f) = FontRef::try_from_slice(theme::FONT_MONO_MEDIUM) {
-        let col = if look.paused { PAUSED } else { theme::TEXT };
+        let col = if look.paused { PAUSED } else { theme::TEXT() };
         draw_text(&mut pm, &f, 13.5 * s, dx + 11.0 * s, cy, &fmt_time(look.secs), col);
     }
 
@@ -216,7 +223,7 @@ pub(crate) fn draw_pill(look: &PillLook, s: f32) -> Option<sk::Pixmap> {
             _ => Color32::from_white_alpha(12),
         };
         fill(&mut pm, theme::rounded_rect_path(bx, by, bw, bw, 8.0 * s), plate);
-        let fg = if btn == Btn::Stop { Color32::WHITE } else if hovered { theme::ACCENT_HI } else { theme::TEXT };
+        let fg = if btn == Btn::Stop { Color32::WHITE } else if hovered { theme::ACCENT_HI() } else { theme::TEXT() };
         match btn {
             Btn::Stop => {
                 let sq = 9.0 * s;

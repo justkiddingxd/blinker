@@ -1,0 +1,21 @@
+/* уголь: чистый чёрный, для OLED-экранов */
+:root {
+  --bg: #000000;
+  --panel: #0b0b0b;
+  --canvas: #000000;
+  --line: #1f1f1f;
+  --line-soft: #161616;
+  --line-hi: #2e2e2e;
+  --hover: #161616;
+  --active: #1f1f1f;
+  --text: #ededed;
+  --text-2: #b8b8b8;
+  --dim: #8f8f8f;
+  --faint: #5f5f5f;
+  --faint-text: #7a7a7a;
+  --accent: #ffffff;
+  --accent-hi: #ffffff;
+  --on-accent: #000000;
+  --veil: rgba(0, 0, 0, .66);
+  --shade: rgba(0, 0, 0, .88);
+}

@@ -47,7 +47,7 @@ pub fn run(shared: &Arc<Shared>, tab: HomeTab) {
         .with_transparent(theme::glass());
     let viewport = chrome::style(viewport);
     let shared2 = shared.clone();
-    runtime::run_smooth_window(shared, viewport, true, move |cc| {
+    runtime::run_smooth_window(shared, "settings", viewport, true, move |cc| {
         let hwnd = win::hwnd_of(cc);
         if let Some(h) = hwnd {
             win::style_borderless(h);
@@ -154,6 +154,7 @@ pub fn tab_arg(tab: HomeTab) -> &'static str {
         HomeTab::Upload => "upload",
         HomeTab::Hotkeys => "hotkeys",
         HomeTab::Tray => "tray",
+        HomeTab::Look => "look",
         HomeTab::Integrations => "integrations",
         HomeTab::System => "system",
     }
@@ -181,6 +182,7 @@ pub fn tab_from_arg(arg: &str) -> HomeTab {
         "upload" => HomeTab::Upload,
         "hotkeys" => HomeTab::Hotkeys,
         "tray" => HomeTab::Tray,
+        "look" | "theme" => HomeTab::Look,
         "integrations" => HomeTab::Integrations,
         "system" => HomeTab::System,
         _ => HomeTab::Capture,
@@ -333,7 +335,7 @@ impl HomeApp {
         let mut chips = Vec::new();
         let (mut cx, mut cy) = (0.0f32, 26.0f32);
         for piece in &spare {
-            let g = p.layout_no_wrap(piece.label().to_string(), font(12.0), TEXT2);
+            let g = p.layout_no_wrap(piece.label().to_string(), font(12.0), TEXT2());
             let w = 34.0 + g.size().x;
             if cx + w > spare_w && cx > 0.0 {
                 cx = 0.0;
@@ -365,11 +367,11 @@ impl HomeApp {
         // the menu, as dark as the real one; on glass (macOS 26) a pane of
         // dark glass with a light rim, as the menu bar's menu is there
         let glass = theme::glass();
-        let (rim, line) = if glass { (egui::Color32::from_white_alpha(34), egui::Color32::from_white_alpha(22)) } else { (LINE_HI, LINE) };
+        let (rim, line) = if glass { (egui::Color32::from_white_alpha(34), egui::Color32::from_white_alpha(22)) } else { (LINE_HI(), LINE()) };
         if glass {
             ui::paint_float(&p, panel, 10, 1.0);
         } else {
-            p.rect_filled(panel, 10, BG);
+            p.rect_filled(panel, 10, BG());
             p.rect_stroke(panel, 10, Stroke::new(1.0, rim), StrokeKind::Inside);
         }
         let mut y = panel.top() + PAD;
@@ -383,7 +385,7 @@ impl HomeApp {
                 .id_salt(("tray-head", r))
                 .frame(egui::Frame::NONE)
                 .font(font_medium(11.0))
-                .text_color(DIM)
+                .text_color(DIM())
                 .hint_text(l("без заголовка", "no heading"));
             if ui.put(head, edit).changed() {
                 titles.push((r, text));
@@ -398,8 +400,8 @@ impl HomeApp {
                 let hot = grab(&resp, TrayPiece::Item(*item), from);
                 let a = if picked(from) { 0.25 } else { 1.0 };
                 p.rect_filled(rect, 8, if hot { ui::hover_fill().gamma_multiply(2.2) } else { ui::hover_fill() }.gamma_multiply(a));
-                icons::paint(&p, Rect::from_center_size(rect.center() - vec2(0.0, 8.0), egui::Vec2::splat(18.0)), item.icon(), 16.0, TEXT2.gamma_multiply(a));
-                p.text(pos2(rect.center().x, rect.bottom() - 12.0), egui::Align2::CENTER_CENTER, item.tile_label(), font(11.0), DIM.gamma_multiply(a));
+                icons::paint(&p, Rect::from_center_size(rect.center() - vec2(0.0, 8.0), egui::Vec2::splat(18.0)), item.icon(), 16.0, TEXT2().gamma_multiply(a));
+                p.text(pos2(rect.center().x, rect.bottom() - 12.0), egui::Align2::CENTER_CENTER, item.tile_label(), font(11.0), DIM().gamma_multiply(a));
             }
             rows.push((Rect::from_min_max(pos2(panel.left(), y - 4.0), pos2(panel.right(), y + TILE + 4.0)), rects));
             y += TILE + 8.0;
@@ -407,14 +409,14 @@ impl HomeApp {
         // room for one more row of tiles
         let new_row = Rect::from_min_size(pos2(panel.left() + PAD, y), vec2(menu_w - 2.0 * PAD, NEW_ROW_H));
         let carrying_item = drag.is_some_and(|d| matches!(d.piece, TrayPiece::Item(_)));
-        let edge = if carrying_item { DIM } else { rim };
+        let edge = if carrying_item { DIM() } else { rim };
         p.extend(egui::Shape::dashed_line(
             &[new_row.left_top(), new_row.right_top(), new_row.right_bottom(), new_row.left_bottom(), new_row.left_top()],
             Stroke::new(1.0, edge),
             4.0,
             3.0,
         ));
-        p.text(new_row.center(), egui::Align2::CENTER_CENTER, l("+ новый ряд плиток", "+ a new row of tiles"), font(11.5), if carrying_item { DIM } else { FAINT });
+        p.text(new_row.center(), egui::Align2::CENTER_CENTER, l("+ новый ряд плиток", "+ a new row of tiles"), font(11.5), if carrying_item { DIM() } else { FAINT() });
         y += NEW_ROW_H + 8.0;
         p.hline(panel.x_range().shrink(PAD), y + SEP_H / 2.0, Stroke::new(1.0, line));
         y += SEP_H;
@@ -438,17 +440,17 @@ impl HomeApp {
             }
             match e {
                 Entry::Separator => {
-                    p.hline(rect.x_range().shrink(8.0), rect.center().y, Stroke::new(1.0, if hot { DIM } else { rim }.gamma_multiply(a)));
+                    p.hline(rect.x_range().shrink(8.0), rect.center().y, Stroke::new(1.0, if hot { DIM() } else { rim }.gamma_multiply(a)));
                 }
                 Entry::Item(item) => {
                     // the replay's row shows only while the replay is on
                     let off = *item == TrayItem::Replay && !self.cfg.replay_enabled;
-                    icons::paint(&p, Rect::from_center_size(pos2(rect.left() + 16.0, rect.center().y), egui::Vec2::splat(15.0)), item.icon(), 14.0, if off { FAINT } else { TEXT2 }.gamma_multiply(a));
+                    icons::paint(&p, Rect::from_center_size(pos2(rect.left() + 16.0, rect.center().y), egui::Vec2::splat(15.0)), item.icon(), 14.0, if off { FAINT() } else { TEXT2() }.gamma_multiply(a));
                     let label = if off { lf!("{} · при включённом повторе", "{} · with the replay on", item.label()) } else { item.label().to_string() };
-                    p.text(pos2(rect.left() + 34.0, rect.center().y), egui::Align2::LEFT_CENTER, label, font(12.5), if off { FAINT } else { TEXT }.gamma_multiply(a));
+                    p.text(pos2(rect.left() + 34.0, rect.center().y), egui::Align2::LEFT_CENTER, label, font(12.5), if off { FAINT() } else { TEXT() }.gamma_multiply(a));
                     let key = item.hotkey().map(|k| crate::hotkey::display_parts(self.cfg.primary_binding(k)).join(" ")).unwrap_or_default();
                     if !off && !key.is_empty() {
-                        p.text(pos2(rect.right() - 10.0, rect.center().y), egui::Align2::RIGHT_CENTER, key, mono(10.5), FAINT.gamma_multiply(a));
+                        p.text(pos2(rect.right() - 10.0, rect.center().y), egui::Align2::RIGHT_CENTER, key, mono(10.5), FAINT().gamma_multiply(a));
                     }
                 }
             }
@@ -456,15 +458,15 @@ impl HomeApp {
         }
 
         // the spare pieces
-        p.text(spare_zone.left_top(), egui::Align2::LEFT_TOP, l("ещё можно добавить", "can be added"), font_medium(12.0), DIM);
+        p.text(spare_zone.left_top(), egui::Align2::LEFT_TOP, l("ещё можно добавить", "can be added"), font_medium(12.0), DIM());
         for (rel, piece, g) in chips {
             let rect = rel.translate(spare_zone.min.to_vec2());
             let resp = ui.interact(rect, ui.scope_id().with(("tray-spare", piece.label())), Sense::drag());
             let hot = grab(&resp, piece, TrayFrom::Spare);
             p.rect_filled(rect, 14, if hot { ui::hover_fill().gamma_multiply(2.2) } else { ui::hover_fill() });
             p.rect_stroke(rect, 14, Stroke::new(1.0, line), StrokeKind::Inside);
-            icons::paint(&p, Rect::from_center_size(pos2(rect.left() + 15.0, rect.center().y), egui::Vec2::splat(13.0)), piece.icon(), 12.0, DIM);
-            p.galley(pos2(rect.left() + 26.0, rect.center().y - g.size().y / 2.0), g, TEXT2);
+            icons::paint(&p, Rect::from_center_size(pos2(rect.left() + 15.0, rect.center().y), egui::Vec2::splat(13.0)), piece.icon(), 12.0, DIM());
+            p.galley(pos2(rect.left() + 26.0, rect.center().y - g.size().y / 2.0), g, TEXT2());
         }
 
         // where it would land
@@ -505,11 +507,11 @@ impl HomeApp {
                     (None, Some(last)) => last.right() + GAP / 2.0,
                     (None, None) => panel.left() + PAD,
                 };
-                fg.vline(x, band.y_range().shrink(4.0), Stroke::new(2.0, ACCENT));
+                fg.vline(x, band.y_range().shrink(4.0), Stroke::new(2.0, ACCENT()));
             }
             Some(TrayDrop::NewRow) => {
-                fg.rect_filled(new_row, 6, ACCENT.gamma_multiply(0.1));
-                fg.rect_stroke(new_row, 6, Stroke::new(1.0, ACCENT), StrokeKind::Inside);
+                fg.rect_filled(new_row, 6, ACCENT().gamma_multiply(0.1));
+                fg.rect_stroke(new_row, 6, Stroke::new(1.0, ACCENT()), StrokeKind::Inside);
             }
             Some(TrayDrop::List(i)) => {
                 let y = match (list.get(i), list.last()) {
@@ -517,10 +519,10 @@ impl HomeApp {
                     (None, Some(last)) => last.bottom(),
                     (None, None) => list_top,
                 };
-                fg.hline(panel.x_range().shrink(8.0), y, Stroke::new(2.0, ACCENT));
+                fg.hline(panel.x_range().shrink(8.0), y, Stroke::new(2.0, ACCENT()));
             }
             Some(TrayDrop::Remove) => {
-                fg.rect_stroke(spare_zone.expand(6.0), 10, Stroke::new(1.0, ACCENT.gamma_multiply(0.7)), StrokeKind::Inside);
+                fg.rect_stroke(spare_zone.expand(6.0), 10, Stroke::new(1.0, ACCENT().gamma_multiply(0.7)), StrokeKind::Inside);
             }
             None => {}
         }
@@ -529,7 +531,7 @@ impl HomeApp {
             && spare_zone.contains(pt)
             && matches!(d.piece, TrayPiece::Item(i) if i.locked())
         {
-            p.text(pos2(spare_zone.left(), spare_zone.top() + cy + 28.0 + 16.0), egui::Align2::LEFT_CENTER, l("это убрать нельзя", "this one stays"), font(12.0), DANGER);
+            p.text(pos2(spare_zone.left(), spare_zone.top() + cy + 28.0 + 16.0), egui::Align2::LEFT_CENTER, l("это убрать нельзя", "this one stays"), font(12.0), DANGER());
         }
         // back to the menu blinker comes with
         let reset = Rect::from_min_max(pos2(spare_zone.left(), spare_zone.bottom() - 30.0), spare_zone.right_bottom());
@@ -547,13 +549,13 @@ impl HomeApp {
         if let (Some(d), Some(pt)) = (drag, pointer) {
             ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
             let tip = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("tray-ghost")));
-            let g = tip.layout_no_wrap(d.piece.label().to_string(), font(12.0), TEXT);
+            let g = tip.layout_no_wrap(d.piece.label().to_string(), font(12.0), TEXT());
             let r = Rect::from_min_size(pt + vec2(12.0, 10.0), vec2(34.0 + g.size().x, 28.0));
             tip.add(egui::epaint::Shadow { offset: [0, 4], blur: 14, spread: 0, color: egui::Color32::from_black_alpha(120) }.as_shape(r, 14));
             tip.rect_filled(r, 14, ui::float_fill());
-            tip.rect_stroke(r, 14, Stroke::new(1.0, ACCENT.gamma_multiply(0.6)), StrokeKind::Inside);
-            icons::paint(&tip, Rect::from_center_size(pos2(r.left() + 15.0, r.center().y), egui::Vec2::splat(13.0)), d.piece.icon(), 12.0, ACCENT);
-            tip.galley(pos2(r.left() + 26.0, r.center().y - g.size().y / 2.0), g, TEXT);
+            tip.rect_stroke(r, 14, Stroke::new(1.0, ACCENT().gamma_multiply(0.6)), StrokeKind::Inside);
+            icons::paint(&tip, Rect::from_center_size(pos2(r.left() + 15.0, r.center().y), egui::Vec2::splat(13.0)), d.piece.icon(), 12.0, ACCENT());
+            tip.galley(pos2(r.left() + 26.0, r.center().y - g.size().y / 2.0), g, TEXT());
         }
 
         for (r, text) in titles {
@@ -642,7 +644,8 @@ impl HomeApp {
     fn nav(&mut self, ui: &mut egui::Ui) {
         let glass = theme::glass();
         // on glass the sidebar is clear: the pane behind shows through
-        let fill = if glass { egui::Color32::TRANSPARENT } else { PANEL };
+        let look = theme::look("sidebar", 0);
+        let fill = look.bg_or(if glass { egui::Color32::TRANSPARENT } else { PANEL() });
         egui::Panel::left("nav")
             .exact_size(NAV_W)
             .resizable(false)
@@ -652,7 +655,7 @@ impl HomeApp {
             .show(ui, |ui| {
                 let r = ui.max_rect();
                 if !glass {
-                    ui.painter().vline(r.right() + 12.5, r.y_range().expand(14.0), Stroke::new(1.0, LINE_SOFT));
+                    ui.painter().vline(r.right() + 12.5, r.y_range().expand(14.0), look.border_or(Stroke::new(1.0, LINE_SOFT())));
                 }
                 let top = Rect::from_min_size(pos2(r.left() - 10.0, r.top()), vec2(NAV_W, TITLE_BAR_H));
                 chrome::drag_region(ui, top);
@@ -666,7 +669,7 @@ impl HomeApp {
                     ui.spacing_mut().item_spacing.x = 9.0;
                     ui.add_space(6.0);
                     brand_mark(ui, 30.0);
-                    ui.label(egui::RichText::new("blinker").font(font_semibold(17.0)).color(TEXT));
+                    ui.label(egui::RichText::new("blinker").font(font_semibold(17.0)).color(TEXT()));
                 });
                 // the footer keeps its place at the bottom; the sections
                 // scroll above it when the window is too short for them
@@ -700,6 +703,7 @@ impl HomeApp {
                     (
                         l("общее", "general"),
                         &[
+                            (HomeTab::Look, Icon::Palette, l("оформление", "appearance")),
                             (HomeTab::Notify, Icon::Bell, t("уведомление")),
                             (HomeTab::Storage, Icon::Save, t("сохранение")),
                             (HomeTab::Upload, Icon::Upload, t("загрузка")),
@@ -730,7 +734,15 @@ impl HomeApp {
                 if let Some(r) = selected_rect {
                     let y = ui.ctx().animate_value_with_time(egui::Id::unique("nav-plate"), r.top(), 0.16);
                     let rect = Rect::from_min_size(pos2(r.left(), y), r.size());
-                    ui.painter().set(plate, egui::Shape::rect_filled(rect, ui::control_radius(rect.height(), 7.0), ui::plate()));
+                    let picked = theme::look("nav", crate::css::state::CHECKED);
+                    let radius = picked.radius.map_or(ui::control_radius(rect.height(), 7.0), |r| r.round() as u8);
+                    ui.painter().set(
+                        plate,
+                        egui::Shape::Vec(vec![
+                            egui::Shape::rect_filled(rect, radius, picked.bg_or(ui::plate())),
+                            egui::Shape::rect_stroke(rect, radius, picked.border.unwrap_or(Stroke::NONE), egui::StrokeKind::Inside),
+                        ]),
+                    );
                 }
     }
 
@@ -750,18 +762,18 @@ impl HomeApp {
                 let f = if total > 0 { (done as f32 / total as f32).clamp(0.0, 1.0) } else { 0.0 };
                 let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width() - 8.0, 3.0), Sense::hover());
                 let bar = bar.translate(vec2(8.0, 0.0));
-                ui.painter().rect_filled(bar, 1.5, LINE);
-                ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * f, bar.height())), 1.5, ACCENT);
-                note(ui, lf!("  загрузка {:.0}%", "  downloading {:.0}%", f * 100.0), DIM);
+                ui.painter().rect_filled(bar, 1.5, LINE());
+                ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * f, bar.height())), 1.5, ACCENT());
+                note(ui, lf!("  загрузка {:.0}%", "  downloading {:.0}%", f * 100.0), DIM());
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
             }
-            (Some(Stage::Installing), _) => note(ui, format!("  {}", l("установка…", "installing…")), DIM),
-            (Some(Stage::Restarting), _) => note(ui, format!("  {}", l("перезапуск…", "restarting…")), DIM),
+            (Some(Stage::Installing), _) => note(ui, format!("  {}", l("установка…", "installing…")), DIM()),
+            (Some(Stage::Restarting), _) => note(ui, format!("  {}", l("перезапуск…", "restarting…")), DIM()),
             (Some(Stage::Failed(e)), _) if e == crate::update::LATEST => {
-                note(ui, format!("  {}", l("у тебя последняя версия", "this is the latest version")), DIM);
+                note(ui, format!("  {}", l("у тебя последняя версия", "this is the latest version")), DIM());
             }
             (Some(Stage::Failed(e)), _) => {
-                note(ui, format!("  {e}"), DANGER);
+                note(ui, format!("  {e}"), DANGER());
                 if ui::button_h(ui, l("скачать с сайта", "get it from the site"), ui::Kind::Ghost, 26.0).clicked() {
                     win::open_url(crate::update::SITE_URL);
                 }
@@ -780,7 +792,7 @@ impl HomeApp {
             // the version opens the changelog
             let version = ui.painter().layout_no_wrap(format!("blinker {}", crate::update::current()), mono(10.5), egui::Color32::PLACEHOLDER);
             let (rect, resp) = ui.allocate_exact_size(version.size(), Sense::click());
-            let col = if resp.hovered() { TEXT } else { FAINT };
+            let col = if resp.hovered() { TEXT() } else { FAINT() };
             ui.painter().galley(rect.min, version, col);
             if resp.hovered() {
                 ui.painter().hline(rect.x_range(), rect.bottom() + 0.5, Stroke::new(1.0, col));
@@ -814,7 +826,7 @@ impl HomeApp {
             ui.ctx().request_repaint();
         }
         // on glass the page is clear: the frosted window shows through
-        let fill = if theme::glass() { egui::Color32::TRANSPARENT } else { BG };
+        let fill = if theme::glass() { egui::Color32::TRANSPARENT } else { BG() };
         egui::CentralPanel::no_frame().frame(egui::Frame::new().fill(fill)).show(ui, |ui| {
             self.content_rect = ui.max_rect();
             let r = ui.max_rect();
@@ -850,6 +862,7 @@ impl HomeApp {
                         HomeTab::Upload => self.upload_page(ui),
                         HomeTab::Hotkeys => self.hotkeys_page(ui),
                         HomeTab::Tray => self.tray_page(ui),
+                        HomeTab::Look => self.look_page(ui),
                         HomeTab::Integrations => self.integrations_page(ui),
                         HomeTab::System => self.system_page(ui),
                     }
@@ -868,13 +881,13 @@ impl HomeApp {
         let mut go = false;
         let mut done = false;
         egui::Frame::new()
-            .fill(PANEL)
-            .stroke(Stroke::new(1.0, ACCENT.gamma_multiply(0.45)))
+            .fill(PANEL())
+            .stroke(Stroke::new(1.0, ACCENT().gamma_multiply(0.45)))
             .corner_radius(10)
             .inner_margin(egui::Margin::symmetric(16, 12))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(egui::RichText::new(l("видишь «press alt+z to open nvidia overlay»?", "seeing “press alt+z to open nvidia overlay”?")).font(font_semibold(13.5)).color(TEXT));
+                ui.label(egui::RichText::new(l("видишь «press alt+z to open nvidia overlay»?", "seeing “press alt+z to open nvidia overlay”?")).font(font_semibold(13.5)).color(TEXT()));
                 ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new(l(
@@ -882,7 +895,7 @@ impl HomeApp {
                         "that's the nvidia overlay: it takes for a game anything drawn on the graphics card that isn't on its list. nvidia put discord and browsers there itself; an app can't. the note is turned off in the overlay's settings in 10 seconds",
                     ))
                     .font(font(12.5))
-                    .color(DIM),
+                    .color(DIM()),
                 );
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
@@ -902,9 +915,9 @@ impl HomeApp {
     }
 
     fn page_title(ui: &mut egui::Ui, title: &str, sub: &str) {
-        ui.label(egui::RichText::new(title).font(font_semibold(21.0)).color(TEXT));
+        ui.label(egui::RichText::new(title).font(font_semibold(21.0)).color(TEXT()));
         ui.add_space(4.0);
-        ui.label(egui::RichText::new(sub).font(font(12.5)).color(DIM));
+        ui.label(egui::RichText::new(sub).font(font(12.5)).color(DIM()));
         ui.add_space(4.0);
     }
 
@@ -913,7 +926,7 @@ impl HomeApp {
         ui::group(ui, l("выделение", "selection"), |ui| {
             ui::setting_row(ui, l("панель инструментов", "tools panel"), "", |ui| {
                 egui::ComboBox::from_id_salt("tools-pos")
-                    .selected_text(egui::RichText::new(self.cfg.tools_pos.label()).font(font(12.5)).color(TEXT))
+                    .selected_text(egui::RichText::new(self.cfg.tools_pos.label()).font(font(12.5)).color(TEXT()))
                     .width(160.0)
                     .show_ui(ui, |ui| {
                         for p in config::ToolsPos::ALL {
@@ -945,7 +958,7 @@ impl HomeApp {
                 };
                 ui::setting_row(ui, l("части окон", "parts of windows"), sub, |ui| {
                     if allowed {
-                        ui.label(egui::RichText::new(l("разрешено", "allowed")).font(font(12.5)).color(FAINT));
+                        ui.label(egui::RichText::new(l("разрешено", "allowed")).font(font(12.5)).color(FAINT()));
                     } else if ui::button(ui, l("разрешить", "allow"), ui::Kind::Ghost).clicked() {
                         win::ax_trusted(true);
                     }
@@ -992,7 +1005,7 @@ impl HomeApp {
             };
             ui::setting_row(ui, t("частота кадров"), "", |ui| {
                 egui::ComboBox::from_id_salt("rec-fps")
-                    .selected_text(egui::RichText::new(fps_label(self.cfg.rec_fps)).font(font(12.5)).color(TEXT))
+                    .selected_text(egui::RichText::new(fps_label(self.cfg.rec_fps)).font(font(12.5)).color(TEXT()))
                     .width(140.0)
                     .show_ui(ui, |ui| {
                         for fps in [0u32, 30, 60, 120, 144, 240] {
@@ -1110,7 +1123,7 @@ impl HomeApp {
                 let sub = lf!("от {MIN_REPLAY} до {max} секунд · это {}", "{MIN_REPLAY} to {max} seconds · that's {}", approx_length(self.cfg.replay_secs));
                 ui::setting_row(ui, t("сколько хранить"), &sub, |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    ui.label(egui::RichText::new(l("сек", "sec")).font(font(12.5)).color(DIM));
+                    ui.label(egui::RichText::new(l("сек", "sec")).font(font(12.5)).color(DIM()));
                     let resp = ui.add(
                         egui::TextEdit::singleline(&mut self.replay_min)
                             .desired_width(52.0)
@@ -1164,7 +1177,7 @@ impl HomeApp {
         };
         ui::setting_row(ui, l("какой микрофон", "which microphone"), "", |ui| {
             egui::ComboBox::from_id_salt(("mic", ui.scope_id()))
-                .selected_text(egui::RichText::new(&shown).font(font(12.5)).color(TEXT))
+                .selected_text(egui::RichText::new(&shown).font(font(12.5)).color(TEXT()))
                 .width(220.0)
                 .height(400.0)
                 .show_ui(ui, |ui| {
@@ -1291,7 +1304,7 @@ impl HomeApp {
                 "the server gets a post with the file as the body and answers {\"url\": \"…\"}. a ready one is in the server folder of the repository.",
             ),
         };
-        ui.add(egui::Label::new(egui::RichText::new(note).font(font(12.0)).color(FAINT)).wrap());
+        ui.add(egui::Label::new(egui::RichText::new(note).font(font(12.0)).color(FAINT())).wrap());
     }
 
     /// A .sxcu file as the uploader.
@@ -1338,6 +1351,7 @@ impl HomeApp {
             ui::setting_row(ui, t("где появляться"), corner_name(self.cfg.toast_corner), |ui| {
                 corner_picker(ui, &mut self.cfg.toast_corner);
             });
+            self.toast_monitor_rows(ui);
             ui::setting_row(ui, t("размер превью"), "", |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 for (s, label) in [(ToastSize::Large, t("большое")), (ToastSize::Medium, t("среднее")), (ToastSize::Small, t("маленькое"))] {
@@ -1352,11 +1366,44 @@ impl HomeApp {
             ui::setting_row(ui, t("длительность"), l("при наведении не пропадает", "stays while hovered"), |ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 let label = lf!("{:.0} с", "{:.0} s", self.cfg.toast_seconds);
-                ui.add_sized(vec2(36.0, 26.0), egui::Label::new(egui::RichText::new(label).font(mono(11.5)).color(DIM)));
+                ui.add_sized(vec2(36.0, 26.0), egui::Label::new(egui::RichText::new(label).font(mono(11.5)).color(DIM())));
                 ui.spacing_mut().slider_width = 130.0;
                 ui::slider(ui, &mut self.cfg.toast_seconds, 2.0..=15.0, 1.0);
             });
         });
+    }
+
+    /// Which monitor the card shows on: where the capture was, or one picked
+    /// on a map of the monitors (as Windows' display settings draw them).
+    fn toast_monitor_rows(&mut self, ui: &mut egui::Ui) {
+        let monitors = numbered_monitors();
+        if monitors.len() < 2 && self.cfg.toast_monitor.is_none() {
+            return;
+        }
+        let picked = self.cfg.toast_monitor.and_then(|r| monitors.iter().find(|(m, _)| m.rect == ir(r)));
+        let desc = match (self.cfg.toast_monitor, picked) {
+            (None, _) => l("тот, где сделан снимок или запись", "the one where the capture or the recording was").to_string(),
+            (Some(_), Some((m, n))) => lf!("монитор {n} · {} × {}", "monitor {n} · {} × {}", m.rect.w, m.rect.h),
+            (Some(_), None) => l("выбранного монитора сейчас нет: там, где снимок", "the picked monitor isn't connected: where the capture was").to_string(),
+        };
+        ui::setting_row(ui, l("на каком мониторе", "on which monitor"), &desc, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            // right to left
+            if ui::filter(ui, l("выбранный", "picked"), self.cfg.toast_monitor.is_some()).clicked() && self.cfg.toast_monitor.is_none() {
+                let main = monitors.iter().min_by_key(|(_, n)| *n).map(|(m, _)| m.rect);
+                self.cfg.toast_monitor = main.map(|r| [r.x, r.y, r.w, r.h]);
+            }
+            if ui::filter(ui, l("где снимок", "where captured"), self.cfg.toast_monitor.is_none()).clicked() {
+                self.cfg.toast_monitor = None;
+            }
+        });
+        if self.cfg.toast_monitor.is_some() && !monitors.is_empty() {
+            ui.add_space(4.0);
+            if let Some(r) = monitor_map(ui, &monitors, self.cfg.toast_monitor.map(ir)) {
+                self.cfg.toast_monitor = Some([r.x, r.y, r.w, r.h]);
+            }
+            ui.add_space(14.0);
+        }
     }
 
     /// The click when a capture is taken.
@@ -1406,7 +1453,7 @@ impl HomeApp {
                 // as tall as the button and the slider: all three on one line
                 ui.add_sized(
                     vec2(36.0, 26.0),
-                    egui::Label::new(egui::RichText::new(format!("{pct:.0}%")).font(mono(11.5)).color(DIM)),
+                    egui::Label::new(egui::RichText::new(format!("{pct:.0}%")).font(mono(11.5)).color(DIM())),
                 );
                 ui.spacing_mut().slider_width = 130.0;
                 let resp = ui::slider(ui, &mut pct, 0.0..=100.0, 1.0);
@@ -1445,6 +1492,17 @@ impl HomeApp {
                     self.cfg.save_dir = d;
                 }
             });
+            ui::setting_row(
+                ui,
+                l("убирать метаданные", "strip metadata"),
+                l(
+                    "в скриншотах, записях и экспорте не останется времени создания, версии системы и названий программ",
+                    "screenshots, recordings and exports keep no time they were made, no system version, no program names",
+                ),
+                |ui| {
+                    ui::toggle(ui, &mut self.cfg.strip_metadata);
+                },
+            );
             let today = chrono::Local::now().format("%Y-%m-%d");
             let layout = lf!("blinker / {today} / pics и videos", "blinker / {today} / pics and videos");
             ui::setting_row(ui, t("раскладывать по датам"), &layout, |ui| {
@@ -1482,7 +1540,7 @@ impl HomeApp {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     ui.add_sized(
                         vec2(36.0, 26.0),
-                        egui::Label::new(egui::RichText::new(format!("{}%", self.cfg.jpeg_quality)).font(mono(11.5)).color(DIM)),
+                        egui::Label::new(egui::RichText::new(format!("{}%", self.cfg.jpeg_quality)).font(mono(11.5)).color(DIM())),
                     );
                     ui.spacing_mut().slider_width = 130.0;
                     let mut q = self.cfg.jpeg_quality as f32;
@@ -1550,7 +1608,7 @@ impl HomeApp {
             ""
         };
         if !note.is_empty() {
-            ui.label(egui::RichText::new(note).font(font(12.0)).color(FAINT));
+            ui.label(egui::RichText::new(note).font(font(12.0)).color(FAINT()));
         }
         self.poll_recorder(&ctx);
     }
@@ -1673,7 +1731,7 @@ impl HomeApp {
                 )
                 .to_string(),
             };
-            ui.label(egui::RichText::new(hint).font(font(12.0)).color(FAINT));
+            ui.label(egui::RichText::new(hint).font(font(12.0)).color(FAINT()));
         });
     }
 
@@ -1718,7 +1776,7 @@ impl HomeApp {
                 )
                 .to_string(),
             };
-            ui.label(egui::RichText::new(hint).font(font(12.0)).color(FAINT));
+            ui.label(egui::RichText::new(hint).font(font(12.0)).color(FAINT()));
         });
     }
 
@@ -1776,7 +1834,7 @@ impl HomeApp {
             for (title, id, value) in rows {
                 ui::setting_row(ui, title, "", |ui| {
                     egui::ComboBox::from_id_salt(id)
-                        .selected_text(egui::RichText::new(value.label()).font(font(12.5)).color(TEXT))
+                        .selected_text(egui::RichText::new(value.label()).font(font(12.5)).color(TEXT()))
                         .width(170.0)
                         .height(400.0)
                         .show_ui(ui, |ui| {
@@ -1809,7 +1867,7 @@ impl HomeApp {
                         "drag items into the tiles on top, into the list, or to the right to take them out. click a row's heading to change it. settings and quit always stay. while recording, the tiles give way to “stop” and “pause”. “reset” brings the menu back as it was",
                     ))
                     .font(font(12.0))
-                    .color(FAINT),
+                    .color(FAINT()),
                 )
                 .wrap(),
             );
@@ -1862,6 +1920,93 @@ impl HomeApp {
         }
         if found.is_none() {
             self.sharex_group(ui, None);
+        }
+    }
+
+    /// The theme, an accent of one's own, theme.css.
+    fn look_page(&mut self, ui: &mut egui::Ui) {
+        let before = (self.cfg.theme.clone(), self.cfg.accent.clone(), self.cfg.theme_css);
+        Self::page_title(ui, l("оформление", "appearance"), l("тема, цвет акцента и свой стиль", "the theme, the accent color and a style of your own"));
+        ui::group(ui, l("тема", "theme"), |ui| {
+            ui.add_space(14.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(10.0, 10.0);
+                for &(id, ru, en, _) in theme::THEMES {
+                    if theme_card(ui, id, l(ru, en), self.cfg.theme == id).clicked() {
+                        self.cfg.theme = id.to_string();
+                    }
+                }
+            });
+            ui.add_space(14.0);
+        });
+        ui::group(ui, l("акцент", "accent"), |ui| {
+            ui::setting_row(
+                ui,
+                l("цвет акцента", "accent color"),
+                l("главные кнопки, выбранный инструмент, рамка выделения", "main buttons, the chosen tool, the selection's frame"),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    // right to left: the theme's own goes last, on the left
+                    let mut rgb = crate::css::color(&self.cfg.accent).map_or([0x7a, 0xa2, 0xff], |c| [c.r(), c.g(), c.b()]);
+                    let own = !self.cfg.accent.is_empty() && !ACCENTS.contains(&self.cfg.accent.as_str());
+                    ui.spacing_mut().interact_size = vec2(30.0, 22.0);
+                    let picker = egui::widgets::color_picker::color_edit_button_srgb(ui, &mut rgb).on_hover_text(l("свой цвет", "a color of your own"));
+                    if own {
+                        ui.painter().circle_stroke(picker.rect.center(), picker.rect.height() / 2.0 + 3.0, Stroke::new(1.5, TEXT()));
+                    }
+                    if picker.changed() {
+                        self.cfg.accent = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
+                    }
+                    for hex in ACCENTS.iter().rev() {
+                        if accent_dot(ui, hex, self.cfg.accent == *hex).clicked() {
+                            self.cfg.accent = hex.to_string();
+                        }
+                    }
+                    if ui::filter(ui, l("из темы", "theme's"), self.cfg.accent.is_empty()).clicked() {
+                        self.cfg.accent.clear();
+                    }
+                },
+            );
+        });
+        ui::group(ui, l("свой стиль", "your own style"), |ui| {
+            let path = theme::user_file();
+            ui::setting_row(
+                ui,
+                "theme.css",
+                l(
+                    "правила в духе CSS поверх темы: цвета, рамки, скругления, стекло. blinker подхватывает файл сразу, как ты его сохранишь",
+                    "CSS-like rules over the theme: colors, borders, corners, glass. blinker picks the file up as soon as you save it",
+                ),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    if ui::button(ui, l("папка", "folder"), ui::Kind::Ghost).clicked() {
+                        win::reveal_in_explorer(&theme::ensure_user_file());
+                    }
+                    if ui::button(ui, l("открыть", "open"), ui::Kind::Accent).clicked() {
+                        win::open_path(&theme::ensure_user_file());
+                    }
+                },
+            );
+            if path.exists() {
+                ui::setting_row(ui, l("применять theme.css", "use theme.css"), l("выключи, если стиль что-то сломал: файл останется", "turn off if the style broke something: the file stays"), |ui| {
+                    ui::toggle(ui, &mut self.cfg.theme_css);
+                });
+                let errors = theme::errors();
+                let (title, desc) = if !self.cfg.theme_css {
+                    (l("не применяется", "not in use"), String::new())
+                } else if errors.is_empty() {
+                    (l("ошибок нет", "no mistakes"), String::new())
+                } else {
+                    let shown: Vec<&str> = errors.iter().take(4).map(String::as_str).collect();
+                    let more = errors.len().saturating_sub(4);
+                    let tail = if more > 0 { lf!("\n…и ещё {more}", "\n…and {more} more") } else { String::new() };
+                    (l("в файле ошибки", "mistakes in the file"), shown.join("\n") + &tail)
+                };
+                ui::setting_row(ui, title, &desc, |_| {});
+            }
+        });
+        if (self.cfg.theme.clone(), self.cfg.accent.clone(), self.cfg.theme_css) != before {
+            theme::poke();
         }
     }
 
@@ -1939,12 +2084,12 @@ impl HomeApp {
             );
         });
         ui.add_space(18.0);
-        ui.label(egui::RichText::new(format!("blinker {}", env!("CARGO_PKG_VERSION"))).font(mono(11.0)).color(FAINT));
+        ui.label(egui::RichText::new(format!("blinker {}", env!("CARGO_PKG_VERSION"))).font(mono(11.0)).color(FAINT()));
         // the config file: a click shows it in its folder
         let path = config::app_dir().join("config.toml");
-        let resp = ui.add(egui::Label::new(egui::RichText::new(path.display().to_string()).font(mono(11.0)).color(FAINT)).sense(egui::Sense::click()));
+        let resp = ui.add(egui::Label::new(egui::RichText::new(path.display().to_string()).font(mono(11.0)).color(FAINT())).sense(egui::Sense::click()));
         if resp.hovered() {
-            ui.painter().hline(resp.rect.x_range(), resp.rect.bottom(), egui::Stroke::new(1.0, FAINT));
+            ui.painter().hline(resp.rect.x_range(), resp.rect.bottom(), egui::Stroke::new(1.0, FAINT()));
         }
         if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(l("показать в папке", "show in the folder")).clicked() {
             if path.exists() {
@@ -1983,7 +2128,7 @@ impl HomeApp {
             let h = 440f32.min(screen.height() - 60.0);
             let card = Rect::from_center_size(screen.center(), vec2(w, h));
             egui::Area::new(egui::Id::unique("whats-new")).order(egui::Order::Tooltip).fixed_pos(card.min).show(ctx, |ui| {
-                let frame = if theme::glass() { ui::float_frame(14) } else { egui::Frame::new().fill(PANEL).stroke(Stroke::new(1.0, LINE_HI)).corner_radius(14) };
+                let frame = if theme::glass() { ui::float_frame(14) } else { egui::Frame::new().fill(PANEL()).stroke(Stroke::new(1.0, LINE_HI())).corner_radius(14) };
                 frame
                     .inner_margin(egui::Margin { left: 24, right: 24, top: 22, bottom: 18 })
                     .show(ui, |ui| {
@@ -1994,8 +2139,8 @@ impl HomeApp {
                             ui.add_space(4.0);
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 0.0;
-                                ui.label(egui::RichText::new(title).font(font_semibold(19.0)).color(TEXT));
-                                ui.label(egui::RichText::new(format!("blinker {version}")).font(mono(11.5)).color(FAINT));
+                                ui.label(egui::RichText::new(title).font(font_semibold(19.0)).color(TEXT()));
+                                ui.label(egui::RichText::new(format!("blinker {version}")).font(mono(11.5)).color(FAINT()));
                             });
                         });
                         ui.add_space(12.0);
@@ -2011,18 +2156,18 @@ impl HomeApp {
                                             ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, ui::hairline()));
                                             ui.add_space(6.0);
                                         }
-                                        ui.label(egui::RichText::new(v).font(mono(12.5)).color(ACCENT));
+                                        ui.label(egui::RichText::new(v).font(mono(12.5)).color(ACCENT()));
                                     }
                                     Note::Heading(text) => {
                                         ui.add_space(8.0);
-                                        ui.label(egui::RichText::new(text).font(font_medium(13.5)).color(TEXT));
+                                        ui.label(egui::RichText::new(text).font(font_medium(13.5)).color(TEXT()));
                                     }
                                     Note::Item(text) => {
                                         ui.horizontal_top(|ui| {
                                             ui.spacing_mut().item_spacing.x = 8.0;
                                             let (dot, _) = ui.allocate_exact_size(vec2(6.0, 18.0), Sense::hover());
-                                            ui.painter().circle_filled(pos2(dot.center().x, dot.top() + 9.0), 2.0, FAINT);
-                                            ui.add(egui::Label::new(egui::RichText::new(text).font(font(13.0)).color(TEXT2)).wrap());
+                                            ui.painter().circle_filled(pos2(dot.center().x, dot.top() + 9.0), 2.0, FAINT());
+                                            ui.add(egui::Label::new(egui::RichText::new(text).font(font(13.0)).color(TEXT2())).wrap());
                                         });
                                     }
                                 }
@@ -2143,7 +2288,7 @@ fn brand_link(ui: &mut egui::Ui, mark: crate::brand::Mark, name: &str, tip: &str
     let icon = 12.0;
     let size = vec2(icon + 5.0 + g.size().x, g.size().y.max(icon));
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
-    let col = if resp.hovered() { TEXT } else { DIM };
+    let col = if resp.hovered() { TEXT() } else { DIM() };
     let px = (icon * ui.ctx().pixels_per_point()).round() as u32;
     let key = egui::Id::unique(("brand", mark as u8, px));
     let tex = ui.data(|d| d.get_temp::<egui::TextureHandle>(key)).unwrap_or_else(|| {
@@ -2274,6 +2419,79 @@ fn corner_name(c: Corner) -> &'static str {
     }
 }
 
+fn ir([x, y, w, h]: [i32; 4]) -> crate::geom::IRect {
+    crate::geom::IRect::new(x, y, w, h)
+}
+
+/// The monitors with their numbers: Windows' own; on a Mac the main one
+/// is 1, the rest left to right.
+fn numbered_monitors() -> Vec<(crate::geom::Monitor, u32)> {
+    let list = win::monitors();
+    #[cfg(windows)]
+    {
+        let numbers = win::monitor_numbers();
+        let mut out: Vec<_> = list.into_iter().map(|m| (m, numbers.iter().find(|(r, _)| *r == m.rect).map_or(0, |(_, n)| *n))).collect();
+        out.sort_by_key(|(m, n)| (*n, m.rect.x));
+        out
+    }
+    #[cfg(not(windows))]
+    {
+        let mut list = list;
+        let main = list.first().map(|m| m.rect);
+        list.sort_by_key(|m| (Some(m.rect) != main, m.rect.x, m.rect.y));
+        list.into_iter().zip(1..).collect()
+    }
+}
+
+/// The monitors as they stand, scaled down, each with its number; a click
+/// picks one. Returns the one clicked.
+fn monitor_map(ui: &mut egui::Ui, monitors: &[(crate::geom::Monitor, u32)], picked: Option<crate::geom::IRect>) -> Option<crate::geom::IRect> {
+    let w = ui.available_width();
+    let (area, _) = ui.allocate_exact_size(vec2(w, 150.0), Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(area, ui::soft_radius(8), ui::well());
+    let (mut l, mut t, mut r, mut b) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for (m, _) in monitors {
+        l = l.min(m.rect.x);
+        t = t.min(m.rect.y);
+        r = r.max(m.rect.right());
+        b = b.max(m.rect.bottom());
+    }
+    let inner = area.shrink(16.0);
+    let k = (inner.width() / (r - l).max(1) as f32).min(inner.height() / (b - t).max(1) as f32);
+    let size = vec2((r - l) as f32 * k, (b - t) as f32 * k);
+    let origin = inner.center() - size / 2.0;
+    let mut clicked = None;
+    for (m, n) in monitors {
+        let rect = Rect::from_min_size(
+            origin + vec2((m.rect.x - l) as f32 * k, (m.rect.y - t) as f32 * k),
+            vec2(m.rect.w as f32 * k, m.rect.h as f32 * k),
+        )
+        .shrink(1.5);
+        let resp = ui.interact(rect, ui.scope_id().with(("monitor", m.rect.x, m.rect.y)), Sense::click());
+        let on = picked == Some(m.rect);
+        let h = ui.ctx().animate_bool_with_time(resp.id, resp.hovered(), 0.1);
+        let fill = if on { theme::lerp_color(PANEL(), ACCENT(), 0.22) } else { theme::lerp_color(ACTIVE(), LINE_HI(), h) };
+        let radius = ui::soft_radius(5);
+        let p = ui.painter();
+        p.rect_filled(rect, radius, fill);
+        p.rect_stroke(rect, radius, if on { Stroke::new(2.0, ACCENT()) } else { Stroke::new(1.0, LINE()) }, StrokeKind::Inside);
+        let big = (rect.height() * 0.32).clamp(12.0, 26.0);
+        let num = p.layout_no_wrap(n.to_string(), font_semibold(big), if on { TEXT() } else { TEXT2() });
+        let res = p.layout_no_wrap(format!("{} × {}", m.rect.w, m.rect.h), mono(10.0), DIM());
+        let fits = rect.height() > big + 26.0 && rect.width() > res.size().x + 8.0;
+        let top = rect.center().y - (num.size().y + if fits { res.size().y + 2.0 } else { 0.0 }) / 2.0;
+        p.galley(pos2(rect.center().x - num.size().x / 2.0, top), num, TEXT());
+        if fits {
+            p.galley(pos2(rect.center().x - res.size().x / 2.0, top + big * 1.25), res, DIM());
+        }
+        if resp.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+            clicked = Some(m.rect);
+        }
+    }
+    clicked
+}
+
 /// A tiny screen with four clickable corners.
 fn corner_picker(ui: &mut egui::Ui, value: &mut Corner) {
     let (rect, _) = ui.allocate_exact_size(vec2(84.0, 52.0), Sense::hover());
@@ -2291,7 +2509,7 @@ fn corner_picker(ui: &mut egui::Ui, value: &mut Corner) {
         let resp = ui.interact(r.expand(3.0), ui.scope_id().with(corner_name(corner)), Sense::click());
         let selected = *value == corner;
         let t = ui.ctx().animate_bool_with_time(resp.id, selected || resp.hovered(), 0.12);
-        let fill = theme::lerp_color(SURFACE_IDLE, if selected { ACCENT } else { DIM }, t);
+        let fill = theme::lerp_color(SURFACE_IDLE, if selected { ACCENT() } else { DIM() }, t);
         ui.painter().rect_filled(r, 2, fill);
         if resp.on_hover_text(corner_name(corner)).on_hover_cursor(CursorIcon::PointingHand).clicked() {
             *value = corner;
@@ -2300,6 +2518,47 @@ fn corner_picker(ui: &mut egui::Ui, value: &mut Corner) {
 }
 
 const SURFACE_IDLE: egui::Color32 = egui::Color32::from_rgb(0x30, 0x30, 0x2D);
+
+/// The accents offered next to the theme's own.
+const ACCENTS: [&str; 7] = ["#d8d5cd", "#7aa2ff", "#b69cff", "#ff8fc8", "#ff6b6b", "#ffb36b", "#8fd694"];
+
+/// A round swatch of an accent; the chosen one ringed.
+fn accent_dot(ui: &mut egui::Ui, hex: &str, on: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+    let c = crate::css::color(hex).unwrap_or(ACCENT());
+    let grow = ui.ctx().animate_bool_with_time(resp.id.with("hover"), resp.hovered(), 0.08);
+    ui.painter().circle_filled(rect.center(), 7.0 + grow, c);
+    if on {
+        ui.painter().circle_stroke(rect.center(), 10.0, Stroke::new(1.5, TEXT()));
+    }
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(hex)
+}
+
+/// A built-in theme as a tiny window in its colors, its name under it.
+fn theme_card(ui: &mut egui::Ui, id: &str, name: &str, on: bool) -> egui::Response {
+    let [bg, panel, line, text, dim, accent] = theme::preview(id);
+    let (rect, resp) = ui.allocate_exact_size(vec2(122.0, 96.0), Sense::click());
+    let h = ui.ctx().animate_bool_with_time(resp.id.with("hover"), resp.hovered(), 0.1);
+    let p = ui.painter();
+    let shot = Rect::from_min_size(rect.min, vec2(rect.width(), 70.0));
+    p.rect_filled(shot, 9, bg);
+    // a sidebar, two lines of text, a button in the accent
+    let side = Rect::from_min_max(shot.min, pos2(shot.left() + 34.0, shot.bottom()));
+    p.rect_filled(side, egui::CornerRadius { nw: 9, sw: 9, ne: 0, se: 0 }, panel);
+    p.vline(side.right(), shot.y_range(), Stroke::new(1.0, line));
+    for (i, w) in [18.0, 14.0, 20.0].into_iter().enumerate() {
+        let y = shot.top() + 14.0 + i as f32 * 10.0;
+        p.rect_filled(Rect::from_min_size(pos2(side.left() + 8.0, y), vec2(w, 4.0)), 2, if i == 0 { accent } else { dim });
+    }
+    p.rect_filled(Rect::from_min_size(pos2(side.right() + 12.0, shot.top() + 14.0), vec2(52.0, 6.0)), 3, text);
+    p.rect_filled(Rect::from_min_size(pos2(side.right() + 12.0, shot.top() + 26.0), vec2(38.0, 4.0)), 2, dim);
+    p.rect_filled(Rect::from_min_size(pos2(shot.right() - 42.0, shot.bottom() - 22.0), vec2(32.0, 12.0)), 6, accent);
+    let edge = if on { Stroke::new(2.0, ACCENT()) } else { Stroke::new(1.0, theme::lerp_color(LINE(), LINE_HI(), h)) };
+    p.rect_stroke(shot, 9, edge, egui::StrokeKind::Outside);
+    let g = p.layout_no_wrap(name.to_string(), font(12.5), if on { TEXT() } else { theme::lerp_color(DIM(), TEXT(), h) });
+    p.galley(pos2(rect.center().x - g.size().x / 2.0, shot.bottom() + 8.0), g, TEXT());
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
 
 fn same_config(a: &Config, b: &Config) -> bool {
     toml::to_string(a).ok() == toml::to_string(b).ok()
@@ -2314,7 +2573,7 @@ enum ChipAction {
 /// A key combination: click to re-record, × to remove.
 fn chip(ui: &mut egui::Ui, binding: &str, failed: bool) -> ChipAction {
     let parts = hotkey::display_parts(binding);
-    let galleys: Vec<_> = parts.iter().map(|p| ui.painter().layout_no_wrap(p.clone(), mono(11.0), TEXT)).collect();
+    let galleys: Vec<_> = parts.iter().map(|p| ui.painter().layout_no_wrap(p.clone(), mono(11.0), TEXT())).collect();
     let caps_w: f32 = galleys.iter().map(|g| g.size().x + 12.0).sum::<f32>() + (galleys.len().saturating_sub(1)) as f32 * 4.0;
     let size = vec2(caps_w + 10.0 + 18.0, 26.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
@@ -2327,23 +2586,23 @@ fn chip(ui: &mut egui::Ui, binding: &str, failed: bool) -> ChipAction {
         p.rect_filled(rect, radius, ui::hover_fill());
     }
     if failed {
-        p.rect_stroke(rect, radius, Stroke::new(1.0, DANGER), StrokeKind::Inside);
+        p.rect_stroke(rect, radius, Stroke::new(1.0, DANGER()), StrokeKind::Inside);
     }
     // keycaps
     let mut x = rect.left() + 5.0;
     for g in galleys {
         let cap = Rect::from_min_size(pos2(x, rect.center().y - 9.5), vec2(g.size().x + 12.0, 19.0));
-        let edge = if failed { DANGER } else { ui::edge() };
+        let edge = if failed { DANGER() } else { ui::edge() };
         p.rect_filled(cap, ui::soft_radius(4).min(6), ui::well());
         p.rect_stroke(cap, ui::soft_radius(4).min(6), Stroke::new(1.0, edge), StrokeKind::Inside);
         // a slightly thicker bottom edge, like a real key
         p.hline(cap.x_range().shrink(5.0), cap.bottom() - 0.5, Stroke::new(1.0, edge));
-        let col = if failed { DANGER } else { TEXT };
+        let col = if failed { DANGER() } else { TEXT() };
         p.galley(cap.center() - g.size() / 2.0, g, col);
         x = cap.right() + 4.0;
     }
     if hovered {
-        let x_col = if x_resp.hovered() { TEXT } else { DIM };
+        let x_col = if x_resp.hovered() { TEXT() } else { DIM() };
         icons::paint(p, x_rect, Icon::Close, 10.0, x_col);
     }
     if x_resp.on_hover_text(t("удалить")).on_hover_cursor(CursorIcon::PointingHand).clicked() {
@@ -2357,18 +2616,18 @@ fn chip(ui: &mut egui::Ui, binding: &str, failed: bool) -> ChipAction {
 }
 
 fn recording_chip(ui: &mut egui::Ui, now: f64) {
-    let galley = ui.painter().layout_no_wrap(crate::i18n::t("нажми сочетание…").into(), mono(11.0), ACCENT);
+    let galley = ui.painter().layout_no_wrap(crate::i18n::t("нажми сочетание…").into(), mono(11.0), ACCENT());
     let (rect, _) = ui.allocate_exact_size(vec2(galley.size().x + 18.0, 26.0), Sense::hover());
     let t = ((now * 4.0).sin() as f32) * 0.5 + 0.5;
     let p = ui.painter();
     let radius = ui::control_radius(rect.height(), 3.0);
     p.rect_filled(rect, radius, ui::well());
-    p.rect_stroke(rect, radius, Stroke::new(1.0, theme::lerp_color(ui::edge(), ACCENT, t)), StrokeKind::Inside);
-    p.galley(pos2(rect.left() + 10.0, rect.center().y - galley.size().y / 2.0), galley, ACCENT);
+    p.rect_stroke(rect, radius, Stroke::new(1.0, theme::lerp_color(ui::edge(), ACCENT(), t)), StrokeKind::Inside);
+    p.galley(pos2(rect.left() + 10.0, rect.center().y - galley.size().y / 2.0), galley, ACCENT());
 }
 
 fn add_button(ui: &mut egui::Ui) -> egui::Response {
-    let galley = ui.painter().layout_no_wrap("+".into(), font_medium(14.0), DIM);
+    let galley = ui.painter().layout_no_wrap("+".into(), font_medium(14.0), DIM());
     let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
     let p = ui.painter();
     let h = resp.hovered();
@@ -2378,12 +2637,12 @@ fn add_button(ui: &mut egui::Ui) -> egui::Response {
         p.circle_stroke(rect.center(), 12.5, Stroke::new(1.0, ui::edge()));
     } else {
         if h {
-            p.rect_filled(rect, 3, HOVER);
+            p.rect_filled(rect, 3, HOVER());
         }
         let pts = dashed(rect.shrink(0.5));
-        p.extend(egui::Shape::dashed_line(&pts, Stroke::new(1.0, if h { DIM } else { LINE }), 4.0, 3.0));
+        p.extend(egui::Shape::dashed_line(&pts, Stroke::new(1.0, if h { DIM() } else { LINE() }), 4.0, 3.0));
     }
-    p.galley(rect.center() - galley.size() / 2.0, galley, if h { TEXT } else { DIM });
+    p.galley(rect.center() - galley.size() / 2.0, galley, if h { TEXT() } else { DIM() });
     resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(t("+ добавить"))
 }
 
@@ -2396,9 +2655,9 @@ fn update_row(ui: &mut egui::Ui, version: &str) -> egui::Response {
     let radius = ui::control_radius(rect.height(), 7.0);
     p.rect_filled(rect, radius, theme::lerp_color(ui::plate(), ui::hover_fill().gamma_multiply(2.6), h));
     let icon = Rect::from_center_size(pos2(rect.left() + 17.0, rect.center().y), vec2(15.0, 15.0));
-    icons::paint(p, icon, Icon::Save, 15.0, ACCENT);
-    let g = p.layout_no_wrap(lf!("обновить до {version}", "update to {version}"), font(12.5), TEXT);
-    p.galley(pos2(rect.left() + 34.0, rect.center().y - g.size().y / 2.0), g, TEXT);
+    icons::paint(p, icon, Icon::Save, 15.0, ACCENT());
+    let g = p.layout_no_wrap(lf!("обновить до {version}", "update to {version}"), font(12.5), TEXT());
+    p.galley(pos2(rect.left() + 34.0, rect.center().y - g.size().y / 2.0), g, TEXT());
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
 
@@ -2408,7 +2667,7 @@ fn dashed(r: Rect) -> Vec<egui::Pos2> {
 
 impl eframe::App for HomeApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        if theme::glass() { [0.0; 4] } else { BG.to_normalized_gamma_f32() }
+        if theme::glass() { [0.0; 4] } else { BG().to_normalized_gamma_f32() }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -2485,10 +2744,10 @@ impl eframe::App for HomeApp {
 /// One of the pill's two places: a heading, the choice in words, the picker.
 fn pill_column(ui: &mut egui::Ui, title: &str, place: &mut config::PillPlace, whole: bool) {
     ui.vertical_centered(|ui| {
-        ui.label(egui::RichText::new(title).font(font_medium(13.0)).color(TEXT));
+        ui.label(egui::RichText::new(title).font(font_medium(13.0)).color(TEXT()));
         ui.add_space(2.0);
         let words = if whole { place.label_screen() } else { place.label() };
-        ui.label(egui::RichText::new(words).font(font(12.0)).color(DIM));
+        ui.label(egui::RichText::new(words).font(font(12.0)).color(DIM()));
         ui.add_space(6.0);
         pill_picker(ui, place, whole);
     });
@@ -2508,10 +2767,10 @@ fn pill_picker(ui: &mut egui::Ui, place: &mut config::PillPlace, whole: bool) {
     // what is recorded: the whole screen, or an area in it
     let recorded = if whole { screen.shrink(1.5) } else { Rect::from_min_size(screen.min + vec2(w * 0.24, h * 0.2), vec2(w * 0.42, h * 0.4)) };
     let edge = if whole { recorded.shrink(2.0) } else { recorded };
-    let dash = egui::Shape::dashed_line(&[edge.left_top(), edge.right_top(), edge.right_bottom(), edge.left_bottom(), edge.left_top()], Stroke::new(1.0, ACCENT.gamma_multiply(0.7)), 5.0, 3.0);
+    let dash = egui::Shape::dashed_line(&[edge.left_top(), edge.right_top(), edge.right_bottom(), edge.left_bottom(), edge.left_top()], Stroke::new(1.0, ACCENT().gamma_multiply(0.7)), 5.0, 3.0);
     p.extend(dash);
     if !whole {
-        p.rect_stroke(screen, 9, Stroke::new(1.0, LINE), StrokeKind::Inside);
+        p.rect_stroke(screen, 9, Stroke::new(1.0, LINE()), StrokeKind::Inside);
     }
     // a Mac: the menu bar on top, the Dock below; Windows: the taskbar with
     // the apps in the middle, the tray and the clock on the right
@@ -2519,7 +2778,7 @@ fn pill_picker(ui: &mut egui::Ui, place: &mut config::PillPlace, whole: bool) {
         let menu = Rect::from_min_max(screen.min, pos2(screen.right(), screen.top() + 8.0));
         p.rect_filled(menu, egui::CornerRadius { nw: 9, ne: 9, sw: 0, se: 0 }, egui::Color32::from_rgb(0x24, 0x24, 0x22));
         for i in 0..3 {
-            p.circle_filled(pos2(menu.right() - 30.0 + i as f32 * 7.0, menu.center().y), 1.5, FAINT);
+            p.circle_filled(pos2(menu.right() - 30.0 + i as f32 * 7.0, menu.center().y), 1.5, FAINT());
         }
         let dock = Rect::from_center_size(pos2(screen.center().x, screen.bottom() - 9.0), vec2(56.0, 11.0));
         p.rect_filled(dock, 4, egui::Color32::from_rgb(0x2A, 0x2A, 0x27));
@@ -2534,9 +2793,9 @@ fn pill_picker(ui: &mut egui::Ui, place: &mut config::PillPlace, whole: bool) {
             p.rect_filled(Rect::from_center_size(pos2(bar.center().x + i as f32 * 10.0, bar.center().y), egui::Vec2::splat(6.0)), 2, egui::Color32::from_rgb(0x46, 0x46, 0x42));
         }
         for i in 0..3 {
-            p.circle_filled(pos2(bar.right() - 38.0 + i as f32 * 6.0, bar.center().y), 1.5, FAINT);
+            p.circle_filled(pos2(bar.right() - 38.0 + i as f32 * 6.0, bar.center().y), 1.5, FAINT());
         }
-        p.rect_filled(Rect::from_center_size(pos2(bar.right() - 13.0, bar.center().y), vec2(13.0, 4.0)), 1, FAINT);
+        p.rect_filled(Rect::from_center_size(pos2(bar.right() - 13.0, bar.center().y), vec2(13.0, 4.0)), 1, FAINT());
         Rect::from_min_max(screen.min, pos2(screen.right(), bar.top())).shrink(6.0)
     };
 
@@ -2561,7 +2820,7 @@ fn pill_picker(ui: &mut egui::Ui, place: &mut config::PillPlace, whole: bool) {
         let r = spot(pl);
         let resp = ui.interact(r.expand(4.0), ui.scope_id().with(("pill-spot", whole, words(pl))), Sense::click());
         if pl != *place {
-            p.rect_stroke(r, size.y * 0.3, Stroke::new(1.0, if resp.hovered() { DIM } else { LINE }), StrokeKind::Inside);
+            p.rect_stroke(r, size.y * 0.3, Stroke::new(1.0, if resp.hovered() { DIM() } else { LINE() }), StrokeKind::Inside);
         }
         if resp.hovered() {
             hovered = Some(r);
@@ -2619,9 +2878,9 @@ fn nvidia_steps(ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
                 let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
-                ui.painter().circle_filled(r.center(), 10.0, HOVER);
-                ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, (i + 1).to_string(), font_medium(11.5), TEXT);
-                ui.label(egui::RichText::new(*step).font(font(12.5)).color(TEXT));
+                ui.painter().circle_filled(r.center(), 10.0, HOVER());
+                ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, (i + 1).to_string(), font_medium(11.5), TEXT());
+                ui.label(egui::RichText::new(*step).font(font(12.5)).color(TEXT()));
             });
         }
         ui.add_space(2.0);
@@ -2631,7 +2890,7 @@ fn nvidia_steps(ui: &mut egui::Ui) {
                 "alt+z keeps working, only the note goes. to turn the overlay off altogether: nvidia app → settings → features → nvidia overlay",
             ))
             .font(font(12.0))
-            .color(FAINT),
+            .color(FAINT()),
         );
     });
 }

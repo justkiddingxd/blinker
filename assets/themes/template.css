@@ -1,0 +1,109 @@
+/*
+  theme.css: blinker's look, your way.
+
+  This is CSS, only blinker's own: instead of HTML tags, the parts of
+  blinker's windows. Save the file and blinker repaints within a second.
+  What this file doesn't say stays as the chosen theme has it.
+  Mistakes show in the settings (general → appearance) and in the log.
+
+  ── the palette ─────────────────────────────────────────────────────────
+  Colors every window paints with. Set them in :root for all windows, or
+  inside one window only:  overlay { --accent: #7aa2ff; }
+
+    --bg            window background
+    --panel         panels, cards
+    --canvas        wells: fields, previews, the editor's backdrop
+    --line          edges and separators
+    --line-soft     the softer ones (between rows)
+    --line-hi       the edge of a raised plate
+    --hover         under the pointer
+    --active        held down, chosen
+    --text          text
+    --text-2        secondary text, icons
+    --dim           dimmer text
+    --faint         the faintest text
+    --faint-text    descriptions under settings
+    --accent        the accent: the main button, the chosen tool
+    --accent-hi     the accent under the pointer
+    --on-accent     text and icons on the accent
+    --danger        red: delete, stop
+    --veil          the dark over the screen around a selection
+    --shade         small dark plates over the screen (the size of a selection)
+
+  Colors: #rgb, #rrggbb, #rrggbbaa, rgb(1 2 3 / 50%), rgba(…), hsl(…),
+  white, black, transparent. A variable: var(--accent).
+
+  ── windows ─────────────────────────────────────────────────────────────
+    overlay    taking a screenshot or a recording: the selection, its panels
+    editor     the picture editor
+    video      the video editor
+    settings   the settings
+    history    the history
+    text       the window of text read off the screen
+    pin        a picture pinned over the screen
+    toast      the card after a capture
+    record     the recording's pill with the timer
+    menu       the tray menu
+
+  ── parts ───────────────────────────────────────────────────────────────
+    button            buttons; classes .accent (the main one), .ghost (plain),
+                      .icon (an icon only)
+    toggle            a switch (:checked when on)
+    slider            a slider
+    option            an option of a choice ("png / jpeg"; :checked when chosen)
+    card              a card of settings
+    sidebar           the settings' and history's side panel
+    nav               an entry in it (:checked when open)
+    popup             menus, hints, dialogs
+    input             text fields
+    panel             side panels of the editors and the history
+    canvas            what the editors show a picture or a video on
+    toolbar           (overlay) the column of actions by a selection
+    tools             (overlay) the drawing tools at the top
+    selection         (overlay) the frame of a selection
+    veil              (overlay) the dark around it
+    label             (overlay) the size of a selection and other small plates
+    item, tile        (menu) a row, a big button at the top
+    pill              (record) the pill with the timer
+
+  States: :hover, :active (held down), :checked (on, chosen), :disabled.
+  Nesting works as in CSS:  toolbar button:hover  is a button in the toolbar.
+
+  ── properties ──────────────────────────────────────────────────────────
+    background        a color, none, or glass (overlay panels: frosted glass)
+    color             text and icons
+    border            1px solid #333 / none
+    border-color, border-width
+    border-radius     8px
+    font-size         13px (buttons and the settings' sections)
+    opacity           0.9 / 90%
+    box-shadow        0 8px 24px rgba(0 0 0 / 40%) / none
+
+  Where everything stands is up to blinker, not the theme: there's no
+  display, position, width or margin.
+
+  ── examples (remove the slashes and stars around one to try it) ────────
+*/
+
+/*
+:root {
+  --accent: #7aa2ff;
+  --accent-hi: #9bb9ff;
+}
+*/
+
+/*
+overlay {
+  --veil: rgba(0 0 0 / 45%);
+}
+selection { border: 2px solid var(--accent); }
+toolbar { background: glass; border-radius: 14px; }
+tools { background: glass; border-radius: 14px; }
+toolbar button.ghost:hover { background: rgba(255 255 255 / 12%); }
+*/
+
+/*
+settings { background: #101010; }
+card { background: #161616; border: 1px solid #262626; border-radius: 14px; }
+button { border-radius: 15px; }
+*/

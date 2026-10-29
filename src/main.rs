@@ -31,8 +31,10 @@ mod shell;
 mod sharex;
 mod sk;
 mod sound;
+mod strip;
 mod theme;
 mod toast;
+mod css;
 mod tray;
 #[cfg(windows)]
 mod traymenu;

@@ -247,6 +247,7 @@ pub fn run(path: PathBuf, x: i32, y: i32) {
         "blinker text",
         options,
         Box::new(move |cc| {
+            theme::set_scope("text");
             theme::apply(&cc.egui_ctx);
             let hwnd = win::hwnd_of(cc);
             if let Some(h) = hwnd {
@@ -336,8 +337,8 @@ impl TextApp {
         let ctx = ui.ctx().clone();
         let p = ui.painter().clone();
         if !theme::glass() {
-            p.rect_filled(bar, 0, PANEL);
-            p.hline(bar.x_range(), bar.bottom() - 0.5, Stroke::new(1.0, LINE));
+            p.rect_filled(bar, 0, PANEL());
+            p.hline(bar.x_range(), bar.bottom() - 0.5, Stroke::new(1.0, LINE()));
         }
         // dragging the header moves the window
         let drag = ui.interact(bar, ui.scope_id().with("text-drag"), egui::Sense::drag());
@@ -345,8 +346,8 @@ impl TextApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }
         let dot = pos2(bar.left() + 25.0, bar.center().y);
-        p.circle_filled(dot, 14.0, ACCENT.gamma_multiply(0.16));
-        crate::icons::paint(&p, Rect::from_center_size(dot, egui::Vec2::splat(16.0)), Icon::Scan, 14.0, ACCENT);
+        p.circle_filled(dot, 14.0, ACCENT().gamma_multiply(0.16));
+        crate::icons::paint(&p, Rect::from_center_size(dot, egui::Vec2::splat(16.0)), Icon::Scan, 14.0, ACCENT());
         let status = match (&self.lines, &self.error) {
             _ if self.install.is_some() => crate::i18n::l("скачиваю модель…", "downloading the model…").to_string(),
             _ if self.waiting => crate::i18n::l("нужна модель распознавания", "needs the recognition model").to_string(),
@@ -384,10 +385,10 @@ impl TextApp {
         }
         let text_right = child.min_rect().left() - 10.0;
         let max_w = (text_right - (bar.left() + 48.0)).max(20.0);
-        let title = elided(&p, crate::i18n::l("текст с картинки", "text from the picture"), font_medium(13.0), TEXT, max_w);
-        let status = elided(&p, &status, font(11.5), DIM, max_w);
-        p.galley(pos2(bar.left() + 48.0, bar.center().y - 8.0 - title.size().y / 2.0), title, TEXT);
-        p.galley(pos2(bar.left() + 48.0, bar.center().y + 9.0 - status.size().y / 2.0), status, DIM);
+        let title = elided(&p, crate::i18n::l("текст с картинки", "text from the picture"), font_medium(13.0), TEXT(), max_w);
+        let status = elided(&p, &status, font(11.5), DIM(), max_w);
+        p.galley(pos2(bar.left() + 48.0, bar.center().y - 8.0 - title.size().y / 2.0), title, TEXT());
+        p.galley(pos2(bar.left() + 48.0, bar.center().y + 9.0 - status.size().y / 2.0), status, DIM());
     }
 }
 
@@ -409,12 +410,12 @@ impl TextApp {
         child.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 12.0;
             let (tile, _) = ui.allocate_exact_size(vec2(38.0, 38.0), egui::Sense::hover());
-            ui.painter().rect_filled(tile, 10, ACCENT.gamma_multiply(0.15));
-            crate::icons::paint(ui.painter(), Rect::from_center_size(tile.center(), egui::Vec2::splat(18.0)), Icon::Scan, 15.0, ACCENT);
+            ui.painter().rect_filled(tile, 10, ACCENT().gamma_multiply(0.15));
+            crate::icons::paint(ui.painter(), Rect::from_center_size(tile.center(), egui::Vec2::splat(18.0)), Icon::Scan, 15.0, ACCENT());
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 1.0;
-                ui.label(egui::RichText::new(crate::i18n::l("модель для текста", "the text model")).font(font_medium(14.0)).color(TEXT));
-                ui.label(egui::RichText::new(lf!("paddleocr · {} мб, один раз", "paddleocr · {} mb, once", crate::paddle::SIZE_MB)).font(font(12.0)).color(DIM));
+                ui.label(egui::RichText::new(crate::i18n::l("модель для текста", "the text model")).font(font_medium(14.0)).color(TEXT()));
+                ui.label(egui::RichText::new(lf!("paddleocr · {} мб, один раз", "paddleocr · {} mb, once", crate::paddle::SIZE_MB)).font(font(12.0)).color(DIM()));
             });
         });
         child.add_space(2.0);
@@ -424,7 +425,7 @@ impl TextApp {
                 "reads Russian, Ukrainian, Belarusian and English right on this computer. the picture goes nowhere",
             ))
             .font(font(12.5))
-            .color(TEXT2),
+            .color(TEXT2()),
         );
         child.add_space(6.0);
         match &self.install {
@@ -433,12 +434,12 @@ impl TextApp {
                 let f = job.fraction();
                 let (bar, _) = child.allocate_exact_size(vec2(child.available_width(), 6.0), egui::Sense::hover());
                 child.painter().rect_filled(bar, 3, ui::hover_fill().gamma_multiply(2.0));
-                child.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * f.max(0.02), bar.height())), 3, ACCENT);
-                child.label(egui::RichText::new(lf!("скачиваю {:.0}%", "downloading {:.0}%", f * 100.0)).font(font(12.0)).color(DIM));
+                child.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * f.max(0.02), bar.height())), 3, ACCENT());
+                child.label(egui::RichText::new(lf!("скачиваю {:.0}%", "downloading {:.0}%", f * 100.0)).font(font(12.0)).color(DIM()));
             }
             None => {
                 if let Some(e) = &self.install_error {
-                    child.label(egui::RichText::new(lf!("не скачалась: {e}", "didn't download: {e}")).font(font(12.0)).color(DANGER));
+                    child.label(egui::RichText::new(lf!("не скачалась: {e}", "didn't download: {e}")).font(font(12.0)).color(DANGER()));
                 }
                 let label = if self.install_error.is_some() { crate::i18n::l("ещё раз", "try again") } else { crate::i18n::l("скачать и распознать", "download and read") };
                 if ui::button(&mut child, label, ui::Kind::Accent).clicked() {
@@ -462,17 +463,17 @@ pub fn scan_line(p: &egui::Painter, r: Rect, y: f32, alpha: f32) {
     let mut mesh = egui::Mesh::default();
     mesh.colored_vertex(glow.left_top(), Color32::TRANSPARENT);
     mesh.colored_vertex(glow.right_top(), Color32::TRANSPARENT);
-    mesh.colored_vertex(glow.right_bottom(), ACCENT.gamma_multiply(0.22 * alpha));
-    mesh.colored_vertex(glow.left_bottom(), ACCENT.gamma_multiply(0.22 * alpha));
+    mesh.colored_vertex(glow.right_bottom(), ACCENT().gamma_multiply(0.22 * alpha));
+    mesh.colored_vertex(glow.left_bottom(), ACCENT().gamma_multiply(0.22 * alpha));
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(0, 2, 3);
     p.add(egui::Shape::mesh(mesh));
-    p.hline(r.x_range(), y, Stroke::new(2.0, ACCENT.gamma_multiply(0.8 * alpha)));
+    p.hline(r.x_range(), y, Stroke::new(2.0, ACCENT().gamma_multiply(0.8 * alpha)));
 }
 
 impl eframe::App for TextApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        if theme::glass() { [0.0; 4] } else { BG.to_normalized_gamma_f32() }
+        if theme::glass() { [0.0; 4] } else { BG().to_normalized_gamma_f32() }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -528,7 +529,7 @@ impl eframe::App for TextApp {
         let p = ui.painter().clone();
         let glass = theme::glass();
         if !glass {
-            p.rect_filled(full, 0, BG);
+            p.rect_filled(full, 0, BG());
         }
         self.tex.paint(&p, Rect::from_min_size(pos2(0.0, 0.0), self.tex.size), pic, Color32::WHITE);
         let mut copied_line = None;
@@ -545,13 +546,13 @@ impl eframe::App for TextApp {
             }
             Some(lines) if lines.is_empty() => {
                 p.rect_filled(pic, 0, Color32::from_black_alpha(150));
-                let g = p.layout_no_wrap(crate::i18n::l("текста не нашлось", "no text found").to_string(), font_medium(13.0), TEXT);
+                let g = p.layout_no_wrap(crate::i18n::l("текста не нашлось", "no text found").to_string(), font_medium(13.0), TEXT());
                 let r = Rect::from_center_size(pic.center(), g.size() + vec2(28.0, 14.0));
                 p.rect_filled(r, r.height() / 2.0, ui::float_fill());
                 if glass {
                     p.rect_stroke(r, r.height() / 2.0, Stroke::new(1.0, Color32::from_white_alpha(30)), StrokeKind::Inside);
                 }
-                p.galley(r.min + vec2(14.0, 7.0), g, TEXT);
+                p.galley(r.min + vec2(14.0, 7.0), g, TEXT());
             }
             Some(lines) => {
                 // the picture dimmed, each line over its own words, one after another
@@ -568,7 +569,7 @@ impl eframe::App for TextApp {
                     }
                     let r = Rect::from_min_size(pic.min + vec2(l.x, l.y) / ppp + vec2(0.0, (1.0 - t) * 5.0), vec2(l.w, l.h) / ppp);
                     // as wide as the words it covers, within reason of their height
-                    let probe = p.layout_no_wrap(l.text.clone(), font_medium(r.height()), TEXT);
+                    let probe = p.layout_no_wrap(l.text.clone(), font_medium(r.height()), TEXT());
                     let size = (r.height() * r.width() / probe.size().x.max(1.0)).clamp(r.height() * 0.6, r.height() * 1.5).clamp(8.0, 72.0);
                     let plate = r.expand2(vec2(5.0, 3.0)).union(Rect::from_min_size(r.min, vec2(probe.size().x * size / r.height().max(1.0), r.height())).expand2(vec2(5.0, 3.0)));
                     let hot = pointer.is_some_and(|pt| plate.expand2(vec2(26.0, 0.0)).contains(pt));
@@ -576,21 +577,21 @@ impl eframe::App for TextApp {
                     let (fill, rim, radius) = if glass {
                         (if hot { Color32::from_rgba_unmultiplied(44, 44, 42, 240) } else { ui::float_fill() }, Color32::from_white_alpha(34), 7)
                     } else {
-                        (if hot { Color32::from_rgb(40, 40, 38) } else { Color32::from_rgb(24, 24, 23) }, LINE, 5)
+                        (if hot { Color32::from_rgb(40, 40, 38) } else { Color32::from_rgb(24, 24, 23) }, LINE(), 5)
                     };
                     p.rect_filled(plate, radius, fill.gamma_multiply(t));
-                    p.rect_stroke(plate, radius, Stroke::new(1.0, if hot { ACCENT.gamma_multiply(0.5) } else { rim.gamma_multiply(t) }), StrokeKind::Inside);
+                    p.rect_stroke(plate, radius, Stroke::new(1.0, if hot { ACCENT().gamma_multiply(0.5) } else { rim.gamma_multiply(t) }), StrokeKind::Inside);
                     let mut child = ui.new_child(egui::UiBuilder::new().id_salt(("line", i)).max_rect(r.expand2(vec2(40.0, 2.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
                     child.set_clip_rect(full);
                     child.set_opacity(t);
                     child.add_space(r.left() - child.max_rect().left());
-                    child.add(egui::Label::new(egui::RichText::new(&l.text).font(font_medium(size)).color(TEXT)).selectable(true).extend());
+                    child.add(egui::Label::new(egui::RichText::new(&l.text).font(font_medium(size)).color(TEXT())).selectable(true).extend());
                     // a copy button at the line's end on hover
                     if hot {
                         let b = Rect::from_min_size(pos2(plate.right() + 3.0, plate.center().y - 11.0), vec2(22.0, 22.0));
                         let resp = ui.interact(b, ui.scope_id().with(("copy-line", i)), egui::Sense::click());
-                        p.rect_filled(b, if glass { 11 } else { 5 }, if resp.hovered() { ACCENT } else { ui::float_fill() });
-                        crate::icons::paint(&p, b, Icon::Copy, 12.0, if resp.hovered() { ON_ACCENT } else { DIM });
+                        p.rect_filled(b, if glass { 11 } else { 5 }, if resp.hovered() { ACCENT() } else { ui::float_fill() });
+                        crate::icons::paint(&p, b, Icon::Copy, 12.0, if resp.hovered() { ON_ACCENT() } else { DIM() });
                         if resp.on_hover_text(crate::i18n::l("скопировать строку", "copy the line")).clicked() {
                             copied_line = Some(l.text.clone());
                         }
@@ -603,7 +604,7 @@ impl eframe::App for TextApp {
             self.notice = Some(ui::Notice::new(&ctx, crate::i18n::l("строка скопирована", "line copied")));
         }
         if !glass {
-            p.rect_stroke(full, 0, Stroke::new(1.0, LINE), StrokeKind::Inside);
+            p.rect_stroke(full, 0, Stroke::new(1.0, LINE()), StrokeKind::Inside);
         }
         self.header(ui, bar);
         if let Some(n) = &self.notice

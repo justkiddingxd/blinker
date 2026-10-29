@@ -474,7 +474,9 @@ pub(super) fn read_range(src: &Path, stream: u32, from: i64, total: usize) -> cr
 /// only the rectangle that changed (see `gif_builtin`). On screen recordings
 /// this is several times smaller than full frames with their own palettes.
 pub fn gif(src: &Path, dst: &Path, opt: &Options, progress: &AtomicU32, cancel: &AtomicBool) -> Result<(), String> {
-    gif_builtin(src, dst, opt, progress, cancel)
+    gif_builtin(src, dst, opt, progress, cancel)?;
+    crate::strip::file(dst);
+    Ok(())
 }
 
 /// Calls `f(id, frame)` for every output slot (`from`, `from + 1/fps`, ...):

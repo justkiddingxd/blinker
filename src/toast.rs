@@ -70,6 +70,10 @@ pub fn run(
 ) -> ToastResult {
     let video = kind != Kind::Image;
     let cfg = shared.config();
+    let monitor = cfg
+        .toast_monitor
+        .and_then(|[x, y, w, h]| win::monitors().into_iter().find(|m| m.rect == crate::geom::IRect::new(x, y, w, h)))
+        .unwrap_or(monitor);
     let result = Rc::new(Cell::new(ToastResult::Closed));
     let result2 = result.clone();
     let lay = layout(&cfg, &image);
@@ -101,7 +105,7 @@ pub fn run(
         .with_active(false)
         .with_inner_size(window);
     let shared2 = shared.clone();
-    runtime::run_window(shared, viewport, false, move |cc| {
+    runtime::run_window(shared, "toast", viewport, false, move |cc| {
         let hwnd = win::hwnd_of(cc);
         if let Some(h) = hwnd {
             win::disable_transitions(h);
@@ -274,12 +278,12 @@ impl ToastApp {
         }
         let pop = ease_out_back(t);
         let a = alpha * t.clamp(0.0, 1.0);
-        let galley = painter.layout_no_wrap(text.to_string(), font_semibold(14.0), ON_ACCENT);
+        let galley = painter.layout_no_wrap(text.to_string(), font_semibold(14.0), ON_ACCENT());
         let size = vec2(galley.size().x + 44.0, 30.0) * (0.7 + 0.3 * pop);
         let center = pos2(card.center().x, card.top() - BADGE_H / 2.0 + (1.0 - pop.min(1.0)) * 8.0);
         let pill = Rect::from_center_size(center, size);
         painter.rect_filled(pill.translate(vec2(0.0, 2.0)), 15, Color32::from_black_alpha((60.0 * a) as u8));
-        painter.rect_filled(pill, 15, ACCENT.gamma_multiply(a));
+        painter.rect_filled(pill, 15, ACCENT().gamma_multiply(a));
         // the logo's sparkle, then the words
         let s = 6.0 * (0.7 + 0.3 * pop);
         let c = pos2(pill.left() + 18.0, pill.center().y);
@@ -295,11 +299,11 @@ impl ToastApp {
             c + vec2(-w, -w),
         ];
         // a 4-point star is concave: two convex diamonds make it
-        painter.add(egui::Shape::convex_polygon(vec![star[0], star[1], star[4], star[5]], ON_ACCENT.gamma_multiply(a), Stroke::NONE));
-        painter.add(egui::Shape::convex_polygon(vec![star[2], star[3], star[6], star[7]], ON_ACCENT.gamma_multiply(a), Stroke::NONE));
-        painter.add(egui::Shape::convex_polygon(vec![star[0], star[2], star[4], star[6]].iter().map(|p| c + (*p - c) * 0.32).collect(), ON_ACCENT.gamma_multiply(a), Stroke::NONE));
+        painter.add(egui::Shape::convex_polygon(vec![star[0], star[1], star[4], star[5]], ON_ACCENT().gamma_multiply(a), Stroke::NONE));
+        painter.add(egui::Shape::convex_polygon(vec![star[2], star[3], star[6], star[7]], ON_ACCENT().gamma_multiply(a), Stroke::NONE));
+        painter.add(egui::Shape::convex_polygon(vec![star[0], star[2], star[4], star[6]].iter().map(|p| c + (*p - c) * 0.32).collect(), ON_ACCENT().gamma_multiply(a), Stroke::NONE));
         let text_pos = pos2(c.x + s + 8.0, pill.center().y - galley.size().y / 2.0);
-        painter.galley(text_pos, galley, ON_ACCENT.gamma_multiply(a));
+        painter.galley(text_pos, galley, ON_ACCENT().gamma_multiply(a));
     }
 
     /// The answer to a click: a ring spreading from the button and a chip
@@ -312,7 +316,7 @@ impl ToastApp {
             } else {
                 let e = ui::ease_out_cubic(t);
                 let radius = 16.0 + 14.0 * e;
-                painter.circle_stroke(r.center(), radius, Stroke::new(2.0 * (1.0 - e), ACCENT.gamma_multiply(alpha * (1.0 - e))));
+                painter.circle_stroke(r.center(), radius, Stroke::new(2.0 * (1.0 - e), ACCENT().gamma_multiply(alpha * (1.0 - e))));
             }
         }
         if let Some((text, at)) = &self.flash {
@@ -322,12 +326,12 @@ impl ToastApp {
                 return;
             }
             let a = alpha * (t / 0.12).min(1.0) * ((FLASH as f32 - t) / 0.25).min(1.0);
-            let g = painter.layout_no_wrap(text.clone(), font_medium(12.5), TEXT);
+            let g = painter.layout_no_wrap(text.clone(), font_medium(12.5), TEXT());
             let rise = (1.0 - ui::ease_out_cubic((t / 0.25).min(1.0))) * 6.0;
             let chip = Rect::from_center_size(pos2(img.center().x, img.top() + 22.0 + rise), g.size() + vec2(22.0, 12.0));
             painter.rect_filled(chip, 12, Color32::from_rgba_unmultiplied(18, 18, 17, (235.0 * a) as u8));
             painter.rect_stroke(chip, 12, Stroke::new(1.0, Color32::from_white_alpha((24.0 * a) as u8)), StrokeKind::Inside);
-            painter.galley(chip.center() - g.size() / 2.0, g, TEXT.gamma_multiply(a));
+            painter.galley(chip.center() - g.size() / 2.0, g, TEXT().gamma_multiply(a));
         }
     }
 
@@ -348,14 +352,14 @@ fn overlay_button(ui: &mut egui::Ui, rect: Rect, icon: Icon, tip: &str, alpha: f
     let p = ui.painter();
     let r = if down { rect.shrink(1.5) } else { rect };
     let fill = if down {
-        ACCENT.gamma_multiply(0.75)
+        ACCENT().gamma_multiply(0.75)
     } else if h || done {
-        ACCENT
+        ACCENT()
     } else {
         Color32::TRANSPARENT
     };
     p.rect_filled(r, 8, fill.gamma_multiply(alpha));
-    let fg = if h || down || done { ON_ACCENT } else { TEXT };
+    let fg = if h || down || done { ON_ACCENT() } else { TEXT() };
     if done {
         paint_tick(p, r, fg.gamma_multiply(alpha));
     } else {
@@ -450,9 +454,12 @@ impl eframe::App for ToastApp {
 
         let painter = ui.painter().clone();
         // on glass only a dark tint, so the text stays readable
-        let (fill, edge) = if theme::glass() { (PANEL.gamma_multiply(0.45 * alpha), Color32::TRANSPARENT) } else { (PANEL.gamma_multiply(alpha), LINE.gamma_multiply(alpha)) };
-        painter.rect_filled(card, RADIUS, fill);
-        painter.rect_stroke(card, RADIUS, Stroke::new(1.0, edge), StrokeKind::Inside);
+        let look = theme::look("", 0);
+        let (fill, edge) = if theme::glass() { (PANEL().gamma_multiply(0.45), Color32::TRANSPARENT) } else { (PANEL(), LINE()) };
+        let edge = look.border_or(Stroke::new(1.0, edge));
+        let radius = look.radius.map_or(RADIUS, |r| r.round() as u8);
+        painter.rect_filled(card, radius, look.bg_or(fill).gamma_multiply(alpha));
+        painter.rect_stroke(card, radius, Stroke::new(edge.width, edge.color.gamma_multiply(alpha)), StrokeKind::Inside);
         if let Some(text) = self.badge {
             self.paint_badge(&painter, card, text, now, alpha);
         }
@@ -603,7 +610,7 @@ impl eframe::App for ToastApp {
             let sub_y = top + CAPTION_H / 2.0 + 9.0;
             let left = card.left() + PAD + 4.0;
             let title = if self.copied_at.is_some_and(|t| now - t < 1.5) { crate::i18n::t("скопировано снова") } else { &self.title };
-            painter.text(pos2(left, title_y), Align2::LEFT_CENTER, title, font_medium(13.0), TEXT.gamma_multiply(alpha));
+            painter.text(pos2(left, title_y), Align2::LEFT_CENTER, title, font_medium(13.0), TEXT().gamma_multiply(alpha));
             let upload = self.upload.as_ref().map(|j| (j.fraction(), j.result()));
             let sub = match upload.clone() {
                 Some((f, None)) => lf!("загрузка {:.0}%", "uploading {:.0}%", f * 100.0),
@@ -622,13 +629,13 @@ impl eframe::App for ToastApp {
                 self.remaining = self.remaining.max(7.0);
             }
             let failed = matches!(upload, Some((_, Some(Err(_)))));
-            let sc = if failed { DANGER } else { FAINT_TEXT };
+            let sc = if failed { DANGER() } else { FAINT_TEXT() };
             let sr = match note {
                 Some(n) => {
                     let w = card.right() - PAD - 34.0 - left;
-                    let g = painter.layout(n, font(11.0), ACCENT.gamma_multiply(alpha), w);
+                    let g = painter.layout(n, font(11.0), ACCENT().gamma_multiply(alpha), w);
                     let r = Rect::from_min_size(pos2(left, sub_y - 7.0), g.size());
-                    painter.galley(r.min, g, ACCENT);
+                    painter.galley(r.min, g, ACCENT());
                     r
                 }
                 None => painter.text(pos2(left, sub_y), Align2::LEFT_CENTER, sub, mono(11.0), sc.gamma_multiply(alpha)),
@@ -643,15 +650,15 @@ impl eframe::App for ToastApp {
             };
             if let Some(f) = busy {
                 let track = Rect::from_min_max(pos2(left, sub_y + 10.0), pos2(card.right() - PAD - 40.0, sub_y + 12.0));
-                painter.rect_filled(track, 1, LINE.gamma_multiply(alpha));
-                painter.rect_filled(Rect::from_min_size(track.min, vec2(track.width() * f.clamp(0.0, 1.0), 2.0)), 1, ACCENT.gamma_multiply(alpha));
+                painter.rect_filled(track, 1, LINE().gamma_multiply(alpha));
+                painter.rect_filled(Rect::from_min_size(track.min, vec2(track.width() * f.clamp(0.0, 1.0), 2.0)), 1, ACCENT().gamma_multiply(alpha));
             }
             let close_r = Rect::from_center_size(pos2(card.right() - PAD - 14.0, top + CAPTION_H / 2.0), Vec2::splat(28.0));
             let cresp = ui.interact(close_r, ui.scope_id().with("caption-close"), Sense::click());
             if cresp.hovered() {
-                painter.rect_filled(close_r, 8, HOVER.gamma_multiply(alpha));
+                painter.rect_filled(close_r, 8, HOVER().gamma_multiply(alpha));
             }
-            icons::paint(&painter, close_r, Icon::Close, 12.0, if cresp.hovered() { TEXT } else { FAINT }.gamma_multiply(alpha));
+            icons::paint(&painter, close_r, Icon::Close, 12.0, if cresp.hovered() { TEXT() } else { FAINT() }.gamma_multiply(alpha));
             if cresp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(crate::i18n::t("закрыть")).clicked() {
                 self.close(&ctx, ToastResult::Closed);
             }
@@ -663,7 +670,7 @@ impl eframe::App for ToastApp {
         let y = card.bottom() - 1.5;
         let track = Rect::from_min_max(pos2(card.left() + inset, y - 0.75), pos2(card.right() - inset, y + 0.75));
         let fill = Rect::from_min_max(track.min, pos2(track.left() + track.width() * life, track.bottom()));
-        painter.rect_filled(fill, 1, ACCENT.gamma_multiply(0.5 * alpha * (1.0 - hover_t * 0.7)));
+        painter.rect_filled(fill, 1, ACCENT().gamma_multiply(0.5 * alpha * (1.0 - hover_t * 0.7)));
 
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
     }

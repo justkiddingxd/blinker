@@ -1,0 +1,21 @@
+/* закат: тёплый янтарь */
+:root {
+  --bg: #181412;
+  --panel: #1e1916;
+  --canvas: #13100e;
+  --line: #312823;
+  --line-soft: #261f1b;
+  --line-hi: #42362f;
+  --hover: #261f1b;
+  --active: #312823;
+  --text: #f0e6dc;
+  --text-2: #c4b5a6;
+  --dim: #9c8c7d;
+  --faint: #6c5f54;
+  --faint-text: #85776b;
+  --accent: #ffb36b;
+  --accent-hi: #ffc58c;
+  --on-accent: #181412;
+  --veil: rgba(14, 10, 8, .6);
+  --shade: rgba(19, 16, 14, .9);
+}

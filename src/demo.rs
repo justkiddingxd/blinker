@@ -170,7 +170,7 @@ fn clip_card(img: &mut image::RgbaImage, clip: &image::RgbaImage, dx: f32, shown
     let reg = FontRef::try_from_slice(FONT).unwrap();
     let med = FontRef::try_from_slice(FONT_MED).unwrap();
     text(img, &reg, 12.0, tx + iw - 39.0, ty + ih - 14.0, [0xE6, 0xE4, 0xDE], "0:30");
-    let mark = crate::theme::sparkle_image(16, crate::theme::DANGER);
+    let mark = crate::theme::sparkle_image(16, crate::theme::DANGER());
     let cap = ty + ih + 10.0;
     image::imageops::overlay(img, &mark, (x + 14.0) as i64, (cap + 3.0) as i64);
     text(img, &med, 13.5, x + 38.0, cap + 15.0, [0xE6, 0xE4, 0xDE], crate::i18n::l("повтор сохранён", "replay saved"));
@@ -201,7 +201,7 @@ fn clipped_badge(img: &mut image::RgbaImage, cx: f32, cy: f32, shown: f32) {
     rrect(&mut pm, x, y, w, h, h / 2.0, rgba(0xD8D5CD, a));
     image::imageops::overlay(img, &crate::theme::pixmap_to_image(&pm), 0, 0);
     let s = (13.0 * k).round() as u32;
-    let mark = crate::theme::sparkle_image(s, crate::theme::ON_ACCENT);
+    let mark = crate::theme::sparkle_image(s, crate::theme::ON_ACCENT());
     image::imageops::overlay(img, &mark, (x + 18.0 * k - s as f32 / 2.0) as i64, (cy - s as f32 / 2.0) as i64);
     if tc > 0.3 {
         text(img, &semi, 14.0 * k, x + 32.0 * k, cy + 5.0 * k, [0x16, 0x16, 0x15], label);

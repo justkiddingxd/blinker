@@ -190,6 +190,10 @@ fn make_level(items: Vec<Item>, anchor: (i32, i32), sub_of: Option<(i32, i32)>, 
 /// Shows the menu at `anchor` (screen px) and blocks until it closes.
 /// Returns the id of the chosen item.
 pub fn popup(items: Vec<Item>, anchor: (i32, i32)) -> Option<u32> {
+    theme::with_scope("menu", || popup_themed(items, anchor))
+}
+
+fn popup_themed(items: Vec<Item>, anchor: (i32, i32)) -> Option<u32> {
     register_class();
     let root = make_level(items, anchor, None, true)?;
     let hwnd = root.hwnd;
@@ -449,11 +453,18 @@ fn render(li: usize) {
         let regular = FontRef::try_from_slice(theme::FONT_REGULAR).ok();
         let mono = FontRef::try_from_slice(theme::FONT_MONO).ok();
 
-        if let Some(bg) = theme::rounded_rect_path(0.5, 0.5, w as f32 - 1.0, h as f32 - 1.0, 9.0 * s) {
-            pm.fill_path(&bg, &paint_of(theme::PANEL), sk::FillRule::Winding, sk::Transform::identity(), None);
-            let st = sk::Stroke { width: 1.0, ..Default::default() };
-            pm.stroke_path(&bg, &paint_of(theme::LINE), &st, sk::Transform::identity(), None);
+        let card = theme::look("", 0);
+        if let Some(bg) = theme::rounded_rect_path(0.5, 0.5, w as f32 - 1.0, h as f32 - 1.0, card.radius_or(9.0) * s) {
+            pm.fill_path(&bg, &paint_of(card.bg_or(theme::PANEL())), sk::FillRule::Winding, sk::Transform::identity(), None);
+            let edge = card.border_or(eframe::egui::Stroke::new(1.0, theme::LINE()));
+            if edge.width > 0.0 {
+                let st = sk::Stroke { width: edge.width * s.max(1.0), ..Default::default() };
+                pm.stroke_path(&bg, &paint_of(edge.color), &st, sk::Transform::identity(), None);
+            }
         }
+        use crate::css::state::HOVER;
+        let (tile_look, tile_hot) = (theme::look("tile", 0), theme::look("tile", HOVER));
+        let (row, row_hot) = (theme::look("item", 0), theme::look("item", HOVER));
         let pad = 5.0 * s;
         for (i, it) in m.items.iter().enumerate() {
             let (t, b) = m.rows[i];
@@ -465,45 +476,51 @@ fn render(li: usize) {
                 for (k, tile) in it.tiles.iter().enumerate() {
                     let x0 = left + k as f32 * TILE_W * s;
                     let hot = m.hover == Some(i) && m.hover_tile == Some(k);
-                    if hot && let Some(p) = theme::rounded_rect_path(x0 + 2.0 * s, t + 2.0 * s, TILE_W * s - 4.0 * s, b - t - 4.0 * s, 8.0 * s) {
-                        pm.fill_path(&p, &paint_of(theme::HOVER), sk::FillRule::Winding, sk::Transform::identity(), None);
+                    let look = if hot { &tile_hot } else { &tile_look };
+                    let fill = look.bg_or(if hot { theme::HOVER() } else { eframe::egui::Color32::TRANSPARENT });
+                    if fill.a() > 0
+                        && let Some(p) = theme::rounded_rect_path(x0 + 2.0 * s, t + 2.0 * s, TILE_W * s - 4.0 * s, b - t - 4.0 * s, look.radius_or(8.0) * s)
+                    {
+                        pm.fill_path(&p, &paint_of(fill), sk::FillRule::Winding, sk::Transform::identity(), None);
                     }
                     let cx = x0 + TILE_W * s / 2.0;
                     if let Some(icon) = tile.icon {
-                        draw_icon(&mut pm, icon, cx, t + 24.0 * s, 19.0 * s, if hot { theme::ACCENT } else { theme::TEXT2 });
+                        draw_icon(&mut pm, icon, cx, t + 24.0 * s, 19.0 * s, if hot { look.fg_or(theme::ACCENT()) } else { look.fg_or(theme::TEXT2()) });
                     }
                     if let Some(f) = &regular {
                         let px = 11.5 * s;
                         let tw = text_width(f, px, &tile.label);
-                        draw_text(&mut pm, f, px, cx - tw / 2.0, t + 49.0 * s, &tile.label, if hot { theme::TEXT } else { theme::DIM });
+                        draw_text(&mut pm, f, px, cx - tw / 2.0, t + 49.0 * s, &tile.label, if hot { look.fg_or(theme::TEXT()) } else { look.fg_or(theme::DIM()) });
                     }
                 }
                 continue;
             }
             if it.is_sep() && !it.label.is_empty() {
                 if let Some(f) = &regular {
-                    draw_text(&mut pm, f, 11.5 * s, pad + 12.0 * s, cy + 3.0 * s, &it.label, theme::FAINT);
+                    draw_text(&mut pm, f, 11.5 * s, pad + 12.0 * s, cy + 3.0 * s, &it.label, theme::FAINT());
                 }
                 continue;
             }
             if it.is_sep() {
                 if let Some(r) = sk::Rect::from_xywh(pad + 8.0 * s, cy.floor(), w as f32 - 2.0 * pad - 16.0 * s, 1.0) {
-                    pm.fill_rect(r, &paint_of(theme::LINE), sk::Transform::identity(), None);
+                    pm.fill_rect(r, &paint_of(theme::LINE()), sk::Transform::identity(), None);
                 }
                 continue;
             }
             let hovered = m.hover == Some(i);
-            if hovered
-                && let Some(p) = theme::rounded_rect_path(pad, t, w as f32 - 2.0 * pad, b - t, 6.0 * s)
+            let look = if hovered { &row_hot } else { &row };
+            let fill = look.bg_or(if hovered { theme::HOVER() } else { eframe::egui::Color32::TRANSPARENT });
+            if fill.a() > 0
+                && let Some(p) = theme::rounded_rect_path(pad, t, w as f32 - 2.0 * pad, b - t, look.radius_or(6.0) * s)
             {
-                pm.fill_path(&p, &paint_of(theme::HOVER), sk::FillRule::Winding, sk::Transform::identity(), None);
+                pm.fill_path(&p, &paint_of(fill), sk::FillRule::Winding, sk::Transform::identity(), None);
             }
             if let Some(icon) = it.icon {
-                let col = if hovered { theme::ACCENT } else { theme::DIM };
+                let col = if hovered { look.fg_or(theme::ACCENT()) } else { theme::DIM() };
                 draw_icon(&mut pm, icon, pad + 18.0 * s, cy, 15.0 * s, col);
             }
             if let Some(f) = &regular {
-                let col = if hovered { theme::TEXT } else { theme::TEXT2 };
+                let col = if hovered { look.fg_or(theme::TEXT()) } else { look.fg_or(theme::TEXT2()) };
                 draw_text(&mut pm, f, 13.0 * s, pad + 36.0 * s, cy, &it.label, col);
             }
             if it.is_sub() {
@@ -515,7 +532,7 @@ fn render(li: usize) {
                 pb.line_to(x, cy + 4.0 * s);
                 if let Some(path) = pb.finish() {
                     let st = sk::Stroke { width: 1.4 * s, line_cap: sk::LineCap::Round, ..Default::default() };
-                    let col = if hovered { theme::TEXT } else { theme::FAINT };
+                    let col = if hovered { theme::TEXT() } else { theme::FAINT() };
                     pm.stroke_path(&path, &paint_of(col), &st, sk::Transform::identity(), None);
                 }
             } else if !it.hint.is_empty()
@@ -523,7 +540,7 @@ fn render(li: usize) {
             {
                 let px = 11.0 * s;
                 let tw = text_width(f, px, &it.hint);
-                draw_text(&mut pm, f, px, w as f32 - pad - 10.0 * s - tw, cy, &it.hint, theme::FAINT);
+                draw_text(&mut pm, f, px, w as f32 - pad - 10.0 * s - tw, cy, &it.hint, theme::FAINT());
             }
         }
         unsafe { present(m.hwnd, &pm, m.pos) };

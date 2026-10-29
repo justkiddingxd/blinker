@@ -6,7 +6,7 @@ use crate::editor::doc::{self, Kind, Shape};
 use crate::editor::preview::{PrimPainter, View};
 use crate::icons::Icon;
 use crate::runtime::{self, Command, Shared};
-use crate::theme::*;
+use crate::theme::{self, *};
 use crate::ui::{self, TiledTexture};
 use crate::win::{self, IRect, Monitor};
 use eframe::egui::{
@@ -105,17 +105,17 @@ fn run_with(shared: &Arc<Shared>, snap: Snapshot, mode: Mode, gif: bool, demo: O
     #[cfg(not(target_os = "macos"))]
     let others: Vec<Snapshot> = Vec::new();
     let shared2 = shared.clone();
-    runtime::run_window(shared, viewport, false, move |cc| {
+    runtime::run_window(shared, "overlay", viewport, false, move |cc| {
         let hwnd = win::hwnd_of(cc);
         if let Some(h) = hwnd {
             win::disable_transitions(h);
             // DWM-cloaked (invisible but rendering) until real frames are on
             // screen: no blank/white window on any monitor.
             win::cloak(h, true);
-            win::set_window_rect(h, target, true);
-            // macOS: above the menu bar, the Dock and full-screen apps
-            #[cfg(target_os = "macos")]
+            // a bare popup (Windows: no caption left on it; macOS: above the
+            // menu bar, the Dock and full-screen apps)
             win::make_overlay(h);
+            win::set_window_rect(h, target, true);
         }
         if demo.is_some() {
             // frames are saved 1:1 with the made-up desktop
@@ -435,8 +435,9 @@ enum Drag {
     Creating { start: Pos2, last: Pos2 },
     Moving { grab: Vec2 },
     Resizing { handle: Handle, orig: Rect },
-    /// Drawing an annotation.
-    Draw { id: u64, start: Pos2 },
+    /// Drawing an annotation; `last` = pointer on the previous frame (Ctrl
+    /// carries what's being drawn, as it carries a selection).
+    Draw { id: u64, start: Pos2, last: Pos2 },
     /// Dragging an existing annotation.
     MoveShape { id: u64, last: Pos2 },
 }
@@ -1355,11 +1356,15 @@ impl OverlayApp {
             return;
         }
 
-        // Annotation tools draw anywhere (Ctrl still moves the selection).
-        if self.tool != Tool::Region && !input.modifiers.command {
+        // Annotation tools draw anywhere (Ctrl still moves the selection, or
+        // what's being drawn while it's drawn).
+        let drawing = matches!(self.drag, Drag::Draw { .. });
+        if self.tool != Tool::Region && (!input.modifiers.command || drawing) {
             self.draw_input(&input, p, ppp, over_toolbar);
             ctx.set_cursor_icon(if over_toolbar {
                 CursorIcon::Default
+            } else if drawing && input.modifiers.command {
+                CursorIcon::Move
             } else if matches!(self.tool, Tool::Text | Tool::TextBox) {
                 CursorIcon::Text
             } else {
@@ -1541,7 +1546,7 @@ impl OverlayApp {
         };
 
         // the picker shows the screen as it is
-        let veil = Color32::from_rgba_unmultiplied(12, 12, 11, if self.pick { 0 } else { (150.0 * fade) as u8 });
+        let veil = if self.pick { Color32::TRANSPARENT } else { theme::look("veil", 0).bg_or(VEIL()).gamma_multiply(fade) };
         match self.anim {
             Some(f) => {
                 for r in [
@@ -1584,7 +1589,7 @@ impl OverlayApp {
         {
             let b = view.rect(sh.bounds(crate::editor::render::text_box)).expand(4.0);
             let pts = vec![b.left_top(), b.right_top(), b.right_bottom(), b.left_bottom(), b.left_top()];
-            painter.extend(egui::Shape::dashed_line(&pts, Stroke::new(1.0, ACCENT.gamma_multiply(0.85 * fade)), 4.0, 3.0));
+            painter.extend(egui::Shape::dashed_line(&pts, Stroke::new(1.0, ACCENT().gamma_multiply(0.85 * fade)), 4.0, 3.0));
         }
 
         // blink
@@ -1624,10 +1629,11 @@ impl OverlayApp {
             } else {
                 let fg = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, Id::unique("ov-notice")));
                 let at_pt = pointer_pt.unwrap_or(full.center()) + vec2(14.0, -30.0);
-                let galley = fg.layout_no_wrap(text.clone(), font_medium(12.5), TEXT);
+                let look = theme::look("label", 0);
+                let galley = fg.layout_no_wrap(text.clone(), font_medium(12.5), look.fg_or(TEXT()));
                 let rect = Rect::from_min_size(at_pt, galley.size() + vec2(16.0, 10.0));
-                fg.rect_filled(rect, 4, Color32::from_rgba_unmultiplied(18, 18, 17, 225));
-                fg.galley(rect.min + vec2(8.0, 5.0), galley, TEXT);
+                fg.rect_filled(rect, look.radius_or(4.0), look.bg_or(SHADE()));
+                fg.galley(rect.min + vec2(8.0, 5.0), galley, look.fg_or(TEXT()));
                 ctx.request_repaint();
             }
         }
@@ -1664,7 +1670,7 @@ impl OverlayApp {
             let a = (age / 0.2).clamp(0.0, 1.0);
             let frame = r.expand(6.0 + (1.0 - t) * 22.0);
             let len = (frame.width().min(frame.height()) * 0.24).max(10.0);
-            let stroke = Stroke::new(3.0, ACCENT.gamma_multiply(a));
+            let stroke = Stroke::new(3.0, ACCENT().gamma_multiply(a));
             for (c, dx, dy) in [(frame.left_top(), 1.0, 1.0), (frame.right_top(), -1.0, 1.0), (frame.left_bottom(), 1.0, -1.0), (frame.right_bottom(), -1.0, -1.0)] {
                 painter.add(egui::Shape::line(vec![c + vec2(0.0, dy * len), c, c + vec2(dx * len, 0.0)], stroke));
             }
@@ -1675,8 +1681,8 @@ impl OverlayApp {
                 let fade = (1.0 - sweep).min(sweep * 4.0).clamp(0.0, 1.0);
                 let glow = Rect::from_min_max(pos2(r.left(), (y - r.height() * 0.25).max(r.top())), pos2(r.right(), y));
                 let mut mesh = egui::Mesh::default();
-                let clear = ACCENT.gamma_multiply(0.0);
-                let lit = ACCENT.gamma_multiply(0.28 * fade);
+                let clear = ACCENT().gamma_multiply(0.0);
+                let lit = ACCENT().gamma_multiply(0.28 * fade);
                 mesh.colored_vertex(glow.left_top(), clear);
                 mesh.colored_vertex(glow.right_top(), clear);
                 mesh.colored_vertex(glow.right_bottom(), lit);
@@ -1684,7 +1690,7 @@ impl OverlayApp {
                 mesh.add_triangle(0, 1, 2);
                 mesh.add_triangle(0, 2, 3);
                 painter.add(egui::Shape::mesh(mesh));
-                painter.hline(r.x_range(), y, Stroke::new(2.0, ACCENT.gamma_multiply(fade)));
+                painter.hline(r.x_range(), y, Stroke::new(2.0, ACCENT().gamma_multiply(fade)));
             }
             // the card slides up under it
             let card_t = ui::ease_out_cubic(((age - 0.18) / 0.3).clamp(0.0, 1.0));
@@ -1716,7 +1722,7 @@ impl OverlayApp {
                 }
             }
             if last.get(i).is_some() {
-                self.paint_glass(ctx, Rect::from_min_size(at - vec2(size.x / 2.0, 0.0), size), card_t, ppp, &format!("qr-glass-{i}"), QR_RADIUS);
+                self.paint_glass(ctx, Rect::from_min_size(at - vec2(size.x / 2.0, 0.0), size), card_t, ppp, &format!("qr-glass-{i}"), QR_RADIUS, glass());
             }
             let glass = self.glass.is_some();
             let resp = egui::Area::new(Id::unique(("qr-card", i)))
@@ -1730,8 +1736,8 @@ impl OverlayApp {
                         egui::Frame::new().corner_radius(QR_RADIUS)
                     } else {
                         egui::Frame::new()
-                            .fill(PANEL)
-                            .stroke(Stroke::new(1.0, LINE_HI))
+                            .fill(PANEL())
+                            .stroke(Stroke::new(1.0, LINE_HI()))
                             .corner_radius(QR_RADIUS)
                             .shadow(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(110) })
                     };
@@ -1743,17 +1749,17 @@ impl OverlayApp {
                             match &wallet {
                                 Some(w) => paint_chain(ui.painter(), tile.shrink(2.0), w.chain),
                                 None => {
-                                    ui.painter().rect_filled(tile, 10, ACCENT.gamma_multiply(0.15));
-                                    crate::icons::paint(ui.painter(), Rect::from_center_size(tile.center(), Vec2::splat(18.0)), if link.is_some() { Icon::Link } else { Icon::Scan }, 15.0, ACCENT);
+                                    ui.painter().rect_filled(tile, 10, ACCENT().gamma_multiply(0.15));
+                                    crate::icons::paint(ui.painter(), Rect::from_center_size(tile.center(), Vec2::splat(18.0)), if link.is_some() { Icon::Link } else { Icon::Scan }, 15.0, ACCENT());
                                 }
                             }
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 1.0;
                                 ui.set_max_width(250.0);
                                 ui.add_space(1.0);
-                                ui.add(egui::Label::new(egui::RichText::new(&title).font(font_medium(13.5)).color(TEXT)).truncate());
+                                ui.add(egui::Label::new(egui::RichText::new(&title).font(font_medium(13.5)).color(TEXT())).truncate());
                                 if !sub.is_empty() {
-                                    ui.add(egui::Label::new(egui::RichText::new(&sub).font(font(11.5)).color(DIM)).truncate());
+                                    ui.add(egui::Label::new(egui::RichText::new(&sub).font(font(11.5)).color(DIM())).truncate());
                                 }
                             })
                             .response
@@ -1815,11 +1821,12 @@ impl OverlayApp {
         let Some(m) = self.bar_mon else { return };
         let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("pick-hint")));
         let text = crate::i18n::l("пипетка · клик копирует цвет · колесо — масштаб · esc — выход", "color picker · click copies the color · wheel zooms · esc leaves");
-        let galley = painter.layout_no_wrap(text.to_string(), font_medium(12.5), TEXT);
+        let look = theme::look("label", 0);
+        let galley = painter.layout_no_wrap(text.to_string(), font_medium(12.5), look.fg_or(TEXT()));
         let size = galley.size() + vec2(24.0, 14.0);
         let rect = Rect::from_center_size(pos2(m.center().x, m.top() + 16.0 + size.y / 2.0), size);
-        painter.rect_filled(rect, size.y / 2.0, Color32::from_rgba_unmultiplied(18, 18, 17, 230));
-        painter.galley(rect.min + vec2(12.0, 7.0), galley, TEXT);
+        painter.rect_filled(rect, look.radius_or(size.y / 2.0), look.bg_or(SHADE()));
+        painter.galley(rect.min + vec2(12.0, 7.0), galley, look.fg_or(TEXT()));
     }
 
     /// Points at the top of snapshot monitor `m` that a notch covers (MacBooks;
@@ -1842,8 +1849,11 @@ impl OverlayApp {
             pos = r.left_top() + vec2(10.0, 10.0);
         }
         let rect = Rect::from_min_size(pos, size);
-        painter.rect_filled(rect, 4, Color32::from_rgba_unmultiplied(18, 18, 17, (225.0 * alpha) as u8));
-        painter.galley(rect.min + vec2(9.0, 5.0), galley, TEXT.gamma_multiply(alpha));
+        let look = theme::look("label", 0);
+        let radius = look.radius_or(4.0);
+        painter.rect_filled(rect, radius, look.bg_or(SHADE()).gamma_multiply(alpha));
+        painter.rect_stroke(rect, radius, look.border.map_or(Stroke::NONE, |b| Stroke::new(b.width, b.color.gamma_multiply(alpha))), StrokeKind::Inside);
+        painter.galley(rect.min + vec2(9.0, 5.0), galley, look.fg_or(TEXT()).gamma_multiply(alpha));
     }
 
     fn paint_loupe(&mut self, ctx: &egui::Context, pt: Pos2, px: Pos2, ppp: f32) {
@@ -1884,9 +1894,9 @@ impl OverlayApp {
             image::Rgba([0, 0, 0, 255])
         };
         let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, Id::unique("loupe")));
-        let hex = painter.layout_no_wrap(format!("#{:02x}{:02x}{:02x}", col[0], col[1], col[2]), mono(11.0), TEXT);
-        let zoom = painter.layout_no_wrap(format!("×{:.0}", cell * ppp), mono(11.0), FAINT);
-        let coords = painter.layout_no_wrap(format!("{cx}, {cy}"), mono(11.0), FAINT);
+        let hex = painter.layout_no_wrap(format!("#{:02x}{:02x}{:02x}", col[0], col[1], col[2]), mono(11.0), TEXT());
+        let zoom = painter.layout_no_wrap(format!("×{:.0}", cell * ppp), mono(11.0), FAINT());
+        let coords = painter.layout_no_wrap(format!("{cx}, {cy}"), mono(11.0), FAINT());
         let one_line = 15.0 + hex.size().x + 10.0 + coords.size().x + 10.0 + zoom.size().x <= side;
         let caption_h = if one_line { 20.0 } else { 36.0 };
         let outer = vec2(side + pad * 2.0, side + pad * 2.0 + caption_h);
@@ -1903,8 +1913,8 @@ impl OverlayApp {
             pos.y = pt.y - 20.0 - outer.y;
         }
         let frame = Rect::from_min_size(pos, outer);
-        painter.rect_filled(frame, 3, BG);
-        painter.rect_stroke(frame, 3, Stroke::new(1.0, LINE), StrokeKind::Inside);
+        painter.rect_filled(frame, 3, BG());
+        painter.rect_stroke(frame, 3, Stroke::new(1.0, LINE()), StrokeKind::Inside);
         let img_rect = Rect::from_min_size(pos + vec2(pad, pad), Vec2::splat(side));
         painter.image(tex.id(), img_rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
         let grid = Stroke::new(1.0, Color32::from_black_alpha(46));
@@ -1918,20 +1928,20 @@ impl OverlayApp {
             painter.line_segment([pos2(img_rect.left(), img_rect.top() + o), pos2(img_rect.right(), img_rect.top() + o)], grid);
         }
         let c = Rect::from_min_size(img_rect.min + Vec2::splat(half as f32 * cell), Vec2::splat(cell));
-        painter.rect_stroke(c, 0, Stroke::new(1.5, ACCENT), StrokeKind::Outside);
+        painter.rect_stroke(c, 0, Stroke::new(1.5, ACCENT()), StrokeKind::Outside);
 
         let row_y = img_rect.bottom() + 11.0;
         let sw = Rect::from_center_size(pos2(img_rect.left() + 6.0, row_y), Vec2::splat(9.0));
         painter.rect_filled(sw, 0, Color32::from_rgb(col[0], col[1], col[2]));
-        painter.rect_stroke(sw, 0, Stroke::new(1.0, LINE), StrokeKind::Outside);
+        painter.rect_stroke(sw, 0, Stroke::new(1.0, LINE()), StrokeKind::Outside);
         let h = hex.size().y;
-        painter.galley(pos2(sw.right() + 6.0, row_y - h / 2.0), hex, TEXT);
+        painter.galley(pos2(sw.right() + 6.0, row_y - h / 2.0), hex, TEXT());
         let zx = img_rect.right() - zoom.size().x;
-        painter.galley(pos2(zx, row_y - h / 2.0), zoom, FAINT);
+        painter.galley(pos2(zx, row_y - h / 2.0), zoom, FAINT());
         if one_line {
-            painter.galley(pos2(zx - 10.0 - coords.size().x, row_y - h / 2.0), coords, FAINT);
+            painter.galley(pos2(zx - 10.0 - coords.size().x, row_y - h / 2.0), coords, FAINT());
         } else {
-            painter.galley(pos2(img_rect.left(), row_y + 16.0 - h / 2.0), coords, FAINT);
+            painter.galley(pos2(img_rect.left(), row_y + 16.0 - h / 2.0), coords, FAINT());
         }
     }
 
@@ -1968,19 +1978,15 @@ impl OverlayApp {
             ctx.request_repaint();
         }
         let at = pos2(x - (1.0 - t) * 8.0, y);
-        self.paint_glass(ctx, Rect::from_min_size(at, size), t, ppp, "toolbar-glass", 9);
+        let (frame, glassy) = panel_frame("toolbar");
+        self.paint_glass(ctx, Rect::from_min_size(at, size), t, ppp, "toolbar-glass", frame.corner_radius.nw, glassy);
         let resp = egui::Area::new(Id::unique("toolbar"))
             .order(egui::Order::Foreground)
             .fixed_pos(at)
             .show(ctx, |ui| {
                 ui.set_opacity(t);
-                // on glass the panel is clear: the backdrop below shows through
-                let glass = self.glass.is_some();
-                egui::Frame::new()
-                    .fill(if glass { Color32::TRANSPARENT } else { PANEL })
-                    .stroke(Stroke::new(1.0, if glass { Color32::TRANSPARENT } else { LINE }))
-                    .corner_radius(9)
-                    .inner_margin(egui::Margin::same(5))
+                let _part = theme::part("toolbar");
+                frame
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.y = 1.0;
                         ui.vertical(|ui| {
@@ -2025,7 +2031,7 @@ impl OverlayApp {
                                 act = Some(Action::Upload);
                             }
                             let (sep, _) = ui.allocate_exact_size(vec2(bar_btn(), 5.0), egui::Sense::hover());
-                            ui.painter().hline(sep.shrink2(vec2(4.0, 0.0)).x_range(), sep.center().y, Stroke::new(1.0, LINE));
+                            ui.painter().hline(sep.shrink2(vec2(4.0, 0.0)).x_range(), sep.center().y, Stroke::new(1.0, LINE()));
                             if ui::icon_button_sized(ui, Icon::Close, crate::i18n::t("отмена  esc"), bar_btn(), bar_icon(), false, ui::Kind::Ghost).clicked() {
                                 self.cancel(ctx);
                             }
@@ -2094,7 +2100,12 @@ impl OverlayApp {
             self.clock += dt.clamp(0.0, 1.0 / 60.0);
         }
         if let Some(h) = self.hwnd {
-            // Guard against DPI-change resizes moving/resizing us across monitors.
+            // Guard against a caption put back on the window, and against
+            // DPI-change resizes moving/resizing us across monitors.
+            #[cfg(windows)]
+            if win::make_overlay(h) {
+                win::set_window_rect(h, self.target, true);
+            }
             let placed = win::window_rect(h) == self.target;
             if !placed && self.frame_no <= 90 {
                 win::set_window_rect(h, self.target, true);
@@ -2305,7 +2316,7 @@ impl OverlayApp {
         // a pane of glass like the panels, sized from the last frame
         const TOUR_RADIUS: u8 = 14;
         if let Some(r) = tour.rect {
-            self.paint_glass(ctx, Rect::from_min_size(pos + slide, r.size()), t, ctx.pixels_per_point(), "tour-glass", TOUR_RADIUS);
+            self.paint_glass(ctx, Rect::from_min_size(pos + slide, r.size()), t, ctx.pixels_per_point(), "tour-glass", TOUR_RADIUS, glass());
         }
         let glass = self.glass.is_some();
         let mut next = false;
@@ -2316,8 +2327,8 @@ impl OverlayApp {
             .show(ctx, |ui| {
                 ui.set_opacity(t);
                 egui::Frame::new()
-                    .fill(if glass { Color32::TRANSPARENT } else { PANEL })
-                    .stroke(if glass { Stroke::NONE } else { Stroke::new(1.0, ACCENT.gamma_multiply(0.55)) })
+                    .fill(if glass { Color32::TRANSPARENT } else { PANEL() })
+                    .stroke(if glass { Stroke::NONE } else { Stroke::new(1.0, ACCENT().gamma_multiply(0.55)) })
                     .corner_radius(if glass { TOUR_RADIUS } else { 12 })
                     // a shadow under clear glass would darken the pane itself
                     .shadow(if glass { egui::epaint::Shadow::NONE } else { egui::epaint::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(110) } })
@@ -2325,13 +2336,13 @@ impl OverlayApp {
                     .show(ui, |ui| {
                         ui.set_width(268.0);
                         ui.spacing_mut().item_spacing.y = 6.0;
-                        ui.label(egui::RichText::new(title).font(font_semibold(15.0)).color(TEXT));
+                        ui.label(egui::RichText::new(title).font(font_semibold(15.0)).color(TEXT()));
                         ui.add_space(2.0);
                         for (key, what) in &lines {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 8.0;
                                 keycap(ui, key);
-                                ui.label(egui::RichText::new(*what).font(font(12.5)).color(DIM));
+                                ui.label(egui::RichText::new(*what).font(font(12.5)).color(DIM()));
                             });
                         }
                         ui.add_space(6.0);
@@ -2341,8 +2352,8 @@ impl OverlayApp {
                             for i in 0..3 {
                                 let c = pos2(r.left() + 4.0 + i as f32 * 12.0, r.center().y);
                                 let on = i == index;
-                                let off = if glass { Color32::from_white_alpha(46) } else { LINE };
-                                ui.painter().circle_filled(c, if on { 3.5 } else { 2.5 }, if on { ACCENT } else { off });
+                                let off = if glass { Color32::from_white_alpha(46) } else { LINE() };
+                                ui.painter().circle_filled(c, if on { 3.5 } else { 2.5 }, if on { ACCENT() } else { off });
                             }
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if tour.step != TourStep::Select {
@@ -2372,7 +2383,7 @@ impl OverlayApp {
             let (fill, edge) = if glass {
                 (Color32::from_rgba_unmultiplied(34, 34, 33, 235), Color32::from_white_alpha(42))
             } else {
-                (PANEL, ACCENT.gamma_multiply(0.55))
+                (PANEL(), ACCENT().gamma_multiply(0.55))
             };
             painter.add(egui::Shape::convex_polygon(tri.clone(), fill.gamma_multiply(t), Stroke::NONE));
             painter.line(vec![tri[1], tri[0], tri[2]], Stroke::new(1.0, edge.gamma_multiply(t)));
@@ -2395,29 +2406,29 @@ const QR_RADIUS: u8 = 14;
 /// The card's main action: an accent pill with its label and an icon after
 /// it, lighter on hover.
 fn qr_button(ui: &mut egui::Ui, label: &str, icon: Icon) -> egui::Response {
-    let g = ui.painter().layout_no_wrap(label.to_string(), font_semibold(13.0), ON_ACCENT);
+    let g = ui.painter().layout_no_wrap(label.to_string(), font_semibold(13.0), ON_ACCENT());
     let size = vec2(14.0 + g.size().x + 6.0 + 14.0 + 12.0, 34.0);
     let (r, resp) = ui.allocate_exact_size(size, egui::Sense::click());
     let h = ui.ctx().animate_bool_with_time(resp.id.with("hover"), resp.hovered(), 0.1);
     let p = ui.painter();
-    p.rect_filled(r, 17, crate::theme::lerp_color(ACCENT, ACCENT_HI, h));
+    p.rect_filled(r, 17, crate::theme::lerp_color(ACCENT(), ACCENT_HI(), h));
     // a highlight along the top edge, like a pressed-in key
     p.rect_filled(Rect::from_min_size(r.min + vec2(12.0, 1.0), vec2(r.width() - 24.0, 1.0)), 0, Color32::from_white_alpha((40.0 + 30.0 * h) as u8));
-    p.galley(pos2(r.left() + 14.0, r.center().y - g.size().y / 2.0), g.clone(), ON_ACCENT);
+    p.galley(pos2(r.left() + 14.0, r.center().y - g.size().y / 2.0), g.clone(), ON_ACCENT());
     let ic = Rect::from_center_size(pos2(r.left() + 14.0 + g.size().x + 6.0 + 7.0 + h * 1.5, r.center().y - h * 1.5), Vec2::splat(14.0));
-    crate::icons::paint(p, ic, icon, 12.0, ON_ACCENT);
+    crate::icons::paint(p, ic, icon, 12.0, ON_ACCENT());
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// A key name on a little plate, as on a keyboard.
 fn keycap(ui: &mut egui::Ui, key: &str) {
-    let g = ui.painter().layout_no_wrap(key.to_string(), mono(11.5), TEXT);
+    let g = ui.painter().layout_no_wrap(key.to_string(), mono(11.5), TEXT());
     let w = (g.size().x + 12.0).max(52.0);
     let (r, _) = ui.allocate_exact_size(vec2(w, 20.0), egui::Sense::hover());
-    let (fill, edge) = if glass() { (Color32::from_white_alpha(14), Color32::from_white_alpha(24)) } else { (HOVER, LINE) };
+    let (fill, edge) = if glass() { (Color32::from_white_alpha(14), Color32::from_white_alpha(24)) } else { (HOVER(), LINE()) };
     ui.painter().rect_filled(r, 6, fill);
     ui.painter().rect_stroke(r, 6, Stroke::new(1.0, edge), StrokeKind::Inside);
-    ui.painter().galley(r.center() - g.size() / 2.0, g, TEXT);
+    ui.painter().galley(r.center() - g.size() / 2.0, g, TEXT());
 }
 
 /// Closes the overlay: the main window, and with it every display's window.
@@ -2426,16 +2437,39 @@ fn close_all(ctx: &egui::Context) {
 }
 
 /// Viewfinder frame: dashed hairline plus solid corner brackets.
+/// The frame of a panel over the screen (`toolbar`, `tools`) as the theme
+/// has it, and whether it's glass: then the frame is clear, the glass is
+/// painted under it.
+fn panel_frame(part: &str) -> (egui::Frame, bool) {
+    let look = theme::look(part, 0);
+    let glassy = glass() || look.glass();
+    let radius = look.radius.map_or(9, |r| r.round() as u8);
+    let frame = egui::Frame::new()
+        .fill(if glassy { Color32::TRANSPARENT } else { look.bg_or(PANEL()) })
+        .stroke(match look.border {
+            Some(b) => b,
+            None if glassy => Stroke::NONE,
+            None => Stroke::new(1.0, LINE()),
+        })
+        .corner_radius(radius)
+        .inner_margin(egui::Margin::same(5));
+    (frame, glassy)
+}
+
 fn paint_viewfinder(painter: &egui::Painter, r: Rect, alpha: f32) {
     if alpha <= 0.0 || r.width() < 1.0 || r.height() < 1.0 {
         return;
     }
-    let line = Stroke::new(1.0, ACCENT.gamma_multiply(0.85 * alpha));
+    // the theme: the frame's color and thickness (the corners a bit bolder)
+    let look = theme::look("selection", 0);
+    let frame = look.border_or(Stroke::new(1.0, ACCENT().gamma_multiply(0.85)));
+    let line = Stroke::new(frame.width, frame.color.gamma_multiply(alpha));
     let pts = vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
     painter.extend(egui::Shape::dashed_line(&pts, line, 6.0, 4.0));
     let len = 18.0f32.min(r.width() / 2.5).min(r.height() / 2.5).max(5.0);
     let o = r.expand(1.5);
-    let bracket = Stroke::new(2.5, ACCENT.gamma_multiply(alpha));
+    let corner = look.border.map_or(ACCENT(), |b| b.color);
+    let bracket = Stroke::new(frame.width + 1.5, corner.gamma_multiply(alpha));
     for (c, dx, dy) in [
         (o.left_top(), 1.0, 1.0),
         (o.right_top(), -1.0, 1.0),
@@ -2496,11 +2530,11 @@ impl OverlayApp {
                 Tool::Arrow => {
                     let id = self.push_shape(Kind::Arrow { a: p, b: p }, w);
                     self.draw_path = vec![p];
-                    self.drag = Drag::Draw { id, start: p };
+                    self.drag = Drag::Draw { id, start: p, last: p };
                 }
                 Tool::Pen => {
                     let id = self.push_shape(Kind::Pen { pts: vec![p] }, w);
-                    self.drag = Drag::Draw { id, start: p };
+                    self.drag = Drag::Draw { id, start: p, last: p };
                 }
                 Tool::Rect | Tool::Ellipse | Tool::Highlight | Tool::Blur | Tool::Redact => {
                     let r = Rect::from_two_pos(p, p);
@@ -2512,14 +2546,29 @@ impl OverlayApp {
                         _ => Kind::Redact { r },
                     };
                     let id = self.push_shape(kind, w);
-                    self.drag = Drag::Draw { id, start: p };
+                    self.drag = Drag::Draw { id, start: p, last: p };
                 }
                 Tool::Region => {}
             }
         }
         if input.pointer.primary_down()
-            && let Drag::Draw { id, start } = self.drag
+            && let Drag::Draw { id, start, last } = self.drag
+            && input.modifiers.command
         {
+            // Ctrl held: the shape follows the mouse whole, as a selection
+            // does; letting go of Ctrl goes on drawing from where it is
+            let d = p - last;
+            if let Some(sh) = self.shapes.iter_mut().find(|s| s.id == id) {
+                sh.translate(d);
+            }
+            for q in &mut self.draw_path {
+                *q += d;
+            }
+            self.drag = Drag::Draw { id, start: start + d, last: p };
+        } else if input.pointer.primary_down()
+            && let Drag::Draw { id, start, .. } = self.drag
+        {
+            self.drag = Drag::Draw { id, start, last: p };
             let img = self.img_rect();
             if self.tool == Tool::Arrow && self.draw_path.last().is_none_or(|l| (*l - p).length() > 2.0) {
                 self.draw_path.push(p);
@@ -2674,19 +2723,15 @@ impl OverlayApp {
         }
         self.bar_pos = Some(next);
         let pos = next - vec2(0.0, (1.0 - t) * 14.0);
-        self.paint_glass(ctx, Rect::from_min_size(pos, size), t, ppp, "tools-glass", 9);
+        let (frame, glassy) = panel_frame("tools");
+        self.paint_glass(ctx, Rect::from_min_size(pos, size), t, ppp, "tools-glass", frame.corner_radius.nw, glassy);
         let resp = egui::Area::new(Id::unique("tools-bar"))
             .order(egui::Order::Foreground)
             .fixed_pos(pos)
             .show(ctx, |ui| {
                 ui.set_opacity(t);
-                // on glass the panel is clear: the backdrop below shows through
-                let glass = self.glass.is_some();
-                egui::Frame::new()
-                    .fill(if glass { Color32::TRANSPARENT } else { PANEL })
-                    .stroke(Stroke::new(1.0, if glass { Color32::TRANSPARENT } else { LINE }))
-                    .corner_radius(9)
-                    .inner_margin(egui::Margin::same(5))
+                let _part = theme::part("tools");
+                frame
                     .show(ui, |ui| {
                         if vertical {
                             self.tools_column(ui);
@@ -2724,8 +2769,10 @@ impl OverlayApp {
     /// A pane of Liquid Glass at `rect` (points): the screenshot under it,
     /// softly blurred and a little magnified, a light veil, a sheen over its
     /// top, a bright rim and a shadow it floats on.
-    fn paint_glass(&mut self, ctx: &egui::Context, rect: Rect, alpha: f32, ppp: f32, id: &str, radius: u8) {
-        if !glass() || alpha <= 0.0 {
+    /// `on`: glass here (always on Liquid Glass; elsewhere if the theme asks).
+    #[allow(clippy::too_many_arguments)]
+    fn paint_glass(&mut self, ctx: &egui::Context, rect: Rect, alpha: f32, ppp: f32, id: &str, radius: u8, on: bool) {
+        if !on || alpha <= 0.0 {
             return;
         }
         if self.glass.is_none() {
@@ -2877,7 +2924,7 @@ impl OverlayApp {
     fn record_bar(&mut self, ui: &mut egui::Ui) {
         let (r, resp) = ui.allocate_exact_size(vec2(28.0, bar_btn()), egui::Sense::hover());
         resp.on_hover_text(crate::i18n::t("тяни область, кликни окно или нажми пробел для всего экрана"));
-        ui.painter().circle_filled(pos2(r.left() + 14.0, r.center().y), 4.5, DANGER);
+        ui.painter().circle_filled(pos2(r.left() + 14.0, r.center().y), 4.5, DANGER());
         // the whole display this bar is on, in one click (or Space)
         if ui::icon_button_sized(ui, Icon::Screen, crate::i18n::l("весь экран  пробел", "the whole screen  space"), bar_btn(), bar_icon(), false, ui::Kind::Ghost).clicked()
             && let Some(m) = self.bar_mon
@@ -3012,10 +3059,10 @@ impl OverlayApp {
                 format!("{w:.0}")
             }
         };
-        let g = p.layout_no_wrap(label, font_medium(11.5), TEXT.gamma_multiply(alpha));
+        let g = p.layout_no_wrap(label, font_medium(11.5), TEXT().gamma_multiply(alpha));
         let tag = Rect::from_center_size(pt + vec2(0.0, 16.0), g.size() + vec2(12.0, 6.0));
         p.rect_filled(tag, tag.height() / 2.0, Color32::from_rgba_unmultiplied(18, 18, 17, (215.0 * alpha) as u8));
-        p.galley(tag.center() - g.size() / 2.0, g, TEXT.gamma_multiply(alpha));
+        p.galley(tag.center() - g.size() / 2.0, g, TEXT().gamma_multiply(alpha));
     }
 
     /// Live preview of the text being typed, plus a blinking caret.
@@ -3099,7 +3146,7 @@ fn curve_control(a: Pos2, b: Pos2, path: &[Pos2]) -> Pos2 {
 
 fn bar_sep_h(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(vec2(bar_btn(), 7.0), egui::Sense::hover());
-    ui.painter().hline(rect.shrink2(vec2(8.0, 0.0)).x_range(), rect.center().y, Stroke::new(1.0, LINE));
+    ui.painter().hline(rect.shrink2(vec2(8.0, 0.0)).x_range(), rect.center().y, Stroke::new(1.0, LINE()));
 }
 
 /// Color chip for the vertical panel (two per row).
@@ -3107,22 +3154,22 @@ fn color_chip_small(ui: &mut egui::Ui, c: eframe::egui::Color32, selected: bool)
     let (rect, resp) = ui.allocate_exact_size(vec2(bar_btn() / 2.0, 24.0), egui::Sense::click());
     let p = ui.painter();
     if resp.hovered() {
-        p.rect_filled(rect, 3, HOVER);
+        p.rect_filled(rect, 3, HOVER());
     }
     let chip = Rect::from_center_size(rect.center(), Vec2::splat(12.0));
     if selected {
-        p.rect_stroke(chip.expand(2.5), 2, Stroke::new(1.0, TEXT), StrokeKind::Inside);
+        p.rect_stroke(chip.expand(2.5), 2, Stroke::new(1.0, TEXT()), StrokeKind::Inside);
     }
     p.rect_filled(chip, 2, c);
     if c.r() < 40 && c.g() < 40 && c.b() < 40 {
-        p.rect_stroke(chip, 2, Stroke::new(1.0, LINE), StrokeKind::Inside);
+        p.rect_stroke(chip, 2, Stroke::new(1.0, LINE()), StrokeKind::Inside);
     }
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
 
 fn bar_sep(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(vec2(9.0, bar_btn()), egui::Sense::hover());
-    ui.painter().vline(rect.center().x, rect.shrink2(vec2(0.0, 11.0)).y_range(), Stroke::new(1.0, LINE));
+    ui.painter().vline(rect.center().x, rect.shrink2(vec2(0.0, 11.0)).y_range(), Stroke::new(1.0, LINE()));
 }
 
 /// The current color: a round chip in a button.
@@ -3130,11 +3177,11 @@ fn swatch(ui: &mut egui::Ui, c: eframe::egui::Color32, size: f32) -> egui::Respo
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::click());
     let p = ui.painter();
     if resp.hovered() {
-        p.rect_filled(rect, (size * 0.12).round() as u8, HOVER);
+        p.rect_filled(rect, (size * 0.12).round() as u8, HOVER());
     }
     let r = size * 0.21;
     p.circle_filled(rect.center(), r, c);
-    p.circle_stroke(rect.center(), r + 2.5, Stroke::new(1.2, if resp.hovered() { TEXT } else { DIM }));
+    p.circle_stroke(rect.center(), r + 2.5, Stroke::new(1.2, if resp.hovered() { TEXT() } else { DIM() }));
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
 
@@ -3142,15 +3189,15 @@ fn color_chip(ui: &mut egui::Ui, c: eframe::egui::Color32, selected: bool) -> eg
     let (rect, resp) = ui.allocate_exact_size(vec2(30.0, bar_btn()), egui::Sense::click());
     let p = ui.painter();
     if resp.hovered() {
-        p.rect_filled(rect.shrink2(vec2(0.0, 7.0)), 4, HOVER);
+        p.rect_filled(rect.shrink2(vec2(0.0, 7.0)), 4, HOVER());
     }
     let chip = Rect::from_center_size(rect.center(), Vec2::splat(16.0));
     if selected {
-        p.rect_stroke(chip.expand(3.0), 2, Stroke::new(1.0, TEXT), StrokeKind::Inside);
+        p.rect_stroke(chip.expand(3.0), 2, Stroke::new(1.0, TEXT()), StrokeKind::Inside);
     }
     p.rect_filled(chip, 2, c);
     if c.r() < 40 && c.g() < 40 && c.b() < 40 {
-        p.rect_stroke(chip, 2, Stroke::new(1.0, LINE), StrokeKind::Inside);
+        p.rect_stroke(chip, 2, Stroke::new(1.0, LINE()), StrokeKind::Inside);
     }
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }

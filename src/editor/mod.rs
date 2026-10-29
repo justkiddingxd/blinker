@@ -137,7 +137,7 @@ pub fn run(shared: &Arc<Shared>, state: EditorState, notice: Option<String>) -> 
     GLASS_W.with(|w| w.set(size.x));
     let viewport = crate::chrome::style(viewport);
     let shared2 = shared.clone();
-    runtime::run_window(shared, viewport, true, move |cc| {
+    runtime::run_window(shared, "editor", viewport, true, move |cc| {
         let hwnd = win::hwnd_of(cc);
         if let Some(h) = hwnd {
             win::style_borderless(h);
@@ -191,7 +191,8 @@ pub fn run(shared: &Arc<Shared>, state: EditorState, notice: Option<String>) -> 
 #[derive(Clone, Copy, PartialEq)]
 enum EDrag {
     None,
-    Draw { id: u64, start: Pos2 },
+    /// `last`: the pointer a frame ago (Ctrl carries what's being drawn).
+    Draw { id: u64, start: Pos2, last: Pos2 },
     Move { id: u64, last: Pos2, moved: bool },
     Crop { start: Pos2 },
     CropMove { grab: Vec2 },
@@ -452,7 +453,7 @@ impl EditorApp {
                 let r = ui.max_rect();
                 crate::chrome::drag_region(ui, r.expand2(vec2(14.0, 0.0)));
                 if !theme::glass() {
-                    ui.painter().hline(r.x_range().expand(14.0), r.bottom() + 0.5, Stroke::new(1.0, LINE));
+                    ui.painter().hline(r.x_range().expand(14.0), r.bottom() + 0.5, Stroke::new(1.0, LINE()));
                 }
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
@@ -462,10 +463,10 @@ impl EditorApp {
                         Some(p) => p.file_name().unwrap_or_default().to_string_lossy().into_owned(),
                         None => crate::i18n::t("новый снимок").to_string(),
                     };
-                    ui.label(egui::RichText::new(name).font(font_medium(13.0)).color(TEXT));
+                    ui.label(egui::RichText::new(name).font(font_medium(13.0)).color(TEXT()));
                     ui.add_space(4.0);
                     let state = if self.st.dirty { crate::i18n::t("изменён") } else { crate::i18n::t("сохранён") };
-                    ui.label(egui::RichText::new(state).font(mono(11.0)).color(FAINT));
+                    ui.label(egui::RichText::new(state).font(mono(11.0)).color(FAINT()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         crate::chrome::window_buttons(ui);
                         ui.spacing_mut().item_spacing.x = 4.0;
@@ -594,7 +595,7 @@ impl EditorApp {
                 ui.horizontal(|ui| {
                     ui::section_label(ui, crate::i18n::t("объекты"));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new(self.st.shapes.len().to_string()).font(mono(11.0)).color(FAINT));
+                        ui.label(egui::RichText::new(self.st.shapes.len().to_string()).font(mono(11.0)).color(FAINT()));
                     });
                 });
                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -611,7 +612,7 @@ impl EditorApp {
                     }
                     if self.st.shapes.is_empty() {
                         ui.add_space(6.0);
-                        ui.label(egui::RichText::new(crate::i18n::t("пока ничего не нарисовано")).font(font(12.0)).color(FAINT));
+                        ui.label(egui::RichText::new(crate::i18n::t("пока ничего не нарисовано")).font(font(12.0)).color(FAINT()));
                     }
                 });
                 if let Some(id) = select {
@@ -661,7 +662,7 @@ impl EditorApp {
                     }
                 }
                 let on = self.beauty.background == i;
-                p.rect_stroke(rect, 3, Stroke::new(if on { 2.0 } else { 1.0 }, if on { ACCENT } else { LINE }), StrokeKind::Outside);
+                p.rect_stroke(rect, 3, Stroke::new(if on { 2.0 } else { 1.0 }, if on { ACCENT() } else { LINE() }), StrokeKind::Outside);
                 if resp.on_hover_text(crate::i18n::t(bg.name)).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                     self.beauty.background = i;
                 }
@@ -689,7 +690,7 @@ impl EditorApp {
         ui.label(
             egui::RichText::new(crate::i18n::t("«копировать» и «сохранить» отдадут снимок уже в оформлении"))
                 .font(font(12.0))
-                .color(FAINT),
+                .color(FAINT()),
         );
         if before != self.beauty {
             let b = self.beauty.clone();
@@ -702,7 +703,7 @@ impl EditorApp {
         let ctx = ui.ctx().clone();
         let (resp, painter) = ui.allocate_painter(ui.available_size(), Sense::hover());
         self.canvas = resp.rect;
-        painter.rect_filled(resp.rect, 0, CANVAS);
+        painter.rect_filled(resp.rect, 0, ui::canvas_fill());
         let key = format!("{:?}|{}|{}|{:?}", self.beauty, self.st.shapes.len(), self.st.undo.len(), self.st.crop);
         if self.beauty_tex.as_ref().is_none_or(|(k, _)| *k != key) {
             let img = self.st.render();
@@ -753,7 +754,7 @@ impl EditorApp {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 18.0;
                     let shown = self.st.crop.unwrap_or(self.st.full_rect());
-                    let dim = |t: String| egui::RichText::new(t).font(mono(11.0)).color(DIM);
+                    let dim = |t: String| egui::RichText::new(t).font(mono(11.0)).color(DIM());
                     ui.label(dim(format!("{} × {}", shown.width() as i32, shown.height() as i32)));
                     let pct = format!("{:.0}%", self.zoom * ppp * 100.0);
                     let z = ui.add(egui::Label::new(dim(pct)).sense(Sense::click()));
@@ -771,7 +772,7 @@ impl EditorApp {
                     ui.label(dim(fmt));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let hint = format!("{}: {}", self.st.tool.label(), self.st.tool.hint());
-                        ui.label(egui::RichText::new(hint).font(font(12.0)).color(DIM));
+                        ui.label(egui::RichText::new(hint).font(font(12.0)).color(DIM()));
                     });
                 });
             });
@@ -883,7 +884,7 @@ impl EditorApp {
         }
 
         // --- paint
-        painter.rect_filled(self.canvas, 0, CANVAS);
+        painter.rect_filled(self.canvas, 0, ui::canvas_fill());
         let shown = self.shown_rect();
         let img_screen = self.rect_to_screen(shown);
         let clip = painter.with_clip_rect(img_screen.intersect(self.canvas));
@@ -956,18 +957,18 @@ impl EditorApp {
             painter.line(vec![c + vec2(0.0, dy * len), c, c + vec2(dx * len, 0.0)], st);
         }
         let label = format!("{} × {}", d.width().round() as i32, d.height().round() as i32);
-        let g = painter.layout_no_wrap(label, font_semibold(12.0), TEXT);
+        let g = painter.layout_no_wrap(label, font_semibold(12.0), TEXT());
         let br = Rect::from_min_size(f.left_top() + vec2(8.0, 8.0), g.size() + vec2(16.0, 8.0));
         painter.rect_filled(br, 6, Color32::from_rgba_unmultiplied(16, 17, 22, 220));
-        painter.galley(br.center() - g.size() / 2.0, g, TEXT);
+        painter.galley(br.center() - g.size() / 2.0, g, TEXT());
     }
 
     fn handle_tool_input(&mut self, ctx: &egui::Context, resp: &egui::Response) {
         let Some(pointer) = ctx.input(|i| i.pointer.latest_pos()) else { return };
         let p = self.to_img(pointer);
         let tol = 6.0 / self.zoom;
-        let (pressed, down, released, shift) = ctx.input(|i| {
-            (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.primary_released(), i.modifiers.shift)
+        let (pressed, down, released, shift, ctrl) = ctx.input(|i| {
+            (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.primary_released(), i.modifiers.shift, i.modifiers.command)
         });
         let on_canvas = resp.hovered() || resp.dragged() || !matches!(self.drag, EDrag::None);
         if !on_canvas {
@@ -1057,14 +1058,24 @@ impl EditorApp {
                         _ => Kind::Pixelate { r: Rect::from_two_pos(p, p) },
                     };
                     self.st.shapes.push(Shape { id, kind, color: self.st.color, width: self.st.width });
-                    self.drag = EDrag::Draw { id, start: p };
+                    self.drag = EDrag::Draw { id, start: p, last: p };
                 }
             }
         }
 
         if down {
             match self.drag {
-                EDrag::Draw { id, start } => {
+                // Ctrl held: the shape follows the mouse whole; letting go of
+                // Ctrl goes on drawing from where it is
+                EDrag::Draw { id, start, last } if ctrl => {
+                    let d = p - last;
+                    if let Some(s) = self.st.shape_mut(id) {
+                        s.translate(d);
+                    }
+                    self.drag = EDrag::Draw { id, start: start + d, last: p };
+                }
+                EDrag::Draw { id, start, .. } => {
+                    self.drag = EDrag::Draw { id, start, last: p };
                     let full = self.st.full_rect();
                     if let Some(s) = self.st.shape_mut(id) {
                         match &mut s.kind {
@@ -1203,9 +1214,9 @@ impl EditorApp {
             )
             .show(ctx, |ui| {
                 ui.set_width(360.0);
-                ui.label(egui::RichText::new(crate::i18n::t("сохранить изменения?")).font(font_medium(15.0)).color(TEXT));
+                ui.label(egui::RichText::new(crate::i18n::t("сохранить изменения?")).font(font_medium(15.0)).color(TEXT()));
                 ui.add_space(2.0);
-                ui.label(egui::RichText::new(crate::i18n::t("аннотации будут потеряны, если закрыть без сохранения.")).color(DIM));
+                ui.label(egui::RichText::new(crate::i18n::t("аннотации будут потеряны, если закрыть без сохранения.")).color(DIM()));
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
                     if ui::button(ui, crate::i18n::t("сохранить"), ui::Kind::Accent).clicked() && self.save(ctx) {
@@ -1236,7 +1247,7 @@ impl EditorApp {
 
 fn dashed_rect(r: Rect) -> Vec<egui::Shape> {
     let pts = vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
-    egui::Shape::dashed_line(&pts, Stroke::new(1.0, ACCENT), 5.0, 4.0)
+    egui::Shape::dashed_line(&pts, Stroke::new(1.0, ACCENT()), 5.0, 4.0)
 }
 
 fn sep(ui: &mut egui::Ui) {
@@ -1293,7 +1304,7 @@ fn swatch(ui: &mut egui::Ui, c: Color32, selected: bool) -> egui::Response {
     if theme::glass() {
         // round drops of color, the chosen one ringed
         if selected {
-            p.circle_stroke(chip.center(), 10.0, Stroke::new(1.5, TEXT));
+            p.circle_stroke(chip.center(), 10.0, Stroke::new(1.5, TEXT()));
         }
         p.circle_filled(chip.center(), 7.0, c);
         if c.r() < 40 && c.g() < 40 && c.b() < 40 {
@@ -1301,11 +1312,11 @@ fn swatch(ui: &mut egui::Ui, c: Color32, selected: bool) -> egui::Response {
         }
     } else {
         if selected {
-            p.rect_stroke(chip.expand(3.0), 2, Stroke::new(1.0, TEXT), StrokeKind::Inside);
+            p.rect_stroke(chip.expand(3.0), 2, Stroke::new(1.0, TEXT()), StrokeKind::Inside);
         }
         p.rect_filled(chip, 2, c);
         if c.r() < 40 && c.g() < 40 && c.b() < 40 {
-            p.rect_stroke(chip, 2, Stroke::new(1.0, LINE), StrokeKind::Inside);
+            p.rect_stroke(chip, 2, Stroke::new(1.0, LINE()), StrokeKind::Inside);
         }
     }
     resp.on_hover_cursor(CursorIcon::PointingHand)
@@ -1322,10 +1333,10 @@ fn width_button(ui: &mut egui::Ui, w: f32, idx: usize, px: f32, on: bool) -> egu
     } else if glass {
         Color32::from_white_alpha(5)
     } else {
-        CANVAS
+        CANVAS()
     };
     p.rect_filled(rect, ui::control_radius(rect.height(), 3.0), fill);
-    let fg = if on || resp.hovered() { TEXT } else { DIM };
+    let fg = if on || resp.hovered() { TEXT() } else { DIM() };
     let line_h = [1.0, 2.0, 4.0][idx];
     let line = Rect::from_center_size(pos2(rect.center().x - 8.0, rect.center().y), vec2(14.0, line_h));
     p.rect_filled(line, 0, fg);
@@ -1350,14 +1361,14 @@ fn object_row(ui: &mut egui::Ui, s: &Shape, selected: bool) -> RowAction {
         p.rect_filled(rect, radius, ui::hover_fill());
     }
     if !theme::glass() {
-        p.hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, LINE_SOFT));
+        p.hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, LINE_SOFT()));
     }
     let chip = Rect::from_center_size(pos2(rect.left() + 8.0, rect.center().y), vec2(8.0, 8.0));
     p.rect_filled(chip, 1, s.color);
-    p.text(pos2(rect.left() + 20.0, rect.center().y), Align2::LEFT_CENTER, kind_name(&s.kind), font(13.0), TEXT);
+    p.text(pos2(rect.left() + 20.0, rect.center().y), Align2::LEFT_CENTER, kind_name(&s.kind), font(13.0), TEXT());
     let x_rect = Rect::from_center_size(pos2(rect.right() - 12.0, rect.center().y), vec2(24.0, 24.0));
     let x_resp = ui.interact(x_rect, resp.id.with("x"), Sense::click());
-    let x_col = if x_resp.hovered() { TEXT } else { FAINT };
+    let x_col = if x_resp.hovered() { TEXT() } else { FAINT() };
     if resp.hovered() || x_resp.hovered() || selected {
         crate::icons::paint(ui.painter(), x_rect, Icon::Close, 12.0, x_col);
     }
@@ -1377,16 +1388,16 @@ fn menu_item(ui: &mut egui::Ui, icon: Icon, label: &str, key: &str) -> bool {
         ui.painter().rect_filled(rect, ui::soft_radius(3), ui::hover_fill());
     }
     let ir = Rect::from_center_size(pos2(rect.left() + 16.0, rect.center().y), vec2(16.0, 16.0));
-    crate::icons::paint(ui.painter(), ir, icon, 14.0, if h { ACCENT } else { DIM });
+    crate::icons::paint(ui.painter(), ir, icon, 14.0, if h { ACCENT() } else { DIM() });
     ui.painter().text(
         pos2(rect.left() + 32.0, rect.center().y),
         Align2::LEFT_CENTER,
         label,
         font(13.0),
-        if h { TEXT } else { TEXT2 },
+        if h { TEXT() } else { TEXT2() },
     );
     if !key.is_empty() {
-        ui.painter().text(pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, key, mono(11.0), FAINT);
+        ui.painter().text(pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, key, mono(11.0), FAINT());
     }
     resp.clicked()
 }

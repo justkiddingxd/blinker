@@ -1,0 +1,21 @@
+/* полночь: холодный синий */
+:root {
+  --bg: #12151c;
+  --panel: #171b24;
+  --canvas: #0e1117;
+  --line: #262c39;
+  --line-soft: #1e2330;
+  --line-hi: #343c4d;
+  --hover: #1e2330;
+  --active: #262c39;
+  --text: #e3e8f2;
+  --text-2: #b0b8c8;
+  --dim: #8b94a7;
+  --faint: #5d6578;
+  --faint-text: #7a8396;
+  --accent: #7aa2ff;
+  --accent-hi: #9bb9ff;
+  --on-accent: #0e1117;
+  --veil: rgba(8, 11, 18, .6);
+  --shade: rgba(14, 17, 23, .9);
+}

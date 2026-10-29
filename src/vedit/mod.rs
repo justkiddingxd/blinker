@@ -68,7 +68,7 @@ pub fn run(path: PathBuf) {
     GLASS_W.with(|w| w.set(window_size()[0]));
     let viewport = chrome::style(viewport);
     let shared2 = shared.clone();
-    runtime::run_window(&shared, viewport, true, move |cc| {
+    runtime::run_window(&shared, "video", viewport, true, move |cc| {
         let hwnd = win::hwnd_of(cc);
         if let Some(h) = hwnd {
             win::style_borderless(h);
@@ -572,14 +572,14 @@ impl VideoApp {
                 let r = ui.max_rect();
                 chrome::drag_region(ui, r.expand2(vec2(14.0, 0.0)));
                 if !theme::glass() {
-                    ui.painter().hline(r.x_range().expand(14.0), r.bottom() + 0.5, Stroke::new(1.0, LINE));
+                    ui.painter().hline(r.x_range().expand(14.0), r.bottom() + 0.5, Stroke::new(1.0, LINE()));
                 }
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     chrome::leading_space(ui);
                     chrome::mark(ui);
                     let name = self.path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-                    ui.label(egui::RichText::new(name).font(font_medium(13.0)).color(TEXT));
+                    ui.label(egui::RichText::new(name).font(font_medium(13.0)).color(TEXT()));
                     ui.add_space(4.0);
                     let meta = lf!(
                         "{} · {} × {} · {:.0} fps · {}", "{} · {} × {} · {:.0} fps · {}",
@@ -589,7 +589,7 @@ impl VideoApp {
                         self.info.fps,
                         human_size(self.file_size)
                     );
-                    ui.label(egui::RichText::new(meta).font(mono(11.0)).color(FAINT));
+                    ui.label(egui::RichText::new(meta).font(mono(11.0)).color(FAINT()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         chrome::window_buttons(ui);
                         ui.spacing_mut().item_spacing.x = 4.0;
@@ -615,14 +615,14 @@ impl VideoApp {
                                             }
                                         }
                                     });
-                                    ui.label(egui::RichText::new(self.audio_format.desc()).font(font(12.0)).color(DIM));
+                                    ui.label(egui::RichText::new(self.audio_format.desc()).font(font(12.0)).color(DIM()));
                                     ui.label(
                                         egui::RichText::new(crate::i18n::l(
                                             "включённые дорожки сводятся в одну, с их громкостью",
                                             "the tracks that are on are mixed into one, at their volume",
                                         ))
                                         .font(font(12.0))
-                                        .color(DIM),
+                                        .color(DIM()),
                                     );
                                 });
                                 return;
@@ -663,7 +663,7 @@ impl VideoApp {
                                 ui.label(
                                     egui::RichText::new(lf!("без звука, около {}", "no sound, about {}", human_size(est)))
                                         .font(font(12.0))
-                                        .color(DIM),
+                                        .color(DIM()),
                                 );
                                 if ui::button(ui, crate::i18n::t("сохранить gif"), ui::Kind::Accent).clicked() {
                                     self.export(&ctx, ExportKind::Gif);
@@ -690,7 +690,7 @@ impl VideoApp {
                                 } else {
                                     crate::i18n::t("дорожки отдельно, для монтажа")
                                 };
-                                ui.label(egui::RichText::new(hint).font(font(12.0)).color(DIM));
+                                ui.label(egui::RichText::new(hint).font(font(12.0)).color(DIM()));
                                 ui.add_space(6.0);
                             }
                             if menu_item(ui, Icon::Copy, crate::i18n::t("копировать исходный файл")) {
@@ -763,11 +763,11 @@ impl VideoApp {
         p.rect_filled(rect, 0, Color32::from_black_alpha(150));
         let card = Rect::from_center_size(rect.center(), vec2(360.0, 104.0));
         ui::paint_float(&p, card, 4, 1.0);
-        p.text(card.left_top() + vec2(16.0, 22.0), Align2::LEFT_CENTER, what, font_medium(13.5), TEXT);
-        p.text(card.right_top() + vec2(-16.0, 22.0), Align2::RIGHT_CENTER, format!("{:.0}%", f * 100.0), mono(12.0), DIM);
+        p.text(card.left_top() + vec2(16.0, 22.0), Align2::LEFT_CENTER, what, font_medium(13.5), TEXT());
+        p.text(card.right_top() + vec2(-16.0, 22.0), Align2::RIGHT_CENTER, format!("{:.0}%", f * 100.0), mono(12.0), DIM());
         let bar = Rect::from_min_size(card.left_top() + vec2(16.0, 42.0), vec2(card.width() - 32.0, 4.0));
-        p.rect_filled(bar, 2, LINE);
-        p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * f, bar.height())), 2, ACCENT);
+        p.rect_filled(bar, 2, LINE());
+        p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * f, bar.height())), 2, ACCENT());
         let btn = Rect::from_min_size(pos2(card.right() - 16.0 - 80.0, card.bottom() - 42.0), vec2(80.0, 30.0));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(btn));
         if ui::button(&mut child, crate::i18n::t("отмена"), ui::Kind::Ghost).clicked() {
@@ -829,7 +829,7 @@ impl VideoApp {
                 self.filmstrip(&p, strip);
                 if !self.video_on {
                     p.rect_filled(strip, 3, Color32::from_black_alpha(170));
-                    p.text(strip.center(), Align2::CENTER_CENTER, crate::i18n::l("видео выключено: сохранится только звук", "video off: only the sound is saved"), font(12.0), DIM);
+                    p.text(strip.center(), Align2::CENTER_CENTER, crate::i18n::l("видео выключено: сохранится только звук", "video off: only the sound is saved"), font(12.0), DIM());
                 }
                 for i in 0..self.tracks.len() {
                     let y = tracks_top + i as f32 * (TRACK_H + 4.0);
@@ -862,10 +862,10 @@ impl VideoApp {
         if ui::icon_button(&mut child, icon, tip, 30.0, false, ui::Kind::Ghost).clicked() {
             self.video_on = !self.video_on;
         }
-        let col = if self.video_on { TEXT2 } else { FAINT };
+        let col = if self.video_on { TEXT2() } else { FAINT() };
         p.text(pos2(row.left() + 38.0, row.center().y - 8.0), Align2::LEFT_CENTER, crate::i18n::t("видео"), font_medium(12.5), col);
         let sub = if self.video_on { format!("{} × {}", self.info.width, self.info.height) } else { crate::i18n::l("выключено", "off").to_string() };
-        p.text(pos2(row.left() + 38.0, row.center().y + 9.0), Align2::LEFT_CENTER, sub, mono(11.0), FAINT);
+        p.text(pos2(row.left() + 38.0, row.center().y + 9.0), Align2::LEFT_CENTER, sub, mono(11.0), FAINT());
     }
 
     /// Markers: flags above the filmstrip with a line through the tracks.
@@ -875,13 +875,13 @@ impl VideoApp {
         // the left label is the "add" button
         let add = ui.interact(label, ui.scope_id().with("marker-add"), Sense::click());
         let h = add.hovered();
-        icons::paint(&p, Rect::from_center_size(pos2(label.left() + 15.0, label.center().y), Vec2::splat(14.0)), Icon::Flag, 13.0, if h { ACCENT } else { FAINT });
+        icons::paint(&p, Rect::from_center_size(pos2(label.left() + 15.0, label.center().y), Vec2::splat(14.0)), Icon::Flag, 13.0, if h { ACCENT() } else { FAINT() });
         let text = if self.markers.is_empty() { crate::i18n::l("метка · m", "marker · m") } else { crate::i18n::l("+ метка · m", "+ marker · m") };
-        p.text(pos2(label.left() + 38.0, label.center().y), Align2::LEFT_CENTER, text, font(12.0), if h { TEXT } else { FAINT });
+        p.text(pos2(label.left() + 38.0, label.center().y), Align2::LEFT_CENTER, text, font(12.0), if h { TEXT() } else { FAINT() });
         if add.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(crate::i18n::l("метка на месте курсора", "a marker at the playhead")).clicked() {
             self.add_marker();
         }
-        p.rect_filled(lane, 3, CANVAS);
+        p.rect_filled(lane, 3, CANVAS());
         let mut order: Vec<usize> = (0..self.markers.len()).collect();
         order.sort_by_key(|&i| self.markers[i].t);
         let mut clicked = None;
@@ -891,7 +891,7 @@ impl VideoApp {
             let flag = Rect::from_min_size(pos2(x - 1.0, lane.top() + 3.0), vec2(12.0, lane.height() - 6.0));
             let resp = ui.interact(flag.expand2(vec2(4.0, 2.0)), ui.scope_id().with(("marker", i)), Sense::click_and_drag());
             let hot = selected || resp.hovered() || self.marker_drag == Some(i);
-            let col = if hot { ACCENT } else { theme::lerp_color(DIM, ACCENT, 0.4) };
+            let col = if hot { ACCENT() } else { theme::lerp_color(DIM(), ACCENT(), 0.4) };
             p.vline(x, lane.top()..=area.bottom(), Stroke::new(1.0, col.gamma_multiply(if hot { 0.8 } else { 0.35 })));
             let pts = vec![flag.left_top(), flag.right_top(), pos2(flag.right() - 3.0, flag.center().y), flag.right_bottom(), flag.left_bottom()];
             p.add(egui::Shape::convex_polygon(pts, col, Stroke::NONE));
@@ -942,9 +942,9 @@ impl VideoApp {
                 .show(ui, |ui| {
                     ui.set_width(w - 20.0);
                     ui.horizontal(|ui| {
-                        icons::paint(ui.painter(), Rect::from_min_size(ui.cursor().min + vec2(0.0, 1.0), Vec2::splat(16.0)), Icon::Flag, 13.0, ACCENT);
+                        icons::paint(ui.painter(), Rect::from_min_size(ui.cursor().min + vec2(0.0, 1.0), Vec2::splat(16.0)), Icon::Flag, 13.0, ACCENT());
                         ui.add_space(20.0);
-                        ui.label(egui::RichText::new(lf!("метка · {}", "marker · {}", fmt_time(self.markers[i].t, true))).font(font_medium(12.5)).color(TEXT));
+                        ui.label(egui::RichText::new(lf!("метка · {}", "marker · {}", fmt_time(self.markers[i].t, true))).font(font_medium(12.5)).color(TEXT()));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.spacing_mut().item_spacing.x = 2.0;
                             if ui::icon_button(ui, Icon::Close, crate::i18n::l("готово", "done"), 24.0, false, ui::Kind::Ghost).clicked() {
@@ -1109,15 +1109,15 @@ impl VideoApp {
         }
         for s in &self.splits {
             let x = self.x_of(*s, area).round() + 0.5;
-            p.vline(x, area.y_range(), Stroke::new(1.5, TEXT.gamma_multiply(0.85)));
+            p.vline(x, area.y_range(), Stroke::new(1.5, TEXT().gamma_multiply(0.85)));
             let tab = Rect::from_center_size(pos2(x, strip.top() + 6.0), vec2(8.0, 8.0));
-            p.rect_filled(tab, 2, TEXT);
+            p.rect_filled(tab, 2, TEXT());
         }
         // the piece under the playhead
         if !self.splits.is_empty() {
             let (a, b) = self.piece_at(self.pos);
             let r = Rect::from_min_max(pos2(self.x_of(a, area), strip.top()), pos2(self.x_of(b, area), strip.bottom()));
-            p.rect_stroke(r.shrink(1.0), 3, Stroke::new(1.5, TEXT.gamma_multiply(0.6)), StrokeKind::Inside);
+            p.rect_stroke(r.shrink(1.0), 3, Stroke::new(1.5, TEXT().gamma_multiply(0.6)), StrokeKind::Inside);
         }
     }
 
@@ -1153,9 +1153,9 @@ impl VideoApp {
                 if self.playing { self.pause() } else { self.play() }
             }
             ui.add_space(4.0);
-            let now = egui::RichText::new(fmt_time(self.pos, true)).font(mono(14.0)).color(TEXT);
+            let now = egui::RichText::new(fmt_time(self.pos, true)).font(mono(14.0)).color(TEXT());
             ui.label(now);
-            ui.label(egui::RichText::new(format!("/ {}", fmt_time(self.dur(), true))).font(mono(12.0)).color(FAINT));
+            ui.label(egui::RichText::new(format!("/ {}", fmt_time(self.dur(), true))).font(mono(12.0)).color(FAINT()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 self.zoom_controls(ui);
@@ -1165,12 +1165,12 @@ impl VideoApp {
                     }
                     let len = fmt_time(self.trim.1 - self.trim.0, true);
                     let range = format!("{} – {}", fmt_time(self.trim.0, true), fmt_time(self.trim.1, true));
-                    ui.label(egui::RichText::new(lf!("останется {range} · {len}", "keeps {range} · {len}")).font(mono(12.0)).color(ACCENT));
+                    ui.label(egui::RichText::new(lf!("останется {range} · {len}", "keeps {range} · {len}")).font(mono(12.0)).color(ACCENT()));
                 } else {
                     ui.label(
                         egui::RichText::new(crate::i18n::l("края рамки обрезают · i и o начало и конец · ctrl+колесо приближает", "the frame's edges trim · i and o: start and end · ctrl+wheel zooms"))
                             .font(font(12.0))
-                            .color(FAINT),
+                            .color(FAINT()),
                     );
                 }
             });
@@ -1178,7 +1178,7 @@ impl VideoApp {
     }
 
     fn filmstrip(&self, p: &egui::Painter, strip: Rect) {
-        p.rect_filled(strip, 3, CANVAS);
+        p.rect_filled(strip, 3, CANVAS());
         let p = p.with_clip_rect(strip);
         let n = self.thumb_tex.len().max(1) as i64;
         let dur = self.dur();
@@ -1198,7 +1198,7 @@ impl VideoApp {
     fn track_row(&mut self, ui: &mut egui::Ui, i: usize, row: Rect, x0: f32) {
         let p = ui.painter().clone();
         let wave_rect = Rect::from_min_max(pos2(x0, row.top()), row.max);
-        p.rect_filled(wave_rect, 3, CANVAS);
+        p.rect_filled(wave_rect, 3, CANVAS());
         // controls on the left
         let t = &self.tracks[i];
         let (label, icon, muted_icon, muted) = (t.label, t.icon, t.muted_icon, t.gain.muted);
@@ -1209,7 +1209,7 @@ impl VideoApp {
             self.tracks[i].gain.muted = !muted;
             self.sync_gains();
         }
-        let col = if muted { FAINT } else { TEXT2 };
+        let col = if muted { FAINT() } else { TEXT2() };
         p.text(pos2(row.left() + 38.0, row.top() + 12.0), Align2::LEFT_CENTER, label, font_medium(12.5), col);
         let slider = Rect::from_min_max(pos2(row.left() + 36.0, row.top() + 22.0), pos2(x0 - 12.0, row.bottom() - 2.0));
         let mut sc = ui.new_child(egui::UiBuilder::new().max_rect(slider).layout(egui::Layout::left_to_right(egui::Align::Center)));
@@ -1218,7 +1218,7 @@ impl VideoApp {
         sc.add_enabled_ui(!muted, |ui| {
             let mut v = self.tracks[i].gain.volume;
             let resp = ui::slider(ui, &mut v, 0.0..=2.0, 0.0);
-            ui.label(egui::RichText::new(format!("{:.0}%", v * 100.0)).font(mono(10.5)).color(FAINT));
+            ui.label(egui::RichText::new(format!("{:.0}%", v * 100.0)).font(mono(10.5)).color(FAINT()));
             if resp.changed() {
                 self.tracks[i].gain.volume = v;
                 self.sync_gains();
@@ -1228,7 +1228,7 @@ impl VideoApp {
         let wave = self.tracks[i].wave.lock().unwrap().clone();
         match wave {
             Some(peaks) => {
-                let color = if muted { LINE } else { theme::lerp_color(TEXT2, ACCENT, 0.3) };
+                let color = if muted { LINE() } else { theme::lerp_color(TEXT2(), ACCENT(), 0.3) };
                 let vol = if muted { 1.0 } else { self.tracks[i].gain.volume.min(1.6) };
                 let mid = wave_rect.center().y;
                 let half = wave_rect.height() / 2.0 - 3.0;
@@ -1248,7 +1248,7 @@ impl VideoApp {
                 p.add(egui::Shape::mesh(mesh));
             }
             None => {
-                p.text(wave_rect.center(), Align2::CENTER_CENTER, crate::i18n::t("читаю звук…"), font(11.5), FAINT);
+                p.text(wave_rect.center(), Align2::CENTER_CENTER, crate::i18n::t("читаю звук…"), font(11.5), FAINT());
             }
         }
     }
@@ -1329,8 +1329,8 @@ impl VideoApp {
         // the kept range: an accent frame over the filmstrip and a thin one
         // round the tracks, grips on both ends
         let sel = Rect::from_min_max(pos2(xi, strip.top()), pos2(xo, strip.bottom()));
-        p.rect_stroke(Rect::from_min_max(pos2(xi, strip.top()), pos2(xo, area.bottom())), 4, Stroke::new(1.0, ACCENT.gamma_multiply(0.35)), StrokeKind::Inside);
-        p.rect_stroke(sel, 4, Stroke::new(2.0, ACCENT), StrokeKind::Inside);
+        p.rect_stroke(Rect::from_min_max(pos2(xi, strip.top()), pos2(xo, area.bottom())), 4, Stroke::new(1.0, ACCENT().gamma_multiply(0.35)), StrokeKind::Inside);
+        p.rect_stroke(sel, 4, Stroke::new(2.0, ACCENT()), StrokeKind::Inside);
         for (x, left, which) in [(xi, true, Drag::In), (xo, false, Drag::Out)] {
             let g = if left {
                 Rect::from_min_max(pos2(x, strip.top()), pos2(x + GRIP_W, strip.bottom()))
@@ -1338,26 +1338,26 @@ impl VideoApp {
                 Rect::from_min_max(pos2(x - GRIP_W, strip.top()), pos2(x, strip.bottom()))
             };
             let hot = self.drag == which;
-            p.rect_filled(g, 4, if hot { ACCENT_HI } else { ACCENT });
+            p.rect_filled(g, 4, if hot { ACCENT_HI() } else { ACCENT() });
             let cx = g.center().x;
             for dx in [-1.5, 1.5] {
-                p.vline(cx + dx, (g.center().y - 7.0)..=(g.center().y + 7.0), Stroke::new(1.2, ON_ACCENT));
+                p.vline(cx + dx, (g.center().y - 7.0)..=(g.center().y + 7.0), Stroke::new(1.2, ON_ACCENT()));
             }
             // the time of the edge, above it while it's dragged
             if hot {
                 let t = if left { self.trim.0 } else { self.trim.1 };
                 let text = fmt_time(t, true);
-                let g2 = p.layout_no_wrap(text, mono(11.0), ON_ACCENT);
+                let g2 = p.layout_no_wrap(text, mono(11.0), ON_ACCENT());
                 let bubble = Rect::from_center_size(pos2(x, strip.top() - 13.0), g2.size() + vec2(12.0, 6.0));
-                p.rect_filled(bubble, 5, ACCENT);
-                p.galley(bubble.center() - g2.size() / 2.0, g2, ON_ACCENT);
+                p.rect_filled(bubble, 5, ACCENT());
+                p.galley(bubble.center() - g2.size() / 2.0, g2, ON_ACCENT());
             }
         }
         // playhead
         let x = self.x_of(self.pos, area).round() + 0.5;
-        p.vline(x, (area.top() - 4.0)..=area.bottom(), Stroke::new(2.0, TEXT));
+        p.vline(x, (area.top() - 4.0)..=area.bottom(), Stroke::new(2.0, TEXT()));
         let knob = Rect::from_center_size(pos2(x, area.top() - 5.0), vec2(10.0, 8.0));
-        p.rect_filled(knob, 2, TEXT);
+        p.rect_filled(knob, 2, TEXT());
     }
 
     fn preview(&mut self, ui: &mut egui::Ui) {
@@ -1367,7 +1367,7 @@ impl VideoApp {
         let r = ui.max_rect();
         self.preview_rect = r;
         let p = ui.painter().clone();
-        p.rect_filled(r, 0, CANVAS);
+        p.rect_filled(r, 0, ui::canvas_fill());
         let area = r.shrink(18.0);
         let aspect = self.info.width.max(1) as f32 / self.info.height.max(1) as f32;
         let mut size = vec2(area.width(), area.width() / aspect);
@@ -1385,7 +1385,7 @@ impl VideoApp {
         if let Some(tex) = &self.tex {
             p.image(tex.id(), rect, self.view_uv(), Color32::WHITE);
         }
-        p.rect_stroke(rect, 0, Stroke::new(1.0, LINE), StrokeKind::Outside);
+        p.rect_stroke(rect, 0, Stroke::new(1.0, LINE()), StrokeKind::Outside);
         // 9:16 slice: what's kept is lit, a frame to drag sideways
         let shown = if self.aspect == Aspect::Crop {
             let (x, cw) = shorts::slice(self.info.width, self.info.height, self.crop_x);
@@ -1394,7 +1394,7 @@ impl VideoApp {
             let shade = Color32::from_black_alpha(170);
             p.rect_filled(Rect::from_min_max(rect.min, pos2(frame.left(), rect.bottom())), 0, shade);
             p.rect_filled(Rect::from_min_max(pos2(frame.right(), rect.top()), rect.max), 0, shade);
-            p.rect_stroke(frame, 0, Stroke::new(2.0, ACCENT), StrokeKind::Inside);
+            p.rect_stroke(frame, 0, Stroke::new(2.0, ACCENT()), StrokeKind::Inside);
             let room = rect.width() - frame.width();
             if resp.dragged() && room > 1.0 {
                 self.crop_x = (self.crop_x + resp.drag_delta().x / room).clamp(0.0, 1.0);
@@ -1415,7 +1415,7 @@ impl VideoApp {
             let c = rect.center();
             let a = if h { 1.0 } else { 0.75 };
             p.circle_filled(c, 28.0, Color32::from_rgba_unmultiplied(18, 18, 17, (215.0 * a) as u8));
-            icons::paint(&p, Rect::from_center_size(c + vec2(2.0, 0.0), Vec2::splat(26.0)), Icon::Play, 22.0, TEXT.gamma_multiply(a));
+            icons::paint(&p, Rect::from_center_size(c + vec2(2.0, 0.0), Vec2::splat(26.0)), Icon::Play, 22.0, TEXT().gamma_multiply(a));
             if h {
                 ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
             }
@@ -1431,7 +1431,7 @@ impl VideoApp {
         let r = ui.max_rect();
         self.preview_rect = r;
         let p = ui.painter().clone();
-        p.rect_filled(r, 0, CANVAS);
+        p.rect_filled(r, 0, ui::canvas_fill());
         let area = r.shrink(18.0);
         let mut size = vec2(area.height() * 9.0 / 16.0, area.height());
         if size.x > area.width() {
@@ -1449,7 +1449,7 @@ impl VideoApp {
             let band = Rect::from_center_size(rect.center(), vec2(rect.width(), band_h));
             p.image(tex.id(), band, view, Color32::WHITE);
         }
-        p.rect_stroke(rect, 0, Stroke::new(1.0, LINE), StrokeKind::Outside);
+        p.rect_stroke(rect, 0, Stroke::new(1.0, LINE()), StrokeKind::Outside);
         self.texts_overlay(ui, rect);
         self.speech_overlay(ui, rect);
         if resp.clicked() && self.job.is_none() {
@@ -1459,7 +1459,7 @@ impl VideoApp {
             let c = rect.center();
             let a = if resp.hovered() { 1.0 } else { 0.75 };
             p.circle_filled(c, 28.0, Color32::from_rgba_unmultiplied(18, 18, 17, (215.0 * a) as u8));
-            icons::paint(&p, Rect::from_center_size(c + vec2(2.0, 0.0), Vec2::splat(26.0)), Icon::Play, 22.0, TEXT.gamma_multiply(a));
+            icons::paint(&p, Rect::from_center_size(c + vec2(2.0, 0.0), Vec2::splat(26.0)), Icon::Play, 22.0, TEXT().gamma_multiply(a));
         }
         self.job_overlay(ui, rect);
         self.done_card(ui, r);
@@ -1489,13 +1489,13 @@ impl VideoApp {
         let card = Rect::from_center_size(rect.center(), vec2(360.0, 104.0));
         ui::paint_float(&p, card, 4, 1.0);
         if let Some(e) = &engine {
-            p.text(card.left_bottom() + vec2(16.0, -27.0), Align2::LEFT_CENTER, e, mono(10.5), FAINT);
+            p.text(card.left_bottom() + vec2(16.0, -27.0), Align2::LEFT_CENTER, e, mono(10.5), FAINT());
         }
-        p.text(card.left_top() + vec2(16.0, 22.0), Align2::LEFT_CENTER, what, font_medium(13.5), TEXT);
-        p.text(card.right_top() + vec2(-16.0, 22.0), Align2::RIGHT_CENTER, format!("{:.0}%", f * 100.0), mono(12.0), DIM);
+        p.text(card.left_top() + vec2(16.0, 22.0), Align2::LEFT_CENTER, what, font_medium(13.5), TEXT());
+        p.text(card.right_top() + vec2(-16.0, 22.0), Align2::RIGHT_CENTER, format!("{:.0}%", f * 100.0), mono(12.0), DIM());
         let bar = Rect::from_min_size(card.left_top() + vec2(16.0, 42.0), vec2(card.width() - 32.0, 4.0));
-        p.rect_filled(bar, 2, LINE);
-        p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * f, bar.height())), 2, ACCENT);
+        p.rect_filled(bar, 2, LINE());
+        p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * f, bar.height())), 2, ACCENT());
         let btn = Rect::from_min_size(pos2(card.right() - 16.0 - 80.0, card.bottom() - 42.0), vec2(80.0, 30.0));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(btn));
         if ui::button(&mut child, crate::i18n::t("отмена"), ui::Kind::Ghost).clicked() {
@@ -1508,7 +1508,7 @@ impl VideoApp {
         let card = Rect::from_min_size(r.right_bottom() - vec2(16.0 + 380.0, 16.0 + 50.0), vec2(380.0, 50.0));
         let p = ui.painter().clone();
         ui::paint_float(&p, card, 4, 1.0);
-        p.text(pos2(card.left() + 14.0, card.center().y), Align2::LEFT_CENTER, &done.text, font_medium(13.0), TEXT);
+        p.text(pos2(card.left() + 14.0, card.center().y), Align2::LEFT_CENTER, &done.text, font_medium(13.0), TEXT());
         let path = done.path.clone();
         let mut close = false;
         let mut child = ui.new_child(
@@ -1596,7 +1596,7 @@ impl VideoApp {
 
 impl eframe::App for VideoApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        if theme::glass() { [0.0; 4] } else { CANVAS.to_normalized_gamma_f32() }
+        if theme::glass() { [0.0; 4] } else { CANVAS().to_normalized_gamma_f32() }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1689,7 +1689,7 @@ fn sep(ui: &mut egui::Ui) {
 }
 
 fn caption(ui: &mut egui::Ui, text: &str) {
-    ui.label(egui::RichText::new(text).font(font_medium(12.0)).color(TEXT2));
+    ui.label(egui::RichText::new(text).font(font_medium(12.0)).color(TEXT2()));
 }
 
 fn menu_item(ui: &mut egui::Ui, icon: Icon, label: &str) -> bool {
@@ -1699,7 +1699,7 @@ fn menu_item(ui: &mut egui::Ui, icon: Icon, label: &str) -> bool {
         ui.painter().rect_filled(rect, ui::soft_radius(3), ui::hover_fill());
     }
     let ir = Rect::from_center_size(pos2(rect.left() + 16.0, rect.center().y), vec2(16.0, 16.0));
-    icons::paint(ui.painter(), ir, icon, 14.0, if h { ACCENT } else { DIM });
-    ui.painter().text(pos2(rect.left() + 32.0, rect.center().y), Align2::LEFT_CENTER, label, font(13.0), TEXT);
+    icons::paint(ui.painter(), ir, icon, 14.0, if h { ACCENT() } else { DIM() });
+    ui.painter().text(pos2(rect.left() + 32.0, rect.center().y), Align2::LEFT_CENTER, label, font(13.0), TEXT());
     resp.clicked()
 }

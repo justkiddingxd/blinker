@@ -185,6 +185,28 @@ pub fn monitors() -> Vec<Monitor> {
     out
 }
 
+/// Each monitor's number as Windows' display settings show it (from its
+/// device name, "\\.\DISPLAY2" → 2), by its rectangle.
+pub fn monitor_numbers() -> Vec<(IRect, u32)> {
+    unsafe extern "system" fn cb(hmon: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> windows_sys::core::BOOL {
+        let out = unsafe { &mut *(data as *mut Vec<(IRect, u32)>) };
+        let mut info: MONITORINFOEXW = unsafe { std::mem::zeroed() };
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if unsafe { GetMonitorInfoW(hmon, &mut info as *mut MONITORINFOEXW as *mut MONITORINFO) } != 0 {
+            let name = String::from_utf16_lossy(&info.szDevice);
+            let digits: String = name.trim_end_matches('\0').chars().rev().take_while(char::is_ascii_digit).collect();
+            let n = digits.chars().rev().collect::<String>().parse().unwrap_or(0);
+            out.push((info.monitorInfo.rcMonitor.into(), n));
+        }
+        1
+    }
+    let mut out: Vec<(IRect, u32)> = Vec::new();
+    unsafe {
+        EnumDisplayMonitors(null_mut(), null(), Some(cb), &mut out as *mut _ as LPARAM);
+    }
+    out
+}
+
 /// Refresh rate (Hz) of the monitor at a screen point; 60 if unknown.
 pub fn refresh_rate(x: i32, y: i32) -> u32 {
     unsafe {
@@ -260,6 +282,41 @@ fn dwm_set<T>(hwnd: HWND, attr: DWMWINDOWATTRIBUTE, value: T) {
             &value as *const T as *const c_void,
             std::mem::size_of::<T>() as u32,
         );
+    }
+}
+
+/// The capture overlay is a bare popup over the whole desktop. winit's
+/// undecorated window keeps WS_CAPTION and the system buttons and only hides
+/// them by calling the whole window client area; where that fails, the title
+/// bar shows (it can be dragged, the picture is pushed down past the taskbar).
+/// The frame styles come off here; true if there were any. Checked every
+/// frame: winit puts its styles back (when it shows the window, for one).
+///
+/// And the client area is the whole window: for the drop shadow of a
+/// borderless window winit leaves its top row out (`top += 1` in its
+/// WM_NCCALCSIZE), which over the screens is a 1 px strip of nothing.
+pub fn make_overlay(hwnd: HWND) -> bool {
+    unsafe extern "system" fn whole_client(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _: usize, _: usize) -> LRESULT {
+        if msg == WM_NCCALCSIZE && wp != 0 {
+            // the proposed rectangle stays as it is: client = window
+            return 0;
+        }
+        unsafe { windows_sys::Win32::UI::Shell::DefSubclassProc(h, msg, wp, lp) }
+    }
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        let frame = WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+        let ex_frame = WS_EX_DLGMODALFRAME | WS_EX_CLIENTEDGE | WS_EX_WINDOWEDGE | WS_EX_STATICEDGE;
+        if style & frame == 0 && ex & ex_frame == 0 {
+            return false;
+        }
+        // before winit's own procedure (the same id again only updates it)
+        windows_sys::Win32::UI::Shell::SetWindowSubclass(hwnd, Some(whole_client), 0x626C6B, 0);
+        SetWindowLongPtrW(hwnd, GWL_STYLE, ((style & !frame) | WS_POPUP) as isize);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex & !ex_frame) as isize);
+        SetWindowPos(hwnd, null_mut(), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        true
     }
 }
 

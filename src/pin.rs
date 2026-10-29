@@ -62,6 +62,7 @@ pub fn run(path: PathBuf, x: i32, y: i32) {
         "blinker pin",
         options,
         Box::new(move |cc| {
+            theme::set_scope("pin");
             theme::apply(&cc.egui_ctx);
             let hwnd = win::hwnd_of(cc);
             if let Some(h) = hwnd {
@@ -157,7 +158,7 @@ impl eframe::App for PinApp {
         let full = ctx.content_rect();
         let resp = ui.interact(full, ui.scope_id().with("pin"), egui::Sense::click_and_drag());
         self.tex.paint(ui.painter(), Rect::from_min_size(pos2(0.0, 0.0), self.tex.size), full, Color32::WHITE);
-        let border = if resp.hovered() { ACCENT } else { LINE };
+        let border = if resp.hovered() { ACCENT() } else { LINE() };
         ui.painter().rect_stroke(full, 0, Stroke::new(1.0, border), StrokeKind::Inside);
 
         if resp.drag_started() {
@@ -207,13 +208,13 @@ fn menu_item(ui: &mut egui::Ui, icon: Icon, label: &str) -> bool {
         ui.painter().rect_filled(rect, crate::ui::soft_radius(3), crate::ui::hover_fill());
     }
     let ir = Rect::from_center_size(pos2(rect.left() + 16.0, rect.center().y), vec2(16.0, 16.0));
-    crate::icons::paint(ui.painter(), ir, icon, 14.0, if h { ACCENT } else { DIM });
+    crate::icons::paint(ui.painter(), ir, icon, 14.0, if h { ACCENT() } else { DIM() });
     ui.painter().text(
         pos2(rect.left() + 32.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
         label,
         font(13.0),
-        if h { TEXT } else { TEXT2 },
+        if h { TEXT() } else { TEXT2() },
     );
     resp.clicked()
 }

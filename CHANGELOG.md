@@ -2,6 +2,48 @@
 
 Each version's section has a Russian half, `---`, then an English one: the app shows the one of its language, and GitHub's release notes (and the Discord note) are the English half (`.github/workflows/release.yml`).
 
+## 0.4.5
+
+**Оформление**
+- Темы: в настройках → общее → оформление можно выбрать графит, уголь (чистый чёрный для OLED), полночь, лес, закат или сакуру и свой цвет акцента. Меняется сразу во всех окнах: захват, редакторы, настройки, история, меню трея, карточка после снимка, плашка записи.
+- Свой стиль, theme.css: правила в духе CSS поверх темы. Вместо HTML-тегов части окон blinker (`toolbar`, `button.ghost:hover`, `selection`, `card`…), свойства — цвет, фон, рамка, скругление, прозрачность, тень, размер шрифта, переменные `--accent` и `var()`. Панели захвата можно сделать матовым стеклом и на Windows (`background: glass`). Файл подхватывается, как только его сохранишь; ошибки с номерами строк видны в настройках, а «применять theme.css» выключает стиль, не удаляя его.
+
+**Уведомление**
+- Можно выбрать, на каком мониторе появляется карточка после снимка или записи: там, где был снимок, или на конкретном. Мониторы показаны картой с теми же номерами, что в параметрах Windows.
+
+**Захват и редактор**
+- Ctrl во время рисования двигает фигуру, которую ты сейчас рисуешь, так же как Ctrl двигает выделение. Отпустишь Ctrl — рисуешь дальше с того же места.
+
+**Сохранение**
+- Метаданные убираются из всех файлов blinker: скриншотов, записей, повтора, GIF и экспорта видео и звука. В MP4 больше нет времени создания и версии Windows, которые туда пишет Media Foundation; из картинок уходят EXIF, текстовые поля и комментарии. Переключатель «убирать метаданные» в настройках → сохранение, включён по умолчанию.
+
+**Запись**
+- blinker больше не падает с окном «Assertion failed … msh264enchmft_store.dll»: если аппаратный кодировщик видеокарты не берёт запись (слишком широкий экран, заняты все его сессии), её пишет программный кодировщик Windows. Раньше Windows сама переходила к «Microsoft AVC DX12 Encoder» из пакета «OpenCL, OpenGL и Vulkan Compatibility Pack», а он в таком случае закрывает всю программу. Что выбрано, видно в журнале работы.
+
+**Захват**
+- Windows: у окна захвата больше не бывает шапки. На некоторых системах сверху появлялась полоса с кнопками «свернуть» и «закрыть», окно захвата можно было таскать, а картинка сползала вниз и не закрывала панель задач. И сверху экранов больше нет полосы в 1 пиксель.
+
+---
+
+**Appearance**
+- Themes: in settings → general → appearance pick graphite, coal (pure black for OLED), midnight, forest, sunset or sakura, and an accent color of your own. Every window changes at once: capture, the editors, settings, history, the tray menu, the card after a capture, the recording pill.
+- A style of your own, theme.css: CSS-like rules over the theme. Instead of HTML tags, the parts of blinker's windows (`toolbar`, `button.ghost:hover`, `selection`, `card`…); the properties are color, background, border, corner radius, opacity, shadow, font size, variables like `--accent` and `var()`. The capture panels can be frosted glass on Windows too (`background: glass`). The file is picked up as soon as you save it; mistakes show in the settings with line numbers, and "use theme.css" turns the style off without deleting it.
+
+**Notification**
+- You can pick which monitor the card after a capture or a recording shows on: where the capture was, or a particular one. The monitors are shown as a map with the same numbers as in Windows' display settings.
+
+**Capture and editor**
+- Ctrl while drawing moves the shape being drawn, the way Ctrl moves a selection. Let go of Ctrl and drawing goes on from there.
+
+**Saving**
+- Metadata is taken out of every file blinker makes: screenshots, recordings, the replay, GIFs, video and sound exports. MP4s no longer carry the time they were made or the Windows version Media Foundation writes into them; pictures lose EXIF, text fields and comments. The "strip metadata" switch in settings → saving, on by default.
+
+**Recording**
+- blinker no longer crashes with an "Assertion failed … msh264enchmft_store.dll" box: when the graphics card's hardware encoder won't take a recording (a screen too wide for it, all its sessions taken), Windows' software encoder writes it. Before, Windows moved on by itself to the "Microsoft AVC DX12 Encoder" from the OpenCL, OpenGL and Vulkan Compatibility Pack, which closes the whole app in that case. The log says which one was used.
+
+**Capture**
+- Windows: the capture window no longer gets a title bar. On some systems a strip with the minimize and close buttons showed at the top, the capture window could be dragged around, and the picture slid down, leaving the taskbar uncovered. And there is no longer a 1 px strip at the top of the screens.
+
 ## 0.4.4
 
 **Прочее**

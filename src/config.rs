@@ -412,6 +412,18 @@ pub struct Config {
     pub tray_right_click: TrayAction,
     /// The tray menu as laid out in the settings.
     pub tray_menu: crate::tray::TrayMenu,
+    /// The built-in theme ("graphite", "midnight"…; theme.css goes on top).
+    pub theme: String,
+    /// An accent color of one's own over the theme's ("#7aa2ff"; empty: the theme's).
+    pub accent: String,
+    /// The user's theme.css goes over the theme (off: put aside, kept).
+    pub theme_css: bool,
+    /// Files come out without metadata: no time, no Windows build, no
+    /// program names (`strip.rs`).
+    pub strip_metadata: bool,
+    /// The monitor the card after a capture shows on: its rectangle
+    /// (x, y, width, height); none: where the capture or recording was.
+    pub toast_monitor: Option<[i32; 4]>,
     /// Set: a single left click waits a moment to see whether a second comes.
     pub tray_double_click: TrayAction,
     /// Install new versions by itself (in the background, then restart).
@@ -528,6 +540,11 @@ impl Default for Config {
             tray_click: if cfg!(target_os = "macos") { TrayAction::Menu } else { TrayAction::Region },
             tray_right_click: if cfg!(target_os = "macos") { TrayAction::Region } else { TrayAction::Menu },
             tray_menu: Default::default(),
+            theme: "graphite".into(),
+            accent: String::new(),
+            theme_css: true,
+            strip_metadata: true,
+            toast_monitor: None,
             tray_double_click: TrayAction::Nothing,
             auto_update: false,
             discord_presence: false,
@@ -836,6 +853,19 @@ pub fn load_failed_hotkeys() -> std::collections::HashSet<String> {
     std::fs::read_to_string(failed_hotkeys_path())
         .map(|s| s.lines().filter(|l| !l.is_empty()).map(String::from).collect())
         .unwrap_or_default()
+}
+
+/// The config as saved, without the rest of `load` (nothing migrated or
+/// written back): for a look at a setting from anywhere.
+pub fn peek() -> Config {
+    std::fs::read_to_string(config_path()).ok().and_then(|s| toml::from_str(&s).ok()).unwrap_or_default()
+}
+
+/// The theme and accent as saved (the theme reads them again whenever the
+/// file changes).
+pub fn theme_choice() -> (String, String, bool) {
+    let cfg = peek();
+    (cfg.theme, cfg.accent, cfg.theme_css)
 }
 
 pub fn load() -> Config {

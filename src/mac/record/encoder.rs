@@ -57,6 +57,8 @@ pub struct VideoSpec {
 
 pub struct Encoder {
     native: *mut c_void,
+    /// The file, for its metadata to go once it's done.
+    path: std::path::PathBuf,
 }
 
 // The native writer serializes appends internally.
@@ -95,7 +97,7 @@ impl Encoder {
         if native.is_null() {
             return Err(Error::new(err.text()));
         }
-        Ok(Self { native })
+        Ok(Self { native, path: path.to_path_buf() })
     }
 
     /// One captured frame (BGRA pixel buffer, exactly the video size).
@@ -136,7 +138,10 @@ impl Encoder {
         let mut err = ffi::ErrBuf::new();
         match unsafe { ffi::bk_writer_finish(self.native, err.ptr(), ffi::ErrBuf::LEN) } {
             0 => Err(Error::new(err.text())),
-            _ => Ok(()),
+            _ => {
+                crate::strip::file(&self.path);
+                Ok(())
+            }
         }
     }
 }
@@ -350,5 +355,7 @@ pub fn write_mp3(dst: &Path, pcm: &[i16], progress: &dyn Fn(f32)) -> std::result
     }
     out.reserve(7200);
     enc.flush_to_vec::<FlushNoGap>(&mut out).map_err(|e| e.to_string())?;
-    std::fs::write(dst, out).map_err(|e| e.to_string())
+    std::fs::write(dst, out).map_err(|e| e.to_string())?;
+    crate::strip::file(dst);
+    Ok(())
 }

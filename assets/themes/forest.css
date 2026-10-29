@@ -1,0 +1,21 @@
+/* лес: тёмная зелень */
+:root {
+  --bg: #131613;
+  --panel: #181c18;
+  --canvas: #0f120f;
+  --line: #263026;
+  --line-soft: #1e241e;
+  --line-hi: #344034;
+  --hover: #1e241e;
+  --active: #263026;
+  --text: #e2e9e0;
+  --text-2: #b2bdb0;
+  --dim: #8c988a;
+  --faint: #5f6a5e;
+  --faint-text: #7a8579;
+  --accent: #8fd694;
+  --accent-hi: #a9e3ad;
+  --on-accent: #0f120f;
+  --veil: rgba(9, 12, 9, .6);
+  --shade: rgba(15, 18, 15, .9);
+}

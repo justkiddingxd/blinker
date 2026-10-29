@@ -222,23 +222,23 @@ fn render(s: f32, on_left: bool) -> Option<sk::Pixmap> {
     pb.close();
     let tip = pb.finish()?;
     let line = sk::Stroke { width: px(1.0), ..Default::default() };
-    pm.stroke_path(&card, &paint_of(theme::LINE), &line, id, None);
-    pm.stroke_path(&tip, &paint_of(theme::LINE), &line, id, None);
-    pm.fill_path(&card, &paint_of(theme::PANEL), sk::FillRule::Winding, id, None);
-    pm.fill_path(&tip, &paint_of(theme::PANEL), sk::FillRule::Winding, id, None);
+    pm.stroke_path(&card, &paint_of(theme::LINE()), &line, id, None);
+    pm.stroke_path(&tip, &paint_of(theme::LINE()), &line, id, None);
+    pm.fill_path(&card, &paint_of(theme::PANEL()), sk::FillRule::Winding, id, None);
+    pm.fill_path(&tip, &paint_of(theme::PANEL()), sk::FillRule::Winding, id, None);
 
     // the sparkle, then the title next to it
     let mark_img = theme::mark_image(mark.round() as u32);
     let (mx, my) = ((x0 + pad).round() as i32, (pad + title_lh / 2.0 - mark / 2.0).round() as i32);
     for (x, y, p) in mark_img.enumerate_pixels() {
         if p.0[3] > 0 {
-            blend(&mut pm, mx + x as i32, my + y as i32, theme::ACCENT, p.0[3] as f32 / 255.0);
+            blend(&mut pm, mx + x as i32, my + y as i32, theme::ACCENT(), p.0[3] as f32 / 255.0);
         }
     }
     let tx = x0 + pad + mark + px(8.0);
     let mut y = pad;
     for t in &title_lines {
-        draw_text(&mut pm, &title_font, title_px, tx, y + title_lh / 2.0, t, theme::TEXT);
+        draw_text(&mut pm, &title_font, title_px, tx, y + title_lh / 2.0, t, theme::TEXT());
         y += title_lh;
     }
     y += px(10.0);
@@ -247,7 +247,7 @@ fn render(s: f32, on_left: bool) -> Option<sk::Pixmap> {
             y += para_gap;
         }
         for t in p {
-            draw_text(&mut pm, &body_font, body_px, x0 + pad, y + body_lh / 2.0, t, theme::DIM);
+            draw_text(&mut pm, &body_font, body_px, x0 + pad, y + body_lh / 2.0, t, theme::DIM());
             y += body_lh;
         }
     }

@@ -41,6 +41,8 @@ pub enum HomeTab {
     Hotkeys,
     /// The tray icon's clicks and its menu, laid out by dragging.
     Tray,
+    /// The theme, the accent, theme.css.
+    Look,
     /// Discord, ShareX, NVIDIA.
     Integrations,
     System,
@@ -229,14 +231,16 @@ impl Shared {
     }
 }
 
-/// Opens one native window and blocks until it closes.
+/// Opens one native window and blocks until it closes. `scope`: which
+/// window it is to the theme ("overlay", "editor"…).
 pub fn run_window<A: eframe::App + 'static>(
     shared: &Arc<Shared>,
+    scope: &'static str,
     viewport: egui::ViewportBuilder,
     centered: bool,
     make: impl FnOnce(&eframe::CreationContext<'_>) -> A + 'static,
 ) {
-    run_with(shared, viewport, centered, eframe::Renderer::Glow, make);
+    run_with(shared, scope, viewport, centered, eframe::Renderer::Glow, make);
 }
 
 /// `run_window` for a window people move around in (settings, history).
@@ -246,6 +250,7 @@ pub fn run_window<A: eframe::App + 'static>(
 /// a game ("Press Alt+Z to open NVIDIA Overlay" on every open).
 pub fn run_smooth_window<A: eframe::App + 'static>(
     shared: &Arc<Shared>,
+    scope: &'static str,
     viewport: egui::ViewportBuilder,
     centered: bool,
     make: impl FnOnce(&eframe::CreationContext<'_>) -> A + 'static,
@@ -254,11 +259,12 @@ pub fn run_smooth_window<A: eframe::App + 'static>(
     let renderer = eframe::Renderer::Wgpu;
     #[cfg(not(target_os = "macos"))]
     let renderer = eframe::Renderer::Glow;
-    run_with(shared, viewport, centered, renderer, make);
+    run_with(shared, scope, viewport, centered, renderer, make);
 }
 
 fn run_with<A: eframe::App + 'static>(
     shared: &Arc<Shared>,
+    scope: &'static str,
     viewport: egui::ViewportBuilder,
     centered: bool,
     renderer: eframe::Renderer,
@@ -281,6 +287,7 @@ fn run_with<A: eframe::App + 'static>(
         "Blinker",
         options,
         Box::new(move |cc| {
+            theme::set_scope(scope);
             theme::apply(&cc.egui_ctx);
             *shared2.ctx.lock().unwrap() = Some(cc.egui_ctx.clone());
             Ok(Box::new(make(cc)))

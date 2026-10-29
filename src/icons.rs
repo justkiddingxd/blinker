@@ -60,6 +60,8 @@ pub enum Icon {
     Pipette,
     /// Tiles over a list: the tray menu.
     Menu,
+    /// A painter's palette: the look of blinker.
+    Palette,
 }
 
 /// (points, closed)
@@ -192,6 +194,16 @@ pub fn paths(icon: Icon) -> Vec<Path> {
             p(&[(7.0, 4.5), (11.5, 9.0)], false),
             (arc(11.6, 4.4, 2.3, 2.3, 120.0, 330.0), false),
         ],
+        Palette => {
+            let mut board = arc(8.0, 8.0, 6.0, 6.0, 35.0, 325.0);
+            board.push(pos2(10.2, 8.0));
+            vec![
+                (board, true),
+                (arc(5.3, 6.4, 1.0, 1.0, 0.0, 360.0), true),
+                (arc(8.6, 4.7, 1.0, 1.0, 0.0, 360.0), true),
+                (arc(5.6, 10.3, 1.0, 1.0, 0.0, 360.0), true),
+            ]
+        }
         Menu => vec![rect(2.5, 2.5, 6.5, 6.5), rect(9.5, 2.5, 13.5, 6.5), p(&[(2.5, 10.0), (13.5, 10.0)], false), p(&[(2.5, 13.0), (10.5, 13.0)], false)],
         Scan => vec![
             p(&[(1.5, 5.0), (1.5, 1.5), (5.0, 1.5)], false),

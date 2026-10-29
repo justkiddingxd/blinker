@@ -90,7 +90,9 @@ pub fn write(img: &RgbaImage, path: &Path, format: ImageFormat, jpeg_quality: u8
     };
     res.map_err(|e| e.to_string())?;
     drop(w);
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+    crate::strip::file(path);
+    Ok(())
 }
 
 /// Puts a file on the clipboard (paste into Explorer, Telegram, Discord...).

@@ -46,7 +46,7 @@ pub fn glass_bar(hwnd: crate::win::HWND, width: f32, bar_h: f32) {
 
 /// The fill of a title bar: clear over the glass pane, else the panel color.
 pub fn bar_fill() -> egui::Color32 {
-    if crate::theme::glass() { egui::Color32::TRANSPARENT } else { crate::theme::PANEL }
+    if crate::theme::glass() { egui::Color32::TRANSPARENT } else { crate::theme::PANEL() }
 }
 
 /// Room for the macOS window buttons at the start of a title bar.
@@ -92,9 +92,9 @@ fn button(ui: &mut Ui, h: f32, glyph: Glyph, danger: bool) -> egui::Response {
     let p = ui.painter();
     let hovered = resp.hovered();
     if hovered {
-        p.rect_filled(rect, 0, if danger { DANGER } else { HOVER });
+        p.rect_filled(rect, 0, if danger { DANGER() } else { HOVER() });
     }
-    let fg = if hovered { TEXT } else { DIM };
+    let fg = if hovered { TEXT() } else { DIM() };
     let c = rect.center();
     let s = Stroke::new(1.0, fg);
     match glyph {
@@ -113,7 +113,7 @@ pub fn frame_border(ctx: &egui::Context) {
         return;
     }
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("chrome-border")));
-    painter.rect_stroke(ctx.content_rect(), 0, Stroke::new(1.0, LINE), egui::StrokeKind::Inside);
+    painter.rect_stroke(ctx.content_rect(), 0, Stroke::new(1.0, LINE()), egui::StrokeKind::Inside);
 }
 
 /// The mark used in title bars: the logo sparkle.

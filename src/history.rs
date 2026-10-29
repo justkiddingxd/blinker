@@ -204,7 +204,7 @@ pub fn run(shared: &Arc<Shared>, tab: Tab) {
         .with_transparent(theme::glass());
     let viewport = chrome::style(viewport);
     let shared2 = shared.clone();
-    runtime::run_smooth_window(shared, viewport, true, move |cc| {
+    runtime::run_smooth_window(shared, "history", viewport, true, move |cc| {
         let hwnd = win::hwnd_of(cc);
         if let Some(h) = hwnd {
             win::style_borderless(h);
@@ -368,17 +368,17 @@ fn menu_row(ui: &mut egui::Ui, icon: Icon, label: &str) -> bool {
     let (r, resp) = ui.allocate_exact_size(vec2(MENU_W - 10.0, 30.0), Sense::click());
     let p = ui.painter();
     if resp.hovered() {
-        p.rect_filled(r, 6, HOVER);
+        p.rect_filled(r, 6, HOVER());
     }
     let icon_r = Rect::from_center_size(pos2(r.left() + 18.0, r.center().y), Vec2::splat(16.0));
-    icons::paint(p, icon_r, icon, 14.0, if resp.hovered() { TEXT } else { DIM });
-    p.text(pos2(r.left() + 36.0, r.center().y), Align2::LEFT_CENTER, label, font(13.0), TEXT);
+    icons::paint(p, icon_r, icon, 14.0, if resp.hovered() { TEXT() } else { DIM() });
+    p.text(pos2(r.left() + 36.0, r.center().y), Align2::LEFT_CENTER, label, font(13.0), TEXT());
     resp.on_hover_cursor(CursorIcon::PointingHand).clicked()
 }
 
 fn menu_sep(ui: &mut egui::Ui) {
     let (r, _) = ui.allocate_exact_size(vec2(MENU_W - 10.0, 9.0), Sense::hover());
-    ui.painter().hline(r.shrink2(vec2(8.0, 0.0)).x_range(), r.center().y, Stroke::new(1.0, LINE));
+    ui.painter().hline(r.shrink2(vec2(8.0, 0.0)).x_range(), r.center().y, Stroke::new(1.0, LINE()));
 }
 
 impl HistoryApp {
@@ -453,18 +453,18 @@ impl HistoryApp {
         egui::Panel::top("bar")
             .exact_size(BAR_H)
             .show_separator_line(false)
-            .frame(egui::Frame::new().fill(if glass { Color32::TRANSPARENT } else { PANEL }))
+            .frame(egui::Frame::new().fill(if glass { Color32::TRANSPARENT } else { PANEL() }))
             .show(ui, |ui| {
                 let r = ui.max_rect();
                 chrome::drag_region(ui, r);
                 if !glass {
-                    ui.painter().hline(r.x_range(), r.bottom() - 0.5, Stroke::new(1.0, LINE));
+                    ui.painter().hline(r.x_range(), r.bottom() - 0.5, Stroke::new(1.0, LINE()));
                 }
                 ui.horizontal_centered(|ui| {
                     ui.add_space(14.0);
                     chrome::leading_space(ui);
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    ui.label(egui::RichText::new(l("история", "history")).font(font_semibold(16.0)).color(TEXT));
+                    ui.label(egui::RichText::new(l("история", "history")).font(font_semibold(16.0)).color(TEXT()));
                     ui.add_space(10.0);
                     ui.spacing_mut().item_spacing.x = 2.0;
                     let count = |k: Kind| self.items.iter().filter(|i| i.kind == k || (k == Kind::Video && i.kind == Kind::Other)).count();
@@ -545,7 +545,7 @@ impl HistoryApp {
             let d = day_title(items[i].modified);
             if d != day {
                 ui.add_space(if day.is_empty() { 4.0 } else { 18.0 });
-                ui.label(egui::RichText::new(&d).font(font_medium(13.0)).color(DIM));
+                ui.label(egui::RichText::new(&d).font(font_medium(13.0)).color(DIM()));
                 ui.add_space(8.0);
                 day = d.clone();
             }
@@ -572,7 +572,7 @@ impl HistoryApp {
         }
         let thumb = Rect::from_min_size(rect.min, vec2(w, h));
         let p = ui.painter().clone();
-        p.rect_filled(thumb, 10, CANVAS);
+        p.rect_filled(thumb, 10, CANVAS());
         match self.texture(ui.ctx(), &it.path) {
             Some(tex) => {
                 let uv = ui::cover_uv(thumb.size(), tex.size_vec2());
@@ -584,7 +584,7 @@ impl HistoryApp {
                     Kind::Video => Icon::Video,
                     Kind::Other => Icon::Sound,
                 };
-                icons::paint(&p, thumb, icon, 22.0, FAINT);
+                icons::paint(&p, thumb, icon, 22.0, FAINT());
             }
         }
         p.rect_stroke(thumb, 10, Stroke::new(1.0, Color32::from_white_alpha(14)), StrokeKind::Inside);
@@ -598,9 +598,9 @@ impl HistoryApp {
         if renaming {
             self.rename_field(ui, name_r);
         } else {
-            let ng = p.layout(name, font_medium(12.5), TEXT, w);
+            let ng = p.layout(name, font_medium(12.5), TEXT(), w);
             let ng_h = ng.size().y.min(18.0);
-            p.with_clip_rect(Rect::from_min_size(pos2(rect.left(), thumb.bottom() + 7.0), vec2(w, ng_h))).galley(pos2(rect.left(), thumb.bottom() + 7.0), ng, TEXT);
+            p.with_clip_rect(Rect::from_min_size(pos2(rect.left(), thumb.bottom() + 7.0), vec2(w, ng_h))).galley(pos2(rect.left(), thumb.bottom() + 7.0), ng, TEXT());
             let nr = ui.interact(name_r, ui.scope_id().with((&it.path, "name")), Sense::click());
             if nr.on_hover_cursor(CursorIcon::Text).on_hover_text(l("двойной клик: переименовать", "double click: rename")).double_clicked() {
                 self.start_rename(&it.path);
@@ -611,7 +611,7 @@ impl HistoryApp {
             Align2::LEFT_CENTER,
             format!("{} · {ext} · {}", clock(it.modified), human_size(it.size)),
             mono(11.0),
-            FAINT,
+            FAINT(),
         );
 
         // an upload going on: its progress over the picture
@@ -619,7 +619,7 @@ impl HistoryApp {
             match job.result() {
                 None => {
                     p.rect_filled(thumb, 10, Color32::from_black_alpha(140));
-                    p.text(thumb.center(), Align2::CENTER_CENTER, lf!("загрузка {:.0}%", "uploading {:.0}%", job.fraction() * 100.0), mono(12.0), TEXT);
+                    p.text(thumb.center(), Align2::CENTER_CENTER, lf!("загрузка {:.0}%", "uploading {:.0}%", job.fraction() * 100.0), mono(12.0), TEXT());
                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
                 }
                 Some(r) => {
@@ -670,8 +670,8 @@ impl HistoryApp {
             .fixed_pos(pos2(x.max(win.left()), y))
             .show(ctx, |ui| {
                 egui::Frame::new()
-                    .fill(PANEL)
-                    .stroke(Stroke::new(1.0, LINE))
+                    .fill(PANEL())
+                    .stroke(Stroke::new(1.0, LINE()))
                     .corner_radius(10)
                     .inner_margin(egui::Margin::same(5))
                     .shadow(egui::epaint::Shadow { offset: [0, 6], blur: 20, spread: 0, color: Color32::from_black_alpha(90) })
@@ -752,7 +752,7 @@ impl HistoryApp {
             egui::TextEdit::singleline(buf)
                 .id(id)
                 .font(font_medium(12.5))
-                .text_color(TEXT)
+                .text_color(TEXT())
                 .desired_width(r.width())
                 .margin(vec2(4.0, 2.0)),
         );
@@ -792,7 +792,7 @@ impl HistoryApp {
         ui.label(
             egui::RichText::new(l("на post.blinker.cool файлы живут 3 дня, потом пропадают и отсюда", "files live 3 days on post.blinker.cool, then they're gone from here too"))
                 .font(font(12.0))
-                .color(FAINT),
+                .color(FAINT()),
         );
     }
 
@@ -812,13 +812,13 @@ impl HistoryApp {
         let p = ui.painter().clone();
         // the picture
         let pic = Rect::from_min_size(row.min + vec2(12.0, 10.0), vec2(112.0, 64.0));
-        p.rect_filled(pic, 8, CANVAS);
+        p.rect_filled(pic, 8, CANVAS());
         match &tex {
             Some(t) => {
                 let uv = ui::cover_uv(pic.size(), t.size_vec2());
                 p.add(egui::epaint::RectShape::filled(pic, egui::CornerRadius::same(8), Color32::WHITE).with_texture(t.id(), uv));
             }
-            None => icons::paint(&p, pic, if video { Icon::Video } else { Icon::Region }, 20.0, FAINT),
+            None => icons::paint(&p, pic, if video { Icon::Video } else { Icon::Region }, 20.0, FAINT()),
         }
         p.rect_stroke(pic, 8, Stroke::new(1.0, Color32::from_white_alpha(14)), StrokeKind::Inside);
         if video && tex.is_some() {
@@ -840,9 +840,9 @@ impl HistoryApp {
             let g = p.layout(text.to_owned(), f, c, f32::INFINITY);
             p.with_clip_rect(Rect::from_min_size(pos2(text_left, y - 10.0), vec2(width, 20.0))).galley(pos2(text_left, y - g.size().y / 2.0), g, c);
         };
-        line(pic.top() + 12.0, &name, font_medium(13.0), TEXT);
-        line(pic.top() + 32.0, &u.url, mono(11.5), DIM);
-        line(pic.top() + 51.0, &desc, font(11.5), FAINT);
+        line(pic.top() + 12.0, &name, font_medium(13.0), TEXT());
+        line(pic.top() + 32.0, &u.url, mono(11.5), DIM());
+        line(pic.top() + 51.0, &desc, font(11.5), FAINT());
 
         // the link's buttons
         let mut buttons = ui.new_child(
@@ -854,7 +854,7 @@ impl HistoryApp {
         bui.spacing_mut().item_spacing.x = 4.0;
         match &state {
             Some(None) => {
-                bui.label(egui::RichText::new(l("удаляю…", "deleting…")).font(font(12.5)).color(DIM));
+                bui.label(egui::RichText::new(l("удаляю…", "deleting…")).font(font(12.5)).color(DIM()));
             }
             _ => {
                 let confirm = self.confirm.as_deref() == Some(u.url.as_str());
@@ -903,15 +903,15 @@ impl HistoryApp {
 fn empty(ui: &mut egui::Ui, title: &str, sub: &str) {
     ui.add_space(90.0);
     ui.vertical_centered(|ui| {
-        ui.label(egui::RichText::new(title).font(font_semibold(17.0)).color(TEXT));
+        ui.label(egui::RichText::new(title).font(font_semibold(17.0)).color(TEXT()));
         ui.add_space(6.0);
-        ui.label(egui::RichText::new(sub).font(font(13.0)).color(DIM));
+        ui.label(egui::RichText::new(sub).font(font(13.0)).color(DIM()));
     });
 }
 
 impl eframe::App for HistoryApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        if theme::glass() { [0.0; 4] } else { BG.to_normalized_gamma_f32() }
+        if theme::glass() { [0.0; 4] } else { BG().to_normalized_gamma_f32() }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -927,7 +927,7 @@ impl eframe::App for HistoryApp {
         }
         self.top_bar(ui);
         // on glass the list is clear: the frosted window shows through
-        let fill = if theme::glass() { Color32::TRANSPARENT } else { BG };
+        let fill = if theme::glass() { Color32::TRANSPARENT } else { BG() };
         egui::CentralPanel::no_frame().frame(egui::Frame::new().fill(fill)).show(ui, |ui| {
             self.content = ui.max_rect();
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {

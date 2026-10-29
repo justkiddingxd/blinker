@@ -1,0 +1,21 @@
+/* сакура: розовый */
+:root {
+  --bg: #171316;
+  --panel: #1d181c;
+  --canvas: #120f11;
+  --line: #302630;
+  --line-soft: #251e24;
+  --line-hi: #413341;
+  --hover: #251e24;
+  --active: #302630;
+  --text: #f0e4ec;
+  --text-2: #c4b0bd;
+  --dim: #9b8795;
+  --faint: #6b5c66;
+  --faint-text: #85737f;
+  --accent: #ff8fc8;
+  --accent-hi: #ffadd7;
+  --on-accent: #171316;
+  --veil: rgba(13, 9, 12, .6);
+  --shade: rgba(18, 15, 17, .9);
+}

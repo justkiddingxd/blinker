@@ -1,5 +1,6 @@
 //! Small custom-painted widgets shared by all windows (Graphite style).
 
+use crate::css;
 use crate::icons::{self, Icon};
 use crate::theme::{self, *};
 use eframe::egui::{
@@ -20,32 +21,32 @@ pub enum Kind {
 
 /// A raised plate: the chosen section, option or tab.
 pub fn plate() -> Color32 {
-    if theme::glass() { Color32::from_white_alpha(20) } else { ACTIVE }
+    if theme::glass() { Color32::from_white_alpha(20) } else { ACTIVE() }
 }
 
 /// Under the pointer.
 pub fn hover_fill() -> Color32 {
-    if theme::glass() { Color32::from_white_alpha(11) } else { HOVER }
+    if theme::glass() { Color32::from_white_alpha(11) } else { HOVER() }
 }
 
 /// A card of settings.
 pub fn card_fill() -> Color32 {
-    if theme::glass() { Color32::from_white_alpha(8) } else { PANEL }
+    if theme::glass() { Color32::from_white_alpha(8) } else { PANEL() }
 }
 
 /// Edges of cards and lines between their rows.
 pub fn hairline() -> Color32 {
-    if theme::glass() { Color32::from_white_alpha(14) } else { LINE_SOFT }
+    if theme::glass() { Color32::from_white_alpha(14) } else { LINE_SOFT() }
 }
 
 /// A sunken well: key caps, fields, small previews.
 pub fn well() -> Color32 {
-    if theme::glass() { Color32::from_black_alpha(70) } else { CANVAS }
+    if theme::glass() { Color32::from_black_alpha(70) } else { CANVAS() }
 }
 
 /// The edge of a well or a small plate.
 pub fn edge() -> Color32 {
-    if theme::glass() { Color32::from_white_alpha(24) } else { LINE }
+    if theme::glass() { Color32::from_white_alpha(24) } else { LINE() }
 }
 
 /// Corner radius of rows and small plates: rounder on glass.
@@ -56,17 +57,31 @@ pub fn soft_radius(flat: u8) -> u8 {
 /// A side panel of a window (tools, properties, a status line): clear on
 /// glass, the frosted window shows through.
 pub fn pane_fill() -> Color32 {
-    if theme::glass() { Color32::TRANSPARENT } else { PANEL }
+    theme::look("panel", 0).bg_or(if theme::glass() { Color32::TRANSPARENT } else { PANEL() })
+}
+
+/// What a picture or a video is shown on (the editors' backdrop).
+pub fn canvas_fill() -> Color32 {
+    theme::look("canvas", 0).bg_or(CANVAS())
 }
 
 /// The fill of a card floating over a window (a dialog, a note, a popup).
 pub fn float_fill() -> Color32 {
-    if theme::glass() { Color32::from_rgba_unmultiplied(30, 30, 29, 236) } else { PANEL }
+    if theme::glass() { Color32::from_rgba_unmultiplied(30, 30, 29, 236) } else { PANEL() }
 }
 
 /// A card floating over a window: on glass a dark pane with a light rim,
 /// round and with a soft shadow; else the flat panel, `flat_radius` round.
 pub fn float_frame(flat_radius: u8) -> egui::Frame {
+    let look = theme::look("popup", 0);
+    if look != css::Look::default() {
+        let r = look.radius.map_or(flat_radius, |r| r.round() as u8);
+        let mut f = egui::Frame::new().fill(look.bg_or(float_fill())).stroke(look.border_or(Stroke::new(1.0, LINE()))).corner_radius(r);
+        if let Some(Some(s)) = look.shadow {
+            f = f.shadow(egui::epaint::Shadow { offset: [s.x as i8, s.y as i8], blur: s.blur as u8, spread: 0, color: s.color });
+        }
+        return f;
+    }
     if theme::glass() {
         egui::Frame::new()
             .fill(float_fill())
@@ -74,7 +89,7 @@ pub fn float_frame(flat_radius: u8) -> egui::Frame {
             .corner_radius(16)
             .shadow(egui::epaint::Shadow { offset: [0, 10], blur: 30, spread: 0, color: Color32::from_black_alpha(90) })
     } else {
-        egui::Frame::new().fill(PANEL).stroke(Stroke::new(1.0, LINE)).corner_radius(flat_radius)
+        egui::Frame::new().fill(PANEL()).stroke(Stroke::new(1.0, LINE())).corner_radius(flat_radius)
     }
 }
 
@@ -89,8 +104,8 @@ pub fn paint_float(p: &egui::Painter, rect: Rect, flat_radius: u8, alpha: f32) {
         let inset = r as f32;
         p.rect_filled(Rect::from_min_size(rect.min + vec2(inset, 1.0), vec2(rect.width() - 2.0 * inset, 1.0)), 0, Color32::from_white_alpha(26).gamma_multiply(alpha));
     } else {
-        p.rect_filled(rect, flat_radius, PANEL.gamma_multiply(alpha));
-        p.rect_stroke(rect, flat_radius, Stroke::new(1.0, LINE.gamma_multiply(alpha)), StrokeKind::Inside);
+        p.rect_filled(rect, flat_radius, PANEL().gamma_multiply(alpha));
+        p.rect_stroke(rect, flat_radius, Stroke::new(1.0, LINE().gamma_multiply(alpha)), StrokeKind::Inside);
     }
 }
 
@@ -103,6 +118,41 @@ fn hover_t(ui: &Ui, resp: &Response) -> f32 {
     ui.ctx().animate_bool_with_time(resp.id.with("hover"), resp.hovered(), 0.08)
 }
 
+/// A control as the theme has it: its own colors (`plain`, and `hover`
+/// under the pointer: fill, text) where the theme says nothing, blended by
+/// the hover animation `h`.
+pub struct Themed {
+    pub fill: Color32,
+    pub fg: Color32,
+    pub border: Stroke,
+    pub radius: Option<f32>,
+}
+
+pub fn themed(path: &str, states: u8, h: f32, plain: (Color32, Color32), hover: (Color32, Color32)) -> Themed {
+    let a = theme::look(path, states);
+    let b = if h > 0.0 { theme::look(path, states | css::state::HOVER) } else { a.clone() };
+    let fade = |c: Color32, o: Option<f32>| o.map_or(c, |o| c.gamma_multiply(o));
+    Themed {
+        fill: fade(theme::lerp_color(a.bg_or(plain.0), b.bg_or(hover.0), h), a.opacity),
+        fg: fade(theme::lerp_color(a.fg_or(plain.1), b.fg_or(hover.1), h), a.opacity),
+        border: if h > 0.5 { b.border } else { a.border }.unwrap_or(Stroke::NONE),
+        radius: a.radius,
+    }
+}
+
+/// The states of a control for the theme: held down, chosen, turned off.
+pub fn states_of(ui: &Ui, resp: &Response, checked: bool) -> u8 {
+    use css::state::*;
+    let mut s = if checked { CHECKED } else { 0 };
+    if resp.is_pointer_button_down_on() {
+        s |= ACTIVE;
+    }
+    if !ui.is_enabled() {
+        s |= DISABLED;
+    }
+    s
+}
+
 /// Square icon button. `active` = selected tool (accent icon on a lighter plate).
 pub fn icon_button(ui: &mut Ui, icon: Icon, tip: &str, size: f32, active: bool, kind: Kind) -> Response {
     icon_button_sized(ui, icon, tip, size, 16.0, active, kind)
@@ -113,19 +163,19 @@ pub fn icon_button_sized(ui: &mut Ui, icon: Icon, tip: &str, size: f32, icon_siz
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
     let h = hover_t(ui, &resp);
     let painter = ui.painter();
-    let (fill, fg) = match (kind, active) {
-        (Kind::Accent, _) => (theme::lerp_color(ACCENT, ACCENT_HI, h), ON_ACCENT),
-        (Kind::Ghost, true) => (plate(), ACCENT),
-        (Kind::Ghost, false) => (
-            theme::lerp_color(Color32::TRANSPARENT, hover_fill(), h),
-            theme::lerp_color(TEXT2, TEXT, h),
-        ),
+    let ((plain, hover), path) = match (kind, active) {
+        (Kind::Accent, _) => (((ACCENT(), ON_ACCENT()), (ACCENT_HI(), ON_ACCENT())), "button.icon.accent"),
+        (Kind::Ghost, true) => (((plate(), ACCENT()), (plate(), ACCENT())), "button.icon.ghost"),
+        (Kind::Ghost, false) => (((Color32::TRANSPARENT, TEXT2()), (hover_fill(), TEXT())), "button.icon.ghost"),
     };
-    let fg = if ui.is_enabled() { fg } else { FAINT.gamma_multiply(0.6) };
+    let disabled = (Color32::TRANSPARENT, FAINT().gamma_multiply(0.6));
+    let (plain, hover) = if ui.is_enabled() { (plain, hover) } else { (disabled, disabled) };
+    let look = themed(path, states_of(ui, &resp, active), h, plain, hover);
     // glass: soft squircles; flat: nearly square
-    let radius = if theme::glass() { size * 0.3 } else { size * 0.12 };
-    painter.rect_filled(rect, radius.round() as u8, fill);
-    icons::paint(painter, rect, icon, icon_size, fg);
+    let radius = look.radius.unwrap_or(if theme::glass() { size * 0.3 } else { size * 0.12 });
+    painter.rect_filled(rect, radius.round() as u8, look.fill);
+    painter.rect_stroke(rect, radius.round() as u8, look.border, StrokeKind::Inside);
+    icons::paint(painter, rect, icon, icon_size, look.fg);
     let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
     if tip.is_empty() { resp } else { resp.on_hover_text(tip) }
 }
@@ -136,17 +186,21 @@ pub fn button(ui: &mut Ui, label: &str, kind: Kind) -> Response {
 }
 
 pub fn button_h(ui: &mut Ui, label: &str, kind: Kind, height: f32) -> Response {
+    let path = if kind == Kind::Accent { "button.accent" } else { "button.ghost" };
+    let size = theme::look(path, 0).font_size.unwrap_or(13.0).clamp(8.0, height - 6.0);
     // PLACEHOLDER: the color passed to `galley()` below decides.
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), font_medium(13.0), Color32::PLACEHOLDER);
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font_medium(size), Color32::PLACEHOLDER);
     let size = vec2(galley.size().x + if theme::glass() { 28.0 } else { 24.0 }, height);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let h = hover_t(ui, &resp);
-    let (fill, fg) = match kind {
-        Kind::Accent => (theme::lerp_color(ACCENT, ACCENT_HI, h), ON_ACCENT),
-        Kind::Ghost => (theme::lerp_color(Color32::TRANSPARENT, hover_fill(), h), theme::lerp_color(TEXT2, TEXT, h)),
+    let look = match kind {
+        Kind::Accent => themed(path, states_of(ui, &resp, false), h, (ACCENT(), ON_ACCENT()), (ACCENT_HI(), ON_ACCENT())),
+        Kind::Ghost => themed(path, states_of(ui, &resp, false), h, (Color32::TRANSPARENT, TEXT2()), (hover_fill(), TEXT())),
     };
-    ui.painter().rect_filled(rect, control_radius(height, 3.0), fill);
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
+    let radius = look.radius.map_or(control_radius(height, 3.0), |r| r.round() as u8);
+    ui.painter().rect_filled(rect, radius, look.fill);
+    ui.painter().rect_stroke(rect, radius, look.border, StrokeKind::Inside);
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, look.fg);
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
 
@@ -174,25 +228,28 @@ pub fn filter(ui: &mut Ui, label: &str, on: bool) -> Response {
     ui.data_mut(|d| d.insert_temp(run_key, (pass, group, ui.cursor().min, slot)));
     let h = hover_t(ui, &resp);
     let p = ui.painter();
-    let radius = control_radius(rect.height(), 6.0);
+    let chosen = theme::look("option", css::state::CHECKED);
+    let look = themed("option", states_of(ui, &resp, false), h, (Color32::TRANSPARENT, DIM()), (hover_fill(), TEXT()));
+    let radius = chosen.radius.map_or(control_radius(rect.height(), 6.0), |r| r.round() as u8);
     if on {
         let x = ui.ctx().animate_value_with_time(key.with("x"), rect.left(), 0.2);
         let w = ui.ctx().animate_value_with_time(key.with("w"), rect.width(), 0.2);
         let plate_rect = Rect::from_min_size(pos2(x, rect.top()), vec2(w, rect.height()));
-        let edge = if theme::glass() { Color32::from_white_alpha(26) } else { LINE_HI };
+        let edge = if theme::glass() { Color32::from_white_alpha(26) } else { LINE_HI() };
         p.set(
             slot,
             egui::Shape::Vec(vec![
-                egui::epaint::RectShape::filled(plate_rect, radius, plate()).into(),
-                egui::epaint::RectShape::stroke(plate_rect, radius, Stroke::new(1.0, edge), StrokeKind::Inside).into(),
+                egui::epaint::RectShape::filled(plate_rect, radius, chosen.bg_or(plate())).into(),
+                egui::epaint::RectShape::stroke(plate_rect, radius, chosen.border_or(Stroke::new(1.0, edge)), StrokeKind::Inside).into(),
             ]),
         );
     } else {
-        p.rect_filled(rect, radius, theme::lerp_color(Color32::TRANSPARENT, hover_fill(), h));
+        p.rect_filled(rect, radius, look.fill);
+        p.rect_stroke(rect, radius, look.border, StrokeKind::Inside);
     }
     // the label brightens as the plate arrives
     let t = ui.ctx().animate_bool_with_time(resp.id.with("on"), on, 0.2);
-    let fg = theme::lerp_color(theme::lerp_color(DIM, TEXT, h), TEXT, t);
+    let fg = theme::lerp_color(look.fg, chosen.fg_or(TEXT()), t);
     p.galley(rect.center() - galley.size() / 2.0, galley, fg);
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
@@ -225,11 +282,12 @@ pub fn slider(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>
     let y = rect.center().y;
     let x = track.left() + f * track.width();
     let rail = Rect::from_min_max(pos2(track.left(), y - 2.0), pos2(track.right(), y + 2.0));
-    p.rect_filled(rail, 2, if theme::glass() { Color32::from_white_alpha(34) } else { LINE });
-    p.rect_filled(Rect::from_min_max(rail.min, pos2(x, rail.max.y)), 2, if on { ACCENT } else { FAINT });
+    let look = theme::look("slider", states_of(ui, &resp, false));
+    p.rect_filled(rail, 2, look.bg_or(if theme::glass() { Color32::from_white_alpha(34) } else { LINE() }));
+    p.rect_filled(Rect::from_min_max(rail.min, pos2(x, rail.max.y)), 2, if on { look.fg_or(ACCENT()) } else { FAINT() });
     let r = KNOB + if resp.dragged() { 1.0 } else { 0.0 };
     p.circle_filled(pos2(x, y + 1.0), r + 1.0, Color32::from_black_alpha(70));
-    p.circle_filled(pos2(x, y), r, if on { theme::lerp_color(TEXT, ACCENT_HI, h) } else { DIM });
+    p.circle_filled(pos2(x, y), r, if on { theme::lerp_color(TEXT(), ACCENT_HI(), h) } else { DIM() });
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
 
@@ -243,15 +301,19 @@ pub fn toggle(ui: &mut Ui, on: &mut bool) -> Response {
     let t = ui.ctx().animate_bool_with_time(resp.id, *on, 0.14);
     let h = hover_t(ui, &resp);
     let p = ui.painter();
-    let track = theme::lerp_color(theme::lerp_color(LINE, LINE_HI, h), ACCENT, t);
-    p.rect_filled(rect, 10, track);
+    let st = states_of(ui, &resp, false);
+    let off = themed("toggle", st, h, (LINE(), DIM()), (LINE_HI(), DIM()));
+    let lit = themed("toggle", st | css::state::CHECKED, h, (ACCENT(), ON_ACCENT()), (ACCENT(), ON_ACCENT()));
+    let radius = off.radius.map_or(10, |r| r.round() as u8);
+    p.rect_filled(rect, radius, theme::lerp_color(off.fill, lit.fill, t));
+    p.rect_stroke(rect, radius, if t > 0.5 { lit.border } else { off.border }, StrokeKind::Inside);
     let x = egui::lerp((rect.left() + 10.0)..=(rect.right() - 10.0), t);
-    p.circle_filled(pos2(x, rect.center().y), 7.0, theme::lerp_color(DIM, ON_ACCENT, t));
+    p.circle_filled(pos2(x, rect.center().y), 7.0, theme::lerp_color(off.fg, lit.fg, t));
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
 
 pub fn section_label(ui: &mut Ui, text: &str) {
-    ui.label(egui::RichText::new(text).font(font_medium(11.0)).color(FAINT));
+    ui.label(egui::RichText::new(text).font(font_medium(11.0)).color(FAINT()));
 }
 
 /// Settings row: title + description left, control right, hairline below.
@@ -261,14 +323,15 @@ pub fn group(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
     if !title.is_empty() {
         ui.horizontal(|ui| {
             ui.add_space(2.0);
-            ui.label(egui::RichText::new(title).font(font_medium(12.0)).color(DIM));
+            ui.label(egui::RichText::new(title).font(font_medium(12.0)).color(DIM()));
         });
         ui.add_space(7.0);
     }
+    let look = theme::look("card", 0);
     egui::Frame::new()
-        .fill(card_fill())
-        .stroke(Stroke::new(1.0, hairline()))
-        .corner_radius(if theme::glass() { 14 } else { 10 })
+        .fill(look.bg_or(card_fill()))
+        .stroke(look.border_or(Stroke::new(1.0, hairline())))
+        .corner_radius(look.radius.map_or(if theme::glass() { 14 } else { 10 }, |r| r.round() as u8))
         .inner_margin(egui::Margin::symmetric(16, 0))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -298,24 +361,24 @@ pub fn setting_row(ui: &mut Ui, title: &str, desc: &str, control: impl FnOnce(&m
     // a description wraps and wants a fair share of the row; a bare title
     // only its own width
     let need = if desc.is_empty() {
-        ui.painter().layout_no_wrap(title.to_owned(), font(13.0), TEXT).size().x + 8.0
+        ui.painter().layout_no_wrap(title.to_owned(), font(13.0), TEXT()).size().x + 8.0
     } else {
         w * 0.42
     };
     let stacked = w - ctrl_w - 16.0 < need;
     let text_w = if stacked { w } else { (w - ctrl_w - 16.0).max(80.0) };
-    let tg = ui.painter().layout(title.to_owned(), font(13.0), TEXT, text_w);
-    let dg = (!desc.is_empty()).then(|| ui.painter().layout(desc.to_owned(), font(11.5), FAINT_TEXT, text_w));
+    let tg = ui.painter().layout(title.to_owned(), font(13.0), TEXT(), text_w);
+    let dg = (!desc.is_empty()).then(|| ui.painter().layout(desc.to_owned(), font(11.5), FAINT_TEXT(), text_w));
     let text_h = tg.size().y + dg.as_ref().map(|g| g.size().y + 2.0).unwrap_or(0.0);
     let ctrl_h = ctrl_h.max(20.0);
     let h = if stacked { text_h + ctrl_h + 24.0 } else { (text_h + 20.0).max(ctrl_h + 16.0).max(46.0) };
     let (rect, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
     let mut y = if stacked { rect.top() + 7.0 } else { rect.center().y - text_h / 2.0 };
     let th = tg.size().y;
-    ui.painter().galley(pos2(rect.left(), y), tg, TEXT);
+    ui.painter().galley(pos2(rect.left(), y), tg, TEXT());
     y += th + 2.0;
     if let Some(dg) = dg {
-        ui.painter().galley(pos2(rect.left(), y), dg, FAINT_TEXT);
+        ui.painter().galley(pos2(rect.left(), y), dg, FAINT_TEXT());
     }
     // Controls are top-aligned in a box of their own (remembered) height, the
     // box centered in the row: measuring a center-aligned layout would
@@ -342,14 +405,19 @@ pub fn nav_item(ui: &mut Ui, icon: Icon, label: &str, selected: bool) -> Respons
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
     let h = hover_t(ui, &resp);
     let p = ui.painter();
+    let look = themed("nav", states_of(ui, &resp, selected), h, (Color32::TRANSPARENT, TEXT2()), (hover_fill(), TEXT()));
     if !selected {
-        p.rect_filled(rect, control_radius(rect.height(), 7.0), theme::lerp_color(Color32::TRANSPARENT, hover_fill(), h));
+        let radius = look.radius.map_or(control_radius(rect.height(), 7.0), |r| r.round() as u8);
+        p.rect_filled(rect, radius, look.fill);
+        p.rect_stroke(rect, radius, look.border, StrokeKind::Inside);
     }
-    let icon_col = if selected { ACCENT } else { theme::lerp_color(FAINT, TEXT2, h) };
+    let picked = theme::look("nav", css::state::CHECKED);
+    let icon_col = if selected { picked.fg_or(ACCENT()) } else { theme::lerp_color(FAINT(), look.fg, h) };
     let icon_rect = Rect::from_center_size(pos2(rect.left() + 17.0, rect.center().y), Vec2::splat(15.0));
     icons::paint(p, icon_rect, icon, 15.0, icon_col);
-    let fg = if selected { TEXT } else { theme::lerp_color(TEXT2, TEXT, h) };
-    let g = p.layout_no_wrap(label.to_owned(), font(13.0), fg);
+    let fg = if selected { picked.fg_or(TEXT()) } else { look.fg };
+    let size = theme::look("nav", 0).font_size.unwrap_or(13.0).clamp(8.0, 22.0);
+    let g = p.layout_no_wrap(label.to_owned(), font(size), fg);
     p.galley(pos2(rect.left() + 34.0, rect.center().y - g.size().y / 2.0), g, fg);
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
@@ -359,7 +427,7 @@ pub fn nav_caption(ui: &mut Ui, text: &str) {
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.add_space(10.0);
-        ui.label(egui::RichText::new(text).font(font_medium(11.0)).color(FAINT));
+        ui.label(egui::RichText::new(text).font(font_medium(11.0)).color(FAINT()));
     });
 }
 
@@ -466,7 +534,7 @@ impl Notice {
         painter.galley(
             pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0 - 1.0),
             galley,
-            TEXT.gamma_multiply(a),
+            TEXT().gamma_multiply(a),
         );
         let life_left = (1.0 - age / LIFE) as f32;
         // inside the round corners of the glass card
@@ -478,7 +546,7 @@ impl Notice {
         painter.rect_filled(
             Rect::from_min_max(bar.min, pos2(bar.left() + bar.width() * life_left, bar.bottom())),
             if theme::glass() { 1 } else { 0 },
-            ACCENT.gamma_multiply(0.8 * a),
+            ACCENT().gamma_multiply(0.8 * a),
         );
         ctx.request_repaint();
         true

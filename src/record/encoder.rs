@@ -73,6 +73,80 @@ pub fn has_codec(codec: Codec, encoder: bool) -> bool {
     n > 0
 }
 
+/// The hardware encoder the sink writer would take first for this codec
+/// accepts `v`'s size and rate. When it doesn't (too big for it, all its
+/// sessions taken, none at all), the sink writer goes on down its list, where
+/// Microsoft's "AVC DX12 Encoder" from the OpenCL, OpenGL and Vulkan
+/// Compatibility Pack may sit: a debug build that ends the whole process with
+/// an assertion box on what it can't do. Then the software encoder is used
+/// instead. Asked once per codec, size and rate.
+fn hardware_takes(v: &VideoSpec) -> bool {
+    /// Answers so far: (profile, width, height, fps) and whether it took them.
+    type Answers = Vec<((u32, u32, u32, u32), bool)>;
+    static SEEN: std::sync::Mutex<Answers> = std::sync::Mutex::new(Vec::new());
+    let key = (v.codec.profile(), v.width, v.height, v.fps);
+    if let Some(&(_, ok)) = SEEN.lock().unwrap().iter().find(|(k, _)| *k == key) {
+        return ok;
+    }
+    let ok = unsafe { probe_hardware(v) };
+    SEEN.lock().unwrap().push((key, ok));
+    ok
+}
+
+unsafe fn probe_hardware(v: &VideoSpec) -> bool {
+    unsafe {
+        let info = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: v.codec.subtype() };
+        let mut list: *mut Option<IMFActivate> = std::ptr::null_mut();
+        let mut n = 0u32;
+        if MFTEnumEx(MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER, None, Some(&info), &mut list, &mut n).is_err() {
+            return false;
+        }
+        let all: Vec<Option<IMFActivate>> = (0..n as usize).map(|i| std::ptr::read(list.add(i))).collect();
+        windows::Win32::System::Com::CoTaskMemFree(Some(list as _));
+        let Some(Some(first)) = all.first() else { return false };
+        // the D3D12 one is never the vendor's own
+        let mut vendor = windows::core::PWSTR::null();
+        let mut len = 0;
+        if first.GetAllocatedString(&MFT_ENUM_HARDWARE_VENDOR_ID_Attribute, &mut vendor, &mut len).is_ok() {
+            let id = vendor.to_string().unwrap_or_default();
+            windows::Win32::System::Com::CoTaskMemFree(Some(vendor.0 as _));
+            if id.eq_ignore_ascii_case("VEN_1414") {
+                return false;
+            }
+        }
+        let takes = (|| -> Result<()> {
+            let mft: IMFTransform = first.ActivateObject()?;
+            if let Ok(a) = mft.GetAttributes() {
+                let _ = a.SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1);
+            }
+            let out = MFCreateMediaType()?;
+            out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+            out.SetGUID(&MF_MT_SUBTYPE, &v.codec.subtype())?;
+            out.SetUINT32(&MF_MT_AVG_BITRATE, v.bitrate)?;
+            out.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
+            out.SetUINT32(&MF_MT_MPEG2_PROFILE, v.codec.profile())?;
+            set_size(&out.cast()?, &MF_MT_FRAME_SIZE, v.width, v.height)?;
+            set_size(&out.cast()?, &MF_MT_FRAME_RATE, v.fps, 1)?;
+            set_size(&out.cast()?, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
+            mft.SetOutputType(0, &out, 0)?;
+            let inp = MFCreateMediaType()?;
+            inp.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+            inp.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+            inp.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
+            set_size(&inp.cast()?, &MF_MT_FRAME_SIZE, v.width, v.height)?;
+            set_size(&inp.cast()?, &MF_MT_FRAME_RATE, v.fps, 1)?;
+            set_size(&inp.cast()?, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
+            mft.SetInputType(0, &inp, 0)?;
+            Ok(())
+        })();
+        let _ = first.ShutdownObject();
+        if let Err(e) = &takes {
+            crate::config::log::info(format!("video encoder: the hardware one won't take {}x{} at {} fps ({}); the software one writes it", v.width, v.height, v.fps, e.message()));
+        }
+        takes.is_ok()
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct VideoSpec {
     pub width: u32,
@@ -89,6 +163,8 @@ pub struct VideoSpec {
 
 pub struct Encoder {
     writer: IMFSinkWriter,
+    /// The file, for its metadata to go once it's done.
+    path: std::path::PathBuf,
     video: Option<u32>,
     audio: Vec<u32>,
     width: u32,
@@ -137,7 +213,10 @@ impl Encoder {
         unsafe {
             let a = attrs(4)?;
             a.SetGUID(&MF_TRANSCODE_CONTAINERTYPE, &MFTranscodeContainerType_MPEG4)?;
-            a.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)?;
+            // the hardware encoder only when it's sure to take this video (see
+            // `hardware_takes`): the sink writer must not fall back on its own
+            let hardware = video.is_none_or(hardware_takes);
+            a.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, hardware as u32)?;
             if let Some(dev) = device {
                 let mut token = 0u32;
                 let mut mgr = None;
@@ -208,7 +287,7 @@ impl Encoder {
                 audio.push(idx);
             }
             writer.BeginWriting()?;
-            Ok(Self { writer, video: video_index, audio, width, height })
+            Ok(Self { writer, path: path.to_path_buf(), video: video_index, audio, width, height })
         }
     }
 
@@ -273,7 +352,9 @@ impl Encoder {
     }
 
     pub fn finish(&self) -> Result<()> {
-        unsafe { self.writer.Finalize() }
+        unsafe { self.writer.Finalize() }?;
+        crate::strip::file(&self.path);
+        Ok(())
     }
 }
 
@@ -297,7 +378,7 @@ pub fn write_mp3(dst: &std::path::Path, pcm: &[i16], progress: &dyn Fn(f32)) -> 
             let idx = writer.AddStream(&out)?;
             writer.SetInputMediaType(idx, &audio_pcm_type(AUDIO_RATE, AUDIO_CHANNELS)?, None)?;
             writer.BeginWriting()?;
-            let enc = Encoder { writer, video: None, audio: vec![idx], width: 0, height: 0 };
+            let enc = Encoder { writer, path: dst.to_path_buf(), video: None, audio: vec![idx], width: 0, height: 0 };
             let chunk = (AUDIO_RATE / 10 * AUDIO_CHANNELS) as usize; // 100 ms
             let n = pcm.len().div_ceil(chunk).max(1);
             for (i, c) in pcm.chunks(chunk).enumerate() {
@@ -520,5 +601,67 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+
+#[cfg(test)]
+mod hardware_tests {
+    use super::*;
+
+    /// The hardware encoder answers for usual sizes (when there is one), and a
+    /// size no encoder takes is turned down instead of handed on.
+    #[test]
+    fn hardware_probe() {
+        crate::media::startup();
+        let spec = |w, h, fps| VideoSpec { width: w, height: h, fps, bitrate: 8_000_000, codec: Codec::H264, quality: None, keyframe_secs: 2 };
+        let usual = hardware_takes(&spec(2560, 1440, 60));
+        eprintln!("2560x1440@60: {usual}, 1920x1080@144: {}, 16384x16384@60: {}", hardware_takes(&spec(1920, 1080, 144)), hardware_takes(&spec(16384, 16384, 60)));
+        if has_codec(Codec::H264, true) {
+            assert!(usual, "a usual size must stay on the hardware encoder");
+        }
+        assert!(!hardware_takes(&spec(16384, 16384, 60)));
+    }
+
+    /// A size the hardware encoder turns down (wider than NVENC's H.264
+    /// 4096) is written by the software one or refused, never handed to
+    /// whatever encoder comes next.
+    #[test]
+    fn too_wide_for_hardware() {
+        crate::media::startup();
+        let spec = VideoSpec { width: 5120, height: 1440, fps: 30, bitrate: 12_000_000, codec: Codec::H264, quality: None, keyframe_secs: 2 };
+        let dst = std::env::temp_dir().join(format!("blinker-wide-{}.mp4", std::process::id()));
+        let r = Encoder::new(&dst, Some(&spec), 0, None).and_then(|enc| {
+            let frame = vec![90u8; 5120 * 1440 * 4];
+            for k in 0..5 {
+                enc.write_bgra(&frame, k * HNS / 30, HNS / 30)?;
+            }
+            enc.finish()
+        });
+        eprintln!("5120x1440 h264: {:?}, {} bytes", r.as_ref().map(|_| ()), std::fs::metadata(&dst).map(|m| m.len()).unwrap_or(0));
+        let _ = std::fs::remove_file(&dst);
+    }
+
+    /// The same from GPU textures, as screen recording writes them.
+    #[test]
+    fn too_wide_for_hardware_textures() {
+        use windows::Win32::Graphics::Direct3D11::D3D11_BOX;
+        crate::media::startup();
+        let gpu = crate::record::video::Gpu::new().expect("d3d");
+        let (w, h, fps) = (5120u32, 1440u32, 30u32);
+        let spec = VideoSpec { width: w, height: h, fps, bitrate: 12_000_000, codec: Codec::H264, quality: None, keyframe_secs: 2 };
+        let dst = std::env::temp_dir().join(format!("blinker-wide-gpu-{}.mp4", std::process::id()));
+        let r = Encoder::new(&dst, Some(&spec), 0, Some(&gpu.device)).and_then(|enc| {
+            let frame = vec![120u8; (w * h * 4) as usize];
+            for k in 0..10 {
+                let tex = gpu.texture(w, h, false).unwrap();
+                unsafe { gpu.context.UpdateSubresource(&tex, 0, None::<*const D3D11_BOX>, frame.as_ptr() as _, w * 4, 0) };
+                enc.write_texture(&tex, k * HNS / fps as i64, HNS / fps as i64)?;
+            }
+            enc.finish()
+        });
+        let info = crate::media::probe(&dst).ok();
+        eprintln!("5120x1440 h264 from textures: {:?}, {:?}", r.as_ref().map(|_| ()), info.map(|i| (i.width, i.height, i.duration)));
+        let _ = std::fs::remove_file(&dst);
     }
 }
