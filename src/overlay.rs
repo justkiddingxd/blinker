@@ -104,6 +104,9 @@ fn run_with(shared: &Arc<Shared>, snap: Snapshot, mode: Mode, gif: bool, demo: O
     };
     #[cfg(not(target_os = "macos"))]
     let others: Vec<Snapshot> = Vec::new();
+    // whatever was in front (a game, say) gets the focus back after
+    #[cfg(windows)]
+    let (before, is_demo) = (win::foreground(), demo.is_some());
     let shared2 = shared.clone();
     runtime::run_window(shared, "overlay", viewport, false, move |cc| {
         let hwnd = win::hwnd_of(cc);
@@ -129,6 +132,10 @@ fn run_with(shared: &Arc<Shared>, snap: Snapshot, mode: Mode, gif: bool, demo: O
         }
         Overlays { list, engaged: None, active: 0 }
     });
+    #[cfg(windows)]
+    if !is_demo {
+        win::give_focus_back(before);
+    }
     out.borrow_mut().take()
 }
 
@@ -2133,7 +2140,7 @@ impl OverlayApp {
             self.shared.take_where(|c| c.is_capture() || *c == Command::Record);
             if matches!(self.shared.peek(), Some(Command::Quit | Command::Restart)) {
                 *self.out.borrow_mut() = None;
-                close_all(&ctx);
+                close_all(&ctx, self.hwnd);
                 return;
             }
         }
@@ -2159,7 +2166,7 @@ impl OverlayApp {
         self.qr_cards(&ctx, ppp);
         if let Some(at) = self.picked_at {
             if now - at >= 0.6 {
-                close_all(&ctx);
+                close_all(&ctx, self.hwnd);
             } else {
                 ctx.request_repaint();
             }
@@ -2181,12 +2188,12 @@ impl OverlayApp {
         if let Phase::Closing { at } = self.phase
             && now - at >= CLOSE
         {
-            close_all(&ctx);
+            close_all(&ctx, self.hwnd);
         }
         if let Phase::Finishing { at } = self.phase
             && now - at >= FLASH
         {
-            close_all(&ctx);
+            close_all(&ctx, self.hwnd);
         }
         if let Some(d) = &self.demo {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(d.shot_request()));
@@ -2432,7 +2439,17 @@ fn keycap(ui: &mut egui::Ui, key: &str) {
 }
 
 /// Closes the overlay: the main window, and with it every display's window.
-fn close_all(ctx: &egui::Context) {
+/// Windows: `hwnd` is hidden at once (winit destroys a window only when its
+/// thread's messages are next handled; till then the frozen screen would
+/// stay over everything).
+fn close_all(ctx: &egui::Context, hwnd: Option<win::HWND>) {
+    #[cfg(windows)]
+    if let Some(h) = hwnd {
+        win::cloak(h, true);
+        win::show_window(h, false);
+    }
+    #[cfg(not(windows))]
+    let _ = hwnd;
     ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
 }
 

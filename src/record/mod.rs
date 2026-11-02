@@ -12,6 +12,8 @@ pub mod fx;
 #[cfg_attr(target_os = "macos", path = "../mac/record/hud.rs")]
 pub mod hud;
 mod pill;
+#[cfg(windows)]
+mod pointer;
 pub mod replay;
 #[cfg_attr(target_os = "macos", path = "../mac/record/video.rs")]
 pub mod video;
@@ -229,18 +231,19 @@ pub fn video_spec(cfg: &Config, w: u32, h: u32, keyframe_secs: u32, monitor: &Mo
 /// constant quality → VBR, very high frame rates → 120 → 60, H.265 → H.264.
 /// Returns the settings actually used.
 pub fn open_encoder(path: &std::path::Path, spec: &VideoSpec, tracks: usize, gpu: &Gpu) -> Result<(Encoder, VideoSpec), String> {
-    let mut tries = vec![*spec, VideoSpec { quality: None, ..*spec }];
+    let vbr = |s: VideoSpec| VideoSpec { quality: None, ..s };
+    let mut tries = vec![*spec, vbr(*spec)];
     for fps in [120, 60] {
         if spec.fps > fps {
-            tries.push(VideoSpec { fps, ..*spec });
+            tries.push(vbr(VideoSpec { fps, ..*spec }));
         }
     }
     if spec.codec != encoder::Codec::H264 {
-        tries.push(VideoSpec { codec: encoder::Codec::H264, fps: spec.fps.min(120), ..*spec });
+        tries.push(vbr(VideoSpec { codec: encoder::Codec::H264, fps: spec.fps.min(60), ..*spec }));
     }
     let mut last = String::new();
     for s in tries {
-        match Encoder::new(path, Some(&s), tracks, Some(&gpu.device)) {
+        match Encoder::live(path, &s, tracks, &gpu.device) {
             Ok(e) => return Ok((e, s)),
             Err(e) => {
                 last = e.message().to_string();
@@ -248,7 +251,30 @@ pub fn open_encoder(path: &std::path::Path, spec: &VideoSpec, tracks: usize, gpu
             }
         }
     }
-    Err(lf!("кодировщик: {last}", "encoder: {last}"))
+    // no hardware encoder for it: the software one, at a rate it keeps up
+    // with (60 fps up to Full HD, 30 above)
+    let cap = if spec.width * spec.height > 1920 * 1088 { 30 } else { 60 };
+    let s = VideoSpec { codec: encoder::Codec::H264, quality: None, fps: spec.fps.min(cap), ..*spec };
+    match Encoder::software(path, &s, tracks, &gpu.device) {
+        Ok(e) => {
+            log_software_once(&s);
+            Ok((e, s))
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(path);
+            Err(lf!("кодировщик: {last}; {}", "encoder: {last}; {}", e.message()))
+        }
+    }
+}
+
+/// Into the log the first time a size goes to the software encoder.
+fn log_software_once(s: &VideoSpec) {
+    static SAID: std::sync::Mutex<Vec<(u32, u32, u32)>> = std::sync::Mutex::new(Vec::new());
+    let mut said = SAID.lock().unwrap();
+    if !said.contains(&(s.width, s.height, s.fps)) {
+        said.push((s.width, s.height, s.fps));
+        log::info(format!("video encoder: the software one, {}x{} at {} fps", s.width, s.height, s.fps));
+    }
 }
 
 /// Starts recording. A monitor area loses what lies outside the monitor
@@ -281,7 +307,7 @@ pub fn start(
     // A GIF has no sound and is written to a temporary MP4 first.
     audio::use_mic(&cfg.mic_device);
     let tracks = if gif { Vec::new() } else { audio_sources(cfg.rec_desktop_audio, cfg.rec_mic) };
-    let gpu = Arc::new(Gpu::new().map_err(|e| format!("{}: {e}", video::GPU_API))?);
+    let gpu = Gpu::shared().map_err(|e| format!("{}: {e}", video::GPU_API))?;
     let path = if gif {
         let dir = crate::config::cache_dir().join("gif");
         let _ = std::fs::create_dir_all(&dir);

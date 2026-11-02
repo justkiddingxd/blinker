@@ -135,13 +135,18 @@ impl Encoder {
     }
 
     pub fn finish(&self) -> Result<()> {
+        self.finish_part()?;
+        crate::strip::file(&self.path);
+        Ok(())
+    }
+
+    /// Finished as a piece of something bigger (a replay segment): its
+    /// metadata stays, the file made from the pieces loses it.
+    pub fn finish_part(&self) -> Result<()> {
         let mut err = ffi::ErrBuf::new();
         match unsafe { ffi::bk_writer_finish(self.native, err.ptr(), ffi::ErrBuf::LEN) } {
             0 => Err(Error::new(err.text())),
-            _ => {
-                crate::strip::file(&self.path);
-                Ok(())
-            }
+            _ => Ok(()),
         }
     }
 }

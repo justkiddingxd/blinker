@@ -336,6 +336,34 @@ pub fn raise(hwnd: HWND) {
     force_foreground(hwnd);
 }
 
+/// The window in front now, to give the focus back to later.
+pub fn foreground() -> isize {
+    unsafe { GetForegroundWindow() as isize }
+}
+
+/// The focus back to `prev` (what was in front before our window): a game
+/// in exclusive fullscreen minimizes when it loses the focus and, with
+/// nobody handing it back, stays black until Alt+Tab. Nothing if `prev` is
+/// gone or one of ours.
+pub fn give_focus_back(prev: isize) {
+    let hwnd = prev as HWND;
+    unsafe {
+        if hwnd.is_null() || IsWindow(hwnd) == 0 {
+            return;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == std::process::id() {
+            return;
+        }
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+        }
+        // we were in front a moment ago: Windows lets us pass it on
+        SetForegroundWindow(hwnd);
+    }
+}
+
 pub fn force_foreground(hwnd: HWND) {
     unsafe {
         let fg = GetForegroundWindow();

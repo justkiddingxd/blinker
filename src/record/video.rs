@@ -1,5 +1,6 @@
-//! Screen frames from Windows Graphics Capture. A monitor (cropped on the GPU)
-//! or a single window is captured into a "latest frame" slot; a pacer thread
+//! Screen frames: a monitor through Desktop Duplication (cropped on the GPU),
+//! a single window through Windows Graphics Capture (and a monitor too when
+//! duplication isn't to be had). Either fills a "latest frame" slot; a pacer thread
 //! turns that into a steady stream for the encoder: fresh frames as they
 //! come, repeats while click / key effects animate, and a 1 fps heartbeat on
 //! a still screen. Frames never pass through system memory.
@@ -18,7 +19,8 @@ use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
-use windows::Win32::Graphics::Dxgi::IDXGIDevice;
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_MODE_ROTATION_IDENTITY, DXGI_MODE_ROTATION_UNSPECIFIED};
+use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, IDXGIDevice, IDXGIOutput1};
 use windows::Win32::Graphics::Gdi::HMONITOR;
 use windows::Win32::System::WinRT::Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess};
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
@@ -54,6 +56,20 @@ unsafe impl Send for Gpu {}
 unsafe impl Sync for Gpu {}
 
 impl Gpu {
+    /// The device the replay and recordings share (one duplication of a
+    /// monitor serves them all); made when the first needs it, gone when the
+    /// last lets go.
+    pub fn shared() -> Result<Arc<Self>> {
+        static SHARED: Mutex<std::sync::Weak<Gpu>> = Mutex::new(std::sync::Weak::new());
+        let mut s = SHARED.lock().unwrap();
+        if let Some(g) = s.upgrade() {
+            return Ok(g);
+        }
+        let g = Arc::new(Self::new()?);
+        *s = Arc::downgrade(&g);
+        Ok(g)
+    }
+
     pub fn new() -> Result<Self> {
         unsafe {
             let mut device = None;
@@ -174,15 +190,244 @@ struct Latest {
 unsafe impl Send for Latest {}
 
 pub struct Capture {
-    pool: Direct3D11CaptureFramePool,
-    session: GraphicsCaptureSession,
+    how: How,
     latest: Arc<Mutex<Latest>>,
+    /// The pointer goes into the frames (drawn by the pacer, `pointer.rs`).
+    cursor: bool,
 }
 
 unsafe impl Send for Capture {}
 
+/// Where the frames come from.
+enum How {
+    /// Windows Graphics Capture. Any session of it hides the pointer in
+    /// some fullscreen games (Minecraft): only for windows, and for a
+    /// monitor duplication can't take.
+    Wgc { pool: Direct3D11CaptureFramePool, session: GraphicsCaptureSession },
+    /// The monitor's Desktop Duplication feed, shared with whatever else
+    /// captures that monitor (the replay and a recording): `id` in its list.
+    Duplication { feed: Arc<Feed>, id: u64 },
+}
+
+/// COM objects of the duplication thread (made on one thread, used on it).
+struct SendCom<T>(T);
+unsafe impl<T> Send for SendCom<T> {}
+
+/// Someone taking frames from a feed: their piece of the monitor, their
+/// clock, their slot.
+struct Sub {
+    id: u64,
+    crop: (u32, u32, u32, u32),
+    clock: Arc<Clock>,
+    slot: Arc<Mutex<Latest>>,
+}
+
+/// One monitor through Desktop Duplication. Windows duplicates a monitor
+/// once per process, so the replay and a recording share it: each new
+/// picture is copied whole, then each one's piece is cut out of it.
+pub struct Feed {
+    hmon: isize,
+    gpu: Arc<Gpu>,
+    subs: Mutex<Vec<Sub>>,
+    /// The newest picture of the whole monitor (a newcomer starts from it).
+    last: Mutex<Option<ID3D11Texture2D>>,
+    stop: Arc<AtomicBool>,
+    thread: Mutex<Option<JoinHandle<()>>>,
+}
+
+unsafe impl Send for Feed {}
+unsafe impl Sync for Feed {}
+
+/// The feeds running now, by monitor.
+static FEEDS: Mutex<Vec<std::sync::Weak<Feed>>> = Mutex::new(Vec::new());
+
+impl Feed {
+    /// The feed of `hmon` on `gpu`: the running one, or a new one.
+    fn of(gpu: &Arc<Gpu>, hmon: HMONITOR) -> Result<Arc<Feed>> {
+        let mut feeds = FEEDS.lock().unwrap();
+        feeds.retain(|f| f.strong_count() > 0);
+        if let Some(f) = feeds.iter().filter_map(|f| f.upgrade()).find(|f| f.hmon == hmon.0 as isize) {
+            if !Arc::ptr_eq(&f.gpu, gpu) {
+                return Err(windows::core::Error::new(windows::core::HRESULT(0x887A0022u32 as i32), "the monitor is duplicated on another device"));
+            }
+            return Ok(f);
+        }
+        let output = unsafe { output_of(gpu, hmon)? };
+        // the feed before this one may still be letting go of the monitor
+        let mut tries = 0;
+        let dup = loop {
+            match unsafe { output.DuplicateOutput(&gpu.device) } {
+                Ok(d) => break d,
+                Err(e) if tries >= 4 => return Err(e),
+                Err(_) => {
+                    tries += 1;
+                    std::thread::sleep(Duration::from_millis(60));
+                }
+            }
+        };
+        let feed = Arc::new(Feed {
+            hmon: hmon.0 as isize,
+            gpu: gpu.clone(),
+            subs: Mutex::new(Vec::new()),
+            last: Mutex::new(None),
+            stop: Arc::new(AtomicBool::new(false)),
+            thread: Mutex::new(None),
+        });
+        let weak = Arc::downgrade(&feed);
+        let (output, dup) = (SendCom(output), SendCom(dup));
+        let thread = std::thread::spawn(move || {
+            let (output, dup) = (output.0, dup.0);
+            if let Some(f) = weak.upgrade() {
+                let stop = f.stop.clone();
+                drop(f);
+                feed_loop(&weak, &stop, output, dup);
+            }
+        });
+        *feed.thread.lock().unwrap() = Some(thread);
+        feeds.push(Arc::downgrade(&feed));
+        Ok(feed)
+    }
+
+    /// Frames of `crop` into `slot` from now on, on `clock`; the newest
+    /// picture at once. Returns the id to leave with.
+    fn join(&self, crop: (u32, u32, u32, u32), clock: Arc<Clock>, slot: Arc<Mutex<Latest>>) -> u64 {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT.fetch_add(1, Ordering::SeqCst);
+        let sub = Sub { id, crop, clock, slot };
+        if let Some(last) = self.last.lock().unwrap().as_ref() {
+            self.deliver(&sub, last, qpc_now());
+        }
+        self.subs.lock().unwrap().push(sub);
+        id
+    }
+
+    fn leave(&self, id: u64) {
+        self.subs.lock().unwrap().retain(|s| s.id != id);
+    }
+
+    /// `sub`'s piece of the whole picture `full`, taken at `at` (QPC, 100 ns).
+    fn deliver(&self, sub: &Sub, full: &ID3D11Texture2D, at: i64) {
+        let Some(t) = sub.clock.map(at).filter(|t| *t >= 0) else { return };
+        let (ox, oy, ow, oh) = sub.crop;
+        let Ok(dst) = self.gpu.texture(ow, oh, false) else { return };
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe { full.GetDesc(&mut desc) };
+        let b = D3D11_BOX { left: ox, top: oy, front: 0, right: (ox + ow).min(desc.Width), bottom: (oy + oh).min(desc.Height), back: 1 };
+        if b.right > b.left && b.bottom > b.top {
+            unsafe { self.gpu.context.CopySubresourceRegion(&dst, 0, 0, 0, 0, full, 0, Some(&b)) };
+        }
+        let mut l = sub.slot.lock().unwrap();
+        l.tex = Some(dst);
+        l.t = t;
+        l.fresh = true;
+    }
+}
+
+impl Drop for Feed {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.get_mut().unwrap().take()
+            && t.thread().id() != std::thread::current().id()
+        {
+            let _ = t.join();
+        }
+    }
+}
+
+/// The DXGI output showing `hmon`, among those of `gpu`'s adapter.
+unsafe fn output_of(gpu: &Gpu, hmon: HMONITOR) -> Result<IDXGIOutput1> {
+    unsafe {
+        let adapter = gpu.device.cast::<IDXGIDevice>()?.GetAdapter()?;
+        let mut i = 0;
+        loop {
+            let o = adapter.EnumOutputs(i)?;
+            let desc = o.GetDesc()?;
+            if desc.Monitor == hmon {
+                if !matches!(desc.Rotation, DXGI_MODE_ROTATION_IDENTITY | DXGI_MODE_ROTATION_UNSPECIFIED) {
+                    return Err(windows::core::Error::new(windows::core::HRESULT(0x887A0004u32 as i32), "a rotated monitor"));
+                }
+                return o.cast();
+            }
+            i += 1;
+        }
+    }
+}
+
+/// The duplication thread: a new picture whenever the monitor changes,
+/// handed to everyone on the feed; till `stop` (or the feed is gone).
+fn feed_loop(feed: &std::sync::Weak<Feed>, stop: &AtomicBool, output: IDXGIOutput1, dup: windows::Win32::Graphics::Dxgi::IDXGIOutputDuplication) {
+    let mut qpf = 0i64;
+    unsafe {
+        let _ = windows::Win32::System::Performance::QueryPerformanceFrequency(&mut qpf);
+    }
+    let mut dup = Some(dup);
+    let mut first = true;
+    while !stop.load(Ordering::SeqCst) {
+        let Some(f) = feed.upgrade() else { return };
+        // lost (another resolution, the secure desktop, a game taking the
+        // screen): made again once it can be
+        let Some(d) = &dup else {
+            drop(f);
+            std::thread::sleep(Duration::from_millis(200));
+            let Some(f) = feed.upgrade() else { return };
+            dup = unsafe { output.DuplicateOutput(&f.gpu.device) }.ok();
+            first = true;
+            continue;
+        };
+        let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
+        let mut res = None;
+        // never waiting inside: the wait holds the device (multithread
+        // protected), and the encoders on it would barely get a turn
+        match unsafe { d.AcquireNextFrame(0, &mut info, &mut res) } {
+            Ok(()) => {
+                // no present time: only the pointer moved, nothing new in the
+                // picture (but the first one is the whole screen as it is)
+                let at = match info.LastPresentTime {
+                    0 if first => Some(qpc_now()),
+                    0 => None,
+                    q => Some((q as i128 * HNS as i128 / qpf.max(1) as i128) as i64),
+                };
+                if let Some(at) = at
+                    && let Some(src) = res.and_then(|r| r.cast::<ID3D11Texture2D>().ok())
+                {
+                    let mut desc = D3D11_TEXTURE2D_DESC::default();
+                    unsafe { src.GetDesc(&mut desc) };
+                    if let Ok(full) = f.gpu.texture(desc.Width, desc.Height, false) {
+                        f.gpu.copy(&full, &src);
+                        for sub in f.subs.lock().unwrap().iter() {
+                            f.deliver(sub, &full, at);
+                        }
+                        *f.last.lock().unwrap() = Some(full);
+                        first = false;
+                    }
+                }
+                let _ = unsafe { d.ReleaseFrame() };
+            }
+            Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => {
+                drop(f);
+                std::thread::sleep(Duration::from_millis(3));
+            }
+            Err(_) => dup = None,
+        }
+    }
+}
+
 impl Capture {
     pub fn start(gpu: &Arc<Gpu>, target: Target, fps: u32, cursor: bool, clock: Arc<Clock>) -> Result<Self> {
+        let latest = Arc::new(Mutex::new(Latest { tex: None, t: 0, fresh: false }));
+        if let Target::Monitor { hmon, crop } = target {
+            match Feed::of(gpu, hmon) {
+                Ok(feed) => {
+                    let id = feed.join(crop, clock, latest.clone());
+                    return Ok(Self { how: How::Duplication { feed, id }, latest, cursor });
+                }
+                Err(e) => crate::config::log::info(format!("screen capture: no desktop duplication ({e}), Windows Graphics Capture instead")),
+            }
+        }
+        Self::wgc(gpu, target, fps, cursor, clock, latest)
+    }
+
+    fn wgc(gpu: &Arc<Gpu>, target: Target, fps: u32, cursor: bool, clock: Arc<Clock>, latest: Arc<Mutex<Latest>>) -> Result<Self> {
         unsafe {
             let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
             let item: GraphicsCaptureItem = match target {
@@ -196,7 +441,10 @@ impl Capture {
             let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(&d3d, fmt, 2, size)?;
             let session = pool.CreateCaptureSession(&item)?;
             let _ = session.SetIsBorderRequired(false);
-            let _ = session.SetIsCursorCaptureEnabled(cursor);
+            // never Windows' own pointer capture: it makes the pointer a
+            // software one, which some fullscreen games (Minecraft) lose;
+            // the pacer draws it instead
+            let _ = session.SetIsCursorCaptureEnabled(false);
             let interval = HNS / fps.max(1) as i64;
             let _ = session.SetMinUpdateInterval(windows::Foundation::TimeSpan { Duration: interval });
 
@@ -204,7 +452,6 @@ impl Capture {
                 Target::Monitor { crop, .. } => crop,
                 Target::Window { size, .. } => (0, 0, size.0, size.1),
             };
-            let latest = Arc::new(Mutex::new(Latest { tex: None, t: 0, fresh: false }));
             let slot = latest.clone();
             let g = gpu.clone();
             let pool_size = Mutex::new(size);
@@ -248,13 +495,18 @@ impl Capture {
                 },
             ))?;
             session.StartCapture()?;
-            Ok(Self { pool, session, latest })
+            Ok(Self { how: How::Wgc { pool, session }, latest, cursor })
         }
     }
 
     pub fn close(&self) {
-        let _ = self.session.Close();
-        let _ = self.pool.Close();
+        match &self.how {
+            How::Wgc { pool, session } => {
+                let _ = session.Close();
+                let _ = pool.Close();
+            }
+            How::Duplication { feed, id } => feed.leave(*id),
+        }
     }
 }
 
@@ -271,8 +523,8 @@ pub struct Pacer {
 
 impl Pacer {
     /// Feeds `out` from `capture` at up to `fps`, with click / key effects
-    /// from `fx` drawn on top. `origin`: screen position of the frame's top-left
-    /// (for effects); a window target reads it live.
+    /// from `fx` and the pointer drawn on top. `origin`: screen position of
+    /// the frame's top-left (for both); a window target reads it live.
     pub fn start(
         gpu: Arc<Gpu>,
         capture: &Capture,
@@ -284,10 +536,11 @@ impl Pacer {
         origin: (i32, i32),
     ) -> Pacer {
         let stop = Arc::new(AtomicBool::new(false));
-        let (st, latest) = (stop.clone(), capture.latest.clone());
+        let (st, latest, cursor) = (stop.clone(), capture.latest.clone(), capture.cursor);
         let thread = std::thread::spawn(move || {
             crate::media::startup();
-            pace(&gpu, &latest, target, &out, fps, &clock, fx.as_deref(), origin, &st)
+            let pointer = if cursor { super::pointer::Pointer::new() } else { None };
+            pace(&gpu, &latest, target, &out, fps, &clock, fx.as_deref(), pointer, origin, &st)
         });
         Pacer { stop, thread }
     }
@@ -308,6 +561,7 @@ fn pace(
     fps: u32,
     clock: &Clock,
     fx: Option<&Fx>,
+    mut pointer: Option<super::pointer::Pointer>,
     origin: (i32, i32),
     stop: &AtomicBool,
 ) -> Option<image::RgbaImage> {
@@ -317,6 +571,8 @@ fn pace(
     let mut base: Option<ID3D11Texture2D> = None; // newest captured frame
     let mut last_t = -1i64;
     let mut next = Instant::now();
+    // the pointer drawn last: a new frame when it moves or changes
+    let mut drawn: Option<super::pointer::Seen> = None;
     loop {
         let stopping = stop.load(Ordering::SeqCst);
         if clock.is_paused() && !stopping {
@@ -336,31 +592,38 @@ fn pace(
         let now = clock.now();
         let animating = fx.is_some_and(|f| f.active());
         let heartbeat = now - last_t >= HNS;
+        let o = match target {
+            Target::Window { hwnd, .. } if animating || pointer.is_some() => {
+                let r = crate::win::frame_bounds(hwnd.0 as _);
+                (r.x, r.y)
+            }
+            _ => origin,
+        };
+        let seen = pointer.as_mut().and_then(|p| super::pointer::Pointer::now().filter(|s| p.within(*s, (w, h), o)));
+        let moved = seen != drawn;
         if let Some(b) = &base
-            && (fresh || animating || heartbeat || stopping)
+            && (fresh || animating || heartbeat || stopping || moved)
         {
-            let mut t = if fresh && !animating { t_cap } else { now };
+            let mut t = if fresh && !animating && !moved { t_cap } else { now };
             if t <= last_t {
                 t = last_t + 1;
             }
-            let frame = match fx {
-                Some(f) if animating => {
-                    let o = match target {
-                        Target::Window { hwnd, .. } => {
-                            let r = crate::win::frame_bounds(hwnd.0 as _);
-                            (r.x, r.y)
-                        }
-                        _ => origin,
-                    };
-                    gpu.texture(w, h, false).ok().inspect(|c| {
-                        gpu.copy(c, b);
+            let frame = if animating || seen.is_some() {
+                gpu.texture(w, h, false).ok().inspect(|c| {
+                    gpu.copy(c, b);
+                    if let Some(f) = fx.filter(|_| animating) {
                         f.draw(c, (w, h), o);
-                    })
-                }
-                _ => None,
+                    }
+                    if let (Some(p), Some(s)) = (pointer.as_mut(), seen) {
+                        p.draw(c, o, s);
+                    }
+                })
+            } else {
+                None
             };
             out.write_video(frame.as_ref().unwrap_or(b), t, interval);
             last_t = t;
+            drawn = seen;
         }
         if stopping {
             return base.and_then(|b| gpu.read_rgba(&b, w, h));
@@ -373,5 +636,40 @@ fn pace(
         } else {
             next = now;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A monitor goes through Desktop Duplication (not WGC, which hides the
+    /// pointer in some games), and its frames come with something on them.
+    #[test]
+    fn monitor_by_duplication() {
+        let gpu = Gpu::shared().unwrap();
+        let m = crate::win::monitors()[0];
+        let r = crate::win::IRect::new(m.rect.x, m.rect.y, m.rect.w & !1, m.rect.h & !1);
+        let cap = Capture::start(&gpu, monitor_target(r, &m), 30, true, super::super::Clock::new()).unwrap();
+        assert!(matches!(cap.how, How::Duplication { .. }), "fell back to WGC");
+        // a recording while the replay runs: the same monitor twice
+        let gpu2 = Gpu::shared().unwrap();
+        let small = crate::win::IRect::new(m.rect.x + 40, m.rect.y + 40, 320, 200);
+        let second = Capture::start(&gpu2, monitor_target(small, &m), 30, true, super::super::Clock::new()).unwrap();
+        assert!(matches!(second.how, How::Duplication { .. }), "the second one fell back to WGC");
+        // it starts from the picture the first already has
+        assert!(second.latest.lock().unwrap().tex.is_some() || { std::thread::sleep(Duration::from_millis(300)); true });
+        second.close();
+        let t0 = Instant::now();
+        let tex = loop {
+            if let Some(t) = cap.latest.lock().unwrap().tex.clone() {
+                break t;
+            }
+            assert!(t0.elapsed() < Duration::from_secs(3), "no frame");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let img = gpu.read_rgba(&tex, r.w as u32, r.h as u32).unwrap();
+        assert!(img.pixels().any(|p| p[0] > 8 || p[1] > 8 || p[2] > 8), "all black");
+        cap.close();
     }
 }

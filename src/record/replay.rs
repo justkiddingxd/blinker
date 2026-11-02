@@ -51,6 +51,8 @@ pub struct Segmenter {
     done: Arc<Mutex<VecDeque<Segment>>>,
     finalizing: Arc<AtomicUsize>,
     n: AtomicUsize,
+    /// Frames are being dropped (said once in the log).
+    behind: std::sync::atomic::AtomicBool,
 }
 
 unsafe impl Send for Segmenter {}
@@ -63,7 +65,7 @@ impl Segmenter {
             let (done, fin) = (self.done.clone(), self.finalizing.clone());
             std::thread::spawn(move || {
                 crate::media::startup();
-                if c.enc.finish().is_ok() {
+                if c.enc.finish_part().is_ok() {
                     done.lock().unwrap().push_back(Segment { path: c.path, start: c.start, end: c.last });
                 } else {
                     let _ = std::fs::remove_file(&c.path);
@@ -76,6 +78,16 @@ impl Segmenter {
     pub fn write_video(&self, tex: &Frame, t: i64, dur: i64) {
         let mut cur = self.cur.lock().unwrap();
         if cur.as_ref().is_some_and(|c| t - c.start >= SEG) {
+            // segments still being written: the encoder can't keep up. The
+            // next one waits (a gap in the replay) instead of piling up
+            // encoders, their threads and frames until memory runs out
+            if self.finalizing.load(Ordering::SeqCst) >= 2 {
+                if !self.behind.swap(true, Ordering::SeqCst) {
+                    log::error("replay: the encoder can't keep up, frames are dropped");
+                }
+                return;
+            }
+            self.behind.store(false, Ordering::SeqCst);
             self.close_current(&mut cur);
         }
         if cur.is_none() {
@@ -275,7 +287,7 @@ impl Replay {
             .ok_or(crate::i18n::t("нет монитора"))?;
         let (w, h) = ((monitor.rect.w as u32) & !1, (monitor.rect.h as u32) & !1);
         let target = super::video::monitor_target(IRect::new(monitor.rect.x, monitor.rect.y, w as i32, h as i32), &monitor);
-        let gpu = Arc::new(Gpu::new().map_err(|e| format!("{}: {e}", super::video::GPU_API))?);
+        let gpu = Gpu::shared().map_err(|e| format!("{}: {e}", super::video::GPU_API))?;
         let spec = super::video_spec(cfg, w, h, 1, &monitor);
         let secs = cfg.replay_secs.clamp(MIN_SECS, MAX_SECS);
         let seg = Arc::new(Segmenter {
@@ -287,6 +299,7 @@ impl Replay {
             done: Arc::new(Mutex::new(VecDeque::new())),
             finalizing: Arc::new(AtomicUsize::new(0)),
             n: AtomicUsize::new(0),
+            behind: std::sync::atomic::AtomicBool::new(false),
         });
         super::audio::use_mic(&cfg.mic_device);
         let tracks = super::audio_sources(cfg.replay_desktop_audio, cfg.replay_mic);
@@ -554,6 +567,36 @@ mod tests {
 
     /// Buffers ~7 s of the primary monitor, saves the replay, checks it,
     /// deletes it. `BLINKER_TEST_RECORD` = scratch folder.
+    /// A recording while the replay runs: both off one duplication of the
+    /// monitor and one device, both files whole.
+    #[test]
+    fn replay_and_recording() {
+        let Ok(dir) = std::env::var("BLINKER_TEST_RECORD") else { return };
+        crate::media::mark_main_thread();
+        let mut cfg = crate::config::Config { save_dir: dir.into(), ..Default::default() };
+        cfg.replay_secs = 10;
+        cfg.replay_mic = false;
+        cfg.rec_mic = false;
+        let r = super::Replay::start(&cfg).expect("replay");
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let mon = crate::win::monitors()[0];
+        let rect = crate::win::IRect::new(mon.rect.x + 40, mon.rect.y + 60, 320, 200);
+        let sel = crate::record::Selection { rect, monitor: mon, window: None };
+        let rec = crate::record::start(&cfg, sel, false, || {}, || {}).expect("recording");
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let f = rec.stop().expect("stop");
+        let info = crate::media::probe(&f.path).expect("probe recording");
+        let _ = std::fs::remove_file(&f.path);
+        assert_eq!((info.width, info.height), (320, 200));
+        assert!(info.duration > 10_000_000, "{}", info.duration);
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let saved = r.save(&cfg).expect("save");
+        let info = crate::media::probe(&saved.path).expect("probe replay");
+        let _ = std::fs::remove_file(&saved.path);
+        r.stop();
+        assert!(info.duration > 30_000_000, "{}", info.duration);
+    }
+
     #[test]
     fn replay_smoke() {
         let Ok(dir) = std::env::var("BLINKER_TEST_RECORD") else { return };

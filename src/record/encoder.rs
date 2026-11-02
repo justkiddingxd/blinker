@@ -80,10 +80,82 @@ pub fn has_codec(codec: Codec, encoder: bool) -> bool {
 /// Compatibility Pack may sit: a debug build that ends the whole process with
 /// an assertion box on what it can't do. Then the software encoder is used
 /// instead. Asked once per codec, size and rate.
+/// Answers so far: (profile, width, height, fps) and whether the hardware
+/// encoder took them.
+type Answers = Vec<((u32, u32, u32, u32), bool)>;
+static SEEN: std::sync::Mutex<Answers> = std::sync::Mutex::new(Vec::new());
+
+/// The sink writer went for Microsoft's D3D12 encoder (see `check_encoder`).
+const DX12_PICKED: windows::core::HRESULT = windows::core::HRESULT(0xA0B1_0D12u32 as i32);
+
+/// Videos the D3D12 encoder got once (the vendor's refused them at the last
+/// step): (profile, width, height, fps, quality mode). Not tried again.
+static DX12_HAD: std::sync::Mutex<Vec<(u32, u32, u32, u32, bool)>> = std::sync::Mutex::new(Vec::new());
+
+fn dx12_key(v: &VideoSpec) -> (u32, u32, u32, u32, bool) {
+    (v.codec.profile(), v.width, v.height, v.fps, v.quality.is_some())
+}
+
+/// This video isn't for the hardware encoder from now on.
+fn never_hardware(v: &VideoSpec) {
+    let mut had = DX12_HAD.lock().unwrap();
+    if !had.contains(&dx12_key(v)) {
+        had.push(dx12_key(v));
+    }
+}
+
+/// The error of a video the hardware encoder won't write (`Encoder::live`).
+pub const HARDWARE_REFUSED: windows::core::HRESULT = windows::core::HRESULT(0xA0B1_0D13u32 as i32);
+
+/// Which encoder the sink writer took for stream `idx`: logged once per
+/// name, and an error if it's Microsoft's D3D12 one ("Microsoft AVC DX12
+/// Encoder", from the OpenCL, OpenGL and Vulkan Compatibility Pack), which
+/// closes the whole app with an assertion when it gets in trouble.
+unsafe fn check_encoder(writer: &IMFSinkWriter, idx: u32) -> Result<()> {
+    static LOGGED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    unsafe {
+        let Ok(ex) = writer.cast::<IMFSinkWriterEx>() else { return Ok(()) };
+        for i in 0.. {
+            let mut category = windows::core::GUID::zeroed();
+            let mut mft = None;
+            if ex.GetTransformForStream(idx, i, Some(&mut category), &mut mft).is_err() {
+                break;
+            }
+            let Some(attrs) = mft.and_then(|m| m.GetAttributes().ok()) else { continue };
+            if category != MFT_CATEGORY_VIDEO_ENCODER {
+                continue;
+            }
+            let text = |key: &windows::core::GUID| {
+                let mut p = windows::core::PWSTR::null();
+                let mut n = 0;
+                if attrs.GetAllocatedString(key, &mut p, &mut n).is_err() {
+                    return String::new();
+                }
+                let s = p.to_string().unwrap_or_default();
+                windows::Win32::System::Com::CoTaskMemFree(Some(p.0 as _));
+                s
+            };
+            let (vendor, name) = (text(&MFT_ENUM_HARDWARE_VENDOR_ID_Attribute), text(&MFT_FRIENDLY_NAME_Attribute));
+            let label = format!("{} {vendor}", if name.is_empty() { "?" } else { &name });
+            {
+                let mut logged = LOGGED.lock().unwrap();
+                if !logged.contains(&label) {
+                    crate::config::log::info(format!("video encoder: {label}"));
+                    logged.push(label);
+                }
+            }
+            if vendor.eq_ignore_ascii_case("VEN_1414") || name.contains("DX12") || name.contains("D3D12") {
+                return Err(windows::core::Error::new(DX12_PICKED, "the D3D12 encoder"));
+            }
+        }
+        Ok(())
+    }
+}
+
 fn hardware_takes(v: &VideoSpec) -> bool {
-    /// Answers so far: (profile, width, height, fps) and whether it took them.
-    type Answers = Vec<((u32, u32, u32, u32), bool)>;
-    static SEEN: std::sync::Mutex<Answers> = std::sync::Mutex::new(Vec::new());
+    if DX12_HAD.lock().unwrap().contains(&dx12_key(v)) {
+        return false;
+    }
     let key = (v.codec.profile(), v.width, v.height, v.fps);
     if let Some(&(_, ok)) = SEEN.lock().unwrap().iter().find(|(k, _)| *k == key) {
         return ok;
@@ -111,6 +183,14 @@ unsafe fn probe_hardware(v: &VideoSpec) -> bool {
             let id = vendor.to_string().unwrap_or_default();
             windows::Win32::System::Com::CoTaskMemFree(Some(vendor.0 as _));
             if id.eq_ignore_ascii_case("VEN_1414") {
+                return false;
+            }
+        }
+        let mut name = windows::core::PWSTR::null();
+        if first.GetAllocatedString(&MFT_FRIENDLY_NAME_Attribute, &mut name, &mut len).is_ok() {
+            let n = name.to_string().unwrap_or_default();
+            windows::Win32::System::Com::CoTaskMemFree(Some(name.0 as _));
+            if n.contains("DX12") || n.contains("D3D12") {
                 return false;
             }
         }
@@ -210,12 +290,60 @@ impl Encoder {
         device: Option<&ID3D11Device>,
     ) -> Result<Self> {
         crate::media::startup();
+        // the hardware encoder only when it's sure to take this video (see
+        // `hardware_takes`): the sink writer must not fall back on its own
+        let hardware = video.is_none_or(hardware_takes);
+        match Self::open(path, video, audio_tracks, device, hardware) {
+            // it did anyway (the vendor's encoder refused at the last step):
+            // the software one, before a single frame reaches the DX12 one
+            Err(e) if e.code() == DX12_PICKED => {
+                if let Some(v) = video {
+                    crate::config::log::info(format!("video encoder: the D3D12 one was picked for {}x{} at {} fps; the software one writes it", v.width, v.height, v.fps));
+                    never_hardware(v);
+                }
+                let _ = std::fs::remove_file(path);
+                Self::open(path, video, audio_tracks, device, false)
+            }
+            r => r,
+        }
+    }
+
+    /// For a recording or the replay, which must keep up with the screen:
+    /// the hardware encoder or an error (`HARDWARE_REFUSED`), never the
+    /// software one at this rate behind the caller's back (it falls behind
+    /// at a high frame rate and the frames pile up).
+    pub fn live(path: &std::path::Path, video: &VideoSpec, audio_tracks: usize, device: &ID3D11Device) -> Result<Self> {
+        crate::media::startup();
+        if !hardware_takes(video) {
+            return Err(windows::core::Error::new(HARDWARE_REFUSED, "the hardware encoder won't take this video"));
+        }
+        match Self::open(path, Some(video), audio_tracks, Some(device), true) {
+            Err(e) if e.code() == DX12_PICKED => {
+                crate::config::log::info(format!(
+                    "video encoder: the D3D12 one was picked for {}x{} at {} fps{}; trying gentler settings",
+                    video.width,
+                    video.height,
+                    video.fps,
+                    if video.quality.is_some() { " (constant quality)" } else { "" }
+                ));
+                never_hardware(video);
+                let _ = std::fs::remove_file(path);
+                Err(windows::core::Error::new(HARDWARE_REFUSED, "the D3D12 encoder was picked"))
+            }
+            r => r,
+        }
+    }
+
+    /// The software encoder, whatever the hardware would say.
+    pub fn software(path: &std::path::Path, video: &VideoSpec, audio_tracks: usize, device: &ID3D11Device) -> Result<Self> {
+        crate::media::startup();
+        Self::open(path, Some(video), audio_tracks, Some(device), false)
+    }
+
+    fn open(path: &std::path::Path, video: Option<&VideoSpec>, audio_tracks: usize, device: Option<&ID3D11Device>, hardware: bool) -> Result<Self> {
         unsafe {
             let a = attrs(4)?;
             a.SetGUID(&MF_TRANSCODE_CONTAINERTYPE, &MFTranscodeContainerType_MPEG4)?;
-            // the hardware encoder only when it's sure to take this video (see
-            // `hardware_takes`): the sink writer must not fall back on its own
-            let hardware = video.is_none_or(hardware_takes);
             a.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, hardware as u32)?;
             if let Some(dev) = device {
                 let mut token = 0u32;
@@ -267,6 +395,9 @@ impl Encoder {
                     }
                     enc.SetUINT32(&CODECAPI_AVEncMPVGOPSize, v.fps * v.keyframe_secs.max(1))?;
                     writer.SetInputMediaType(idx, &inp, &enc)?;
+                    if hardware {
+                        check_encoder(&writer, idx)?;
+                    }
                     Some(idx)
                 }
                 None => None,
@@ -352,9 +483,15 @@ impl Encoder {
     }
 
     pub fn finish(&self) -> Result<()> {
-        unsafe { self.writer.Finalize() }?;
+        self.finish_part()?;
         crate::strip::file(&self.path);
         Ok(())
+    }
+
+    /// Finished as a piece of something bigger (a replay segment): its
+    /// metadata stays, the file made from the pieces loses it.
+    pub fn finish_part(&self) -> Result<()> {
+        unsafe { self.writer.Finalize() }
     }
 }
 
@@ -604,6 +741,38 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod pick_tests {
+    /// `BLINKER_TEST_PICK` = "w,h,fps": which encoder the sink writer takes
+    /// for that video with GPU frames, as the replay asks (see the log).
+    #[test]
+    fn which_encoder() {
+        let Ok(v) = std::env::var("BLINKER_TEST_PICK") else { return };
+        let n: Vec<u32> = v.split(',').map(|x| x.trim().parse().unwrap()).collect();
+        crate::media::mark_main_thread();
+        let gpu = crate::record::video::Gpu::shared().unwrap();
+        let cfg = crate::config::Config::default();
+        let spec = super::VideoSpec {
+            width: n[0],
+            height: n[1],
+            fps: n[2],
+            bitrate: cfg.rec_quality.bitrate(n[0], n[1], n[2]),
+            codec: super::Codec::H264,
+            quality: Some(cfg.rec_quality.quality()),
+            keyframe_secs: 1,
+        };
+        let path = std::env::temp_dir().join(format!("blinker-pick-{}.mp4", std::process::id()));
+        let r = super::Encoder::new(&path, Some(&spec), 2, Some(&gpu.device));
+        eprintln!("quality mode: {:?}", r.as_ref().err());
+        drop(r);
+        let _ = std::fs::remove_file(&path);
+        let r = super::Encoder::new(&path, Some(&super::VideoSpec { quality: None, ..spec }), 2, Some(&gpu.device));
+        eprintln!("vbr: {:?}", r.as_ref().err());
+        drop(r);
+        let _ = std::fs::remove_file(&path);
+    }
+}
 
 #[cfg(test)]
 mod hardware_tests {

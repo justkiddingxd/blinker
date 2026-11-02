@@ -2,6 +2,28 @@
 
 Each version's section has a Russian half, `---`, then an English one: the app shows the one of its language, and GitHub's release notes (and the Discord note) are the English half (`.github/workflows/release.yml`).
 
+## 0.4.6
+
+**Захват**
+- Windows: после снимка фокус возвращается туда, где он был: в игру, в видео на весь экран, в любое окно. Раньше игра в полноэкранном режиме сворачивалась, пока было открыто окно захвата, и после снимка оставалась чёрной, пока не нажмёшь Alt+Tab.
+- Окно захвата прячется в ту же секунду, как закрывается, а не когда Windows дойдёт до его уничтожения.
+
+**Запись и повтор**
+- Если кодировщик видеокарты отказывается, запись и повтор сначала пробуют на ней же с настройками помягче (переменный битрейт вместо постоянного качества, 120, потом 60 кадров в секунду) и только потом переходят на программный кодировщик, причём не выше 60 к/с (30 выше Full HD): на полной частоте экрана он не успевал, и кадры копились в памяти. Если повтор всё же не успевает записывать, он пропускает кадры, а не копит недописанные куски.
+- Ещё одно падение «Assertion failed … msh264enchmft_store.dll»: когда кодировщик видеокарты отказывается в последний момент (например, заняты все его сессии), Windows сама берёт «Microsoft AVC DX12 Encoder». Теперь blinker проверяет, какой кодировщик достался, и вместо DX12 пишет программным. Какой кодировщик пишет видео, видно в журнале.
+- В Minecraft и других играх на весь экран курсор больше не пропадает, пока включён повтор или идёт запись. Курсор в таких играх исчезал от любого захвата через Windows Graphics Capture; теперь монитор снимается через Desktop Duplication, как в OBS и ShadowPlay, а курсор в видео рисует сам blinker: та же форма и то же место, и ничего, пока игра его прячет. Повтор и запись одного монитора берут кадры из одного источника. Отдельное окно по-прежнему пишется через Windows Graphics Capture.
+
+---
+
+**Capture**
+- Windows: after a capture the focus goes back where it was: a game, a fullscreen video, any window. Before, a game in fullscreen minimized while the capture window was up and stayed black after the capture until Alt+Tab.
+- The capture window hides the moment it closes, not whenever Windows gets to destroying it.
+
+**Recording and replay**
+- When the graphics card's encoder refuses, recording and the replay first try it with gentler settings (variable bitrate instead of constant quality, 120 then 60 fps) and only then go to the software encoder, and at no more than 60 fps (30 above Full HD): at the screen's full rate it fell behind and the frames piled up in memory. If the replay still can't keep up, it skips frames instead of piling up unfinished pieces.
+- Another "Assertion failed … msh264enchmft_store.dll" crash: when the graphics card's encoder refuses at the last moment (all its sessions taken, say), Windows picks the "Microsoft AVC DX12 Encoder" by itself. blinker now checks which encoder it got and writes with the software one instead of DX12. The log says which encoder writes the video.
+- In Minecraft and other fullscreen games the pointer no longer disappears while the replay is on or a recording runs. Any Windows Graphics Capture session made it vanish in such games; a monitor is now captured through Desktop Duplication, as OBS and ShadowPlay do, and blinker draws the pointer into the video itself: the same shape in the same place, and nothing while the game hides it. The replay and a recording of the same monitor share one source of frames. A single window is still recorded through Windows Graphics Capture.
+
 ## 0.4.5
 
 **Оформление**
