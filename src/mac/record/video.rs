@@ -94,6 +94,11 @@ impl Gpu {
     pub fn new() -> Result<Self, String> {
         Ok(Gpu { device: () })
     }
+
+    /// What the replay and recordings share (nothing, here).
+    pub fn shared() -> Result<Arc<Self>, String> {
+        Ok(Arc::new(Self::new()?))
+    }
 }
 
 /// Host clock in 100 ns units — the clock ScreenCaptureKit stamps samples with.

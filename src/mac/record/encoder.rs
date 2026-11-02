@@ -70,6 +70,17 @@ fn fail(what: &str) -> Error {
 }
 
 impl Encoder {
+    /// For a recording or the replay (VideoToolbox picks the encoder; no
+    /// stray one to keep away from, as on Windows).
+    pub fn live(path: &Path, video: &VideoSpec, audio_tracks: usize, device: &()) -> Result<Self> {
+        Self::new(path, Some(video), audio_tracks, Some(device))
+    }
+
+    /// The same: AVFoundation chooses hardware or software itself.
+    pub fn software(path: &Path, video: &VideoSpec, audio_tracks: usize, device: &()) -> Result<Self> {
+        Self::new(path, Some(video), audio_tracks, Some(device))
+    }
+
     /// `device`: frames come live from a capture (a slow frame is dropped
     /// rather than waited for). Without it, every frame is written.
     pub fn new(path: &Path, video: Option<&VideoSpec>, audio_tracks: usize, device: Option<&()>) -> Result<Self> {
