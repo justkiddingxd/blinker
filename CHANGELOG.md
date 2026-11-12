@@ -2,6 +2,22 @@
 
 Each version's section has a Russian half, `---`, then an English one: the app shows the one of its language, and GitHub's release notes (and the Discord note) are the English half (`.github/workflows/release.yml`).
 
+## 0.4.8
+
+**Захват**
+- Windows: снова о чёрном экране после снимка или старта записи, который проходил только после Alt+Tab. В 0.4.5 окно захвата стало ровно во весь экран, без пустой полоски в 1 пиксель сверху, и видеокарта стала принимать его за полноэкранную игру: показывала его в обход Windows, а когда оно закрывалось, экран мог остаться чёрным. Теперь окно захвата всегда рисуется через Windows, выглядит оно так же.
+
+**Настройки**
+- Внизу настроек, под путём к файлу настроек, теперь путь к журналу: клик показывает его в папке. Его можно прислать, если что-то сломалось.
+
+---
+
+**Capture**
+- Windows: the black screen after a capture or a recording's start, which only Alt+Tab got rid of, once more. Since 0.4.5 the capture window covers the screen exactly, without the 1 px strip at the top, and the graphics card took it for a fullscreen game: it showed it past Windows, and once it closed the screen could stay black. The capture window is now always drawn through Windows, and looks the same.
+
+**Settings**
+- At the bottom of the settings, under the settings file's path, is now the log's path: a click shows it in its folder. It's the file to send when something broke.
+
 ## 0.4.7
 
 **Запись и повтор**

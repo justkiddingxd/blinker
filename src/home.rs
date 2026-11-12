@@ -2085,17 +2085,22 @@ impl HomeApp {
         });
         ui.add_space(18.0);
         ui.label(egui::RichText::new(format!("blinker {}", env!("CARGO_PKG_VERSION"))).font(mono(11.0)).color(FAINT()));
-        // the config file: a click shows it in its folder
-        let path = config::app_dir().join("config.toml");
-        let resp = ui.add(egui::Label::new(egui::RichText::new(path.display().to_string()).font(mono(11.0)).color(FAINT())).sense(egui::Sense::click()));
-        if resp.hovered() {
-            ui.painter().hline(resp.rect.x_range(), resp.rect.bottom(), egui::Stroke::new(1.0, FAINT()));
-        }
-        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(l("показать в папке", "show in the folder")).clicked() {
-            if path.exists() {
-                win::reveal_in_explorer(&path);
-            } else {
-                win::open_path(&config::app_dir());
+        // the config file and the log: a click shows each in its folder
+        let log = config::log::path();
+        for (path, dir) in [
+            (config::app_dir().join("config.toml"), config::app_dir()),
+            (log.clone(), log.parent().map(|p| p.to_path_buf()).unwrap_or_default()),
+        ] {
+            let resp = ui.add(egui::Label::new(egui::RichText::new(path.display().to_string()).font(mono(11.0)).color(FAINT())).sense(egui::Sense::click()));
+            if resp.hovered() {
+                ui.painter().hline(resp.rect.x_range(), resp.rect.bottom(), egui::Stroke::new(1.0, FAINT()));
+            }
+            if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(l("показать в папке", "show in the folder")).clicked() {
+                if path.exists() {
+                    win::reveal_in_explorer(&path);
+                } else if dir.exists() {
+                    win::open_path(&dir);
+                }
             }
         }
     }

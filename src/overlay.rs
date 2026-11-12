@@ -93,6 +93,11 @@ fn run_with(shared: &Arc<Shared>, snap: Snapshot, mode: Mode, gif: bool, demo: O
         .with_taskbar(false)
         .with_always_on_top()
         .with_active(demo.is_none())
+        // Windows: an opaque OpenGL window the exact size of the screen is
+        // taken for a fullscreen game and shown past the compositor; once it
+        // is gone the screen could stay black until an alt-tab. One with an
+        // alpha channel is always composed (it still paints every pixel)
+        .with_transparent(cfg!(windows))
         .with_position([target.x as f32 / primary_scale, target.y as f32 / primary_scale])
         .with_inner_size([target.w as f32 / primary_scale, target.h as f32 / primary_scale]);
     // macOS: one more window for every other display (Windows: one window spans all)
@@ -341,6 +346,11 @@ impl Overlays {
 }
 
 impl eframe::App for Overlays {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // under the picture, never seen: opaque, like the window used to be
+        [0.0, 0.0, 0.0, 1.0]
+    }
+
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         self.list[0].raw_input_hook(ctx, raw);
     }
