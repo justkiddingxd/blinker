@@ -11,10 +11,14 @@ pub mod encoder;
 pub mod fx;
 #[cfg_attr(target_os = "macos", path = "../mac/record/hud.rs")]
 pub mod hud;
+#[cfg(windows)]
+pub mod live;
 mod pill;
 #[cfg(windows)]
 mod pointer;
 pub mod replay;
+#[cfg(windows)]
+pub mod ring;
 #[cfg_attr(target_os = "macos", path = "../mac/record/video.rs")]
 pub mod video;
 
@@ -94,6 +98,10 @@ impl AudioSink for Encoder {
 pub enum VideoOut {
     File(Arc<Encoder>),
     Replay(Arc<replay::Segmenter>),
+    #[cfg(windows)]
+    Live(Arc<live::LiveEncoder>),
+    #[cfg(windows)]
+    Ring(Arc<ring::RingWriter>),
 }
 
 unsafe impl Send for VideoOut {}
@@ -105,6 +113,10 @@ impl VideoOut {
                 let _ = e.write_texture(tex, t, dur);
             }
             VideoOut::Replay(s) => s.write_video(tex, t, dur),
+            #[cfg(windows)]
+            VideoOut::Live(e) => e.write(tex, t, dur),
+            #[cfg(windows)]
+            VideoOut::Ring(r) => r.write_video(tex, t, dur),
         }
     }
 
@@ -128,6 +140,9 @@ pub struct Selection {
 
 pub struct Recording {
     enc: Arc<Encoder>,
+    /// The hardware encoder feeding `enc` (None: `enc` encodes in software).
+    #[cfg(windows)]
+    live: Option<Arc<live::LiveEncoder>>,
     capture: Capture,
     pacer: Pacer,
     audio: Vec<AudioCapture>,
@@ -227,9 +242,55 @@ pub fn video_spec(cfg: &Config, w: u32, h: u32, keyframe_secs: u32, monitor: &Mo
     }
 }
 
-/// Opens an encoder for `spec`, stepping down when the hardware refuses:
-/// constant quality → VBR, very high frame rates → 120 → 60, H.265 → H.264.
-/// Returns the settings actually used.
+/// The hardware encoder for `spec` and an MP4 taking its packets.
+#[cfg(windows)]
+#[allow(clippy::type_complexity)]
+fn live_file(path: &std::path::Path, spec: &VideoSpec, tracks: usize, gpu: &Arc<Gpu>) -> Option<(Arc<Encoder>, VideoSpec, Option<Arc<live::LiveEncoder>>)> {
+    let (l, s) = live::open_ladder(gpu, spec)?;
+    let file = match Encoder::passthrough(path, l.out_type(), tracks) {
+        Ok(f) => Arc::new(f),
+        Err(e) => {
+            log::error(format!("video file: {e}"));
+            l.finish(std::time::Duration::ZERO);
+            let _ = std::fs::remove_file(path);
+            return None;
+        }
+    };
+    let to = file.clone();
+    l.start(move |p| {
+        let _ = to.write_packet(&p);
+    });
+    Some((file, s, Some(Arc::new(l))))
+}
+
+/// No hardware encoder for it: the software one, at a rate it keeps up with
+/// (60 fps up to Full HD, 30 above).
+#[cfg(windows)]
+pub fn software_spec(spec: &VideoSpec) -> VideoSpec {
+    let cap = if spec.width * spec.height > 1920 * 1088 { 30 } else { 60 };
+    VideoSpec { codec: encoder::Codec::H264, quality: None, fps: spec.fps.min(cap), ..*spec }
+}
+
+/// Windows: the software encoder (`live.rs` has the hardware one).
+#[cfg(windows)]
+pub fn open_encoder(path: &std::path::Path, spec: &VideoSpec, tracks: usize, gpu: &Gpu) -> Result<(Encoder, VideoSpec), String> {
+    let s = software_spec(spec);
+    match Encoder::software(path, &s, tracks, &gpu.device) {
+        Ok(e) => {
+            log_software_once(&s);
+            Ok((e, s))
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(path);
+            Err(lf!("кодировщик: {}", "encoder: {}", e.message()))
+        }
+    }
+}
+
+/// Opens an encoder for `spec`, stepping down when it refuses: constant
+/// quality → VBR, very high frame rates → 120 → 60, H.265 → H.264. Returns
+/// the settings actually used.
+#[cfg(not(windows))]
 pub fn open_encoder(path: &std::path::Path, spec: &VideoSpec, tracks: usize, gpu: &Gpu) -> Result<(Encoder, VideoSpec), String> {
     let vbr = |s: VideoSpec| VideoSpec { quality: None, ..s };
     let mut tries = vec![*spec, vbr(*spec)];
@@ -251,23 +312,11 @@ pub fn open_encoder(path: &std::path::Path, spec: &VideoSpec, tracks: usize, gpu
             }
         }
     }
-    // no hardware encoder for it: the software one, at a rate it keeps up
-    // with (60 fps up to Full HD, 30 above)
-    let cap = if spec.width * spec.height > 1920 * 1088 { 30 } else { 60 };
-    let s = VideoSpec { codec: encoder::Codec::H264, quality: None, fps: spec.fps.min(cap), ..*spec };
-    match Encoder::software(path, &s, tracks, &gpu.device) {
-        Ok(e) => {
-            log_software_once(&s);
-            Ok((e, s))
-        }
-        Err(e) => {
-            let _ = std::fs::remove_file(path);
-            Err(lf!("кодировщик: {last}; {}", "encoder: {last}; {}", e.message()))
-        }
-    }
+    Err(lf!("кодировщик: {last}", "encoder: {last}"))
 }
 
 /// Into the log the first time a size goes to the software encoder.
+#[cfg(windows)]
 fn log_software_once(s: &VideoSpec) {
     static SAID: std::sync::Mutex<Vec<(u32, u32, u32)>> = std::sync::Mutex::new(Vec::new());
     let mut said = SAID.lock().unwrap();
@@ -307,7 +356,7 @@ pub fn start(
     // A GIF has no sound and is written to a temporary MP4 first.
     audio::use_mic(&cfg.mic_device);
     let tracks = if gif { Vec::new() } else { audio_sources(cfg.rec_desktop_audio, cfg.rec_mic) };
-    let gpu = Gpu::shared().map_err(|e| format!("{}: {e}", video::GPU_API))?;
+    let gpu = Arc::new(Gpu::new().map_err(|e| format!("{}: {e}", video::GPU_API))?);
     let path = if gif {
         let dir = crate::config::cache_dir().join("gif");
         let _ = std::fs::create_dir_all(&dir);
@@ -315,8 +364,27 @@ pub fn start(
     } else {
         clip_path(cfg, "blinker", "mp4", game_now().as_deref())
     };
-    let (enc, spec) = open_encoder(&path, &video_spec(cfg, w, h, 2, &monitor), tracks.len(), &gpu)?;
-    let enc = Arc::new(enc);
+    let wanted = video_spec(cfg, w, h, 2, &monitor);
+    #[cfg(windows)]
+    let (enc, spec, live) = match live_file(&path, &wanted, tracks.len(), &gpu) {
+        Some(x) => x,
+        None => {
+            let (e, s) = open_encoder(&path, &wanted, tracks.len(), &gpu)?;
+            (Arc::new(e), s, None)
+        }
+    };
+    #[cfg(not(windows))]
+    let (enc, spec) = {
+        let (e, s) = open_encoder(&path, &wanted, tracks.len(), &gpu)?;
+        (Arc::new(e), s)
+    };
+    #[cfg(windows)]
+    let out = match &live {
+        Some(l) => VideoOut::Live(l.clone()),
+        None => VideoOut::File(enc.clone()),
+    };
+    #[cfg(not(windows))]
+    let out = VideoOut::File(enc.clone());
 
     let clock = Clock::new();
     let end = Arc::new(AtomicI64::new(0));
@@ -325,7 +393,7 @@ pub fn start(
         lf!("захват экрана: {e}", "screen capture: {e}")
     })?;
     let fx = fx::Fx::start(cfg.rec_show_clicks, cfg.rec_show_keys, monitor.scale);
-    let pacer = Pacer::start(gpu, &capture, target, VideoOut::File(enc.clone()), spec.fps, clock.clone(), fx.clone(), origin);
+    let pacer = Pacer::start(gpu, &capture, target, out, spec.fps, clock.clone(), fx.clone(), origin);
     let mut audio = Vec::new();
     let mut failed = Vec::new();
     for (i, src) in tracks.iter().enumerate() {
@@ -342,8 +410,41 @@ pub fn start(
     // stays down and won't come up on hover)
     let m = monitor.rect;
     let whole = r.x <= m.x && r.y <= m.y && r.right() >= m.right() && r.bottom() >= m.bottom();
-    let hud = hud::Hud::show(r, &monitor, sel.window.is_none() && !whole, sel.window, clock.clone(), on_stop, on_pause);
-    Ok(Recording { enc, capture, pacer, audio, end, clock, fx, path, rect: r, monitor, hud, tracks, failed, gif })
+    let framed = sel.window.is_none() && !whole;
+    let hud = hud::Hud::show(r, &monitor, framed, sel.window, clock.clone(), on_stop, on_pause);
+    log::info(format!(
+        "recording: starts, {}x{} at {} fps{}{}",
+        w,
+        h,
+        spec.fps,
+        if gif { ", gif" } else { "" },
+        if framed { ", framed" } else { "" }
+    ));
+    // what's in front once it runs: a report of a black screen at this
+    // moment needs it
+    #[cfg(windows)]
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        log::info(format!("recording: 0.5 s in, in front: {}", crate::win::describe_window(crate::win::foreground())));
+    });
+    Ok(Recording {
+        enc,
+        #[cfg(windows)]
+        live,
+        capture,
+        pacer,
+        audio,
+        end,
+        clock,
+        fx,
+        path,
+        rect: r,
+        monitor,
+        hud,
+        tracks,
+        failed,
+        gif,
+    })
 }
 
 impl Recording {
@@ -361,7 +462,12 @@ impl Recording {
         self.capture.close();
         let end = self.clock.now().max(1);
         self.end.store(end, Ordering::SeqCst);
+        log::info(format!("recording: stops after {:.1} s", end as f64 / HNS as f64));
         let thumb = self.pacer.stop();
+        #[cfg(windows)]
+        if let Some(l) = &self.live {
+            l.finish(std::time::Duration::from_secs(5));
+        }
         for a in self.audio {
             a.join();
         }

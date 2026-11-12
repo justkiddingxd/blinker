@@ -76,11 +76,6 @@ impl Encoder {
         Self::new(path, Some(video), audio_tracks, Some(device))
     }
 
-    /// The same: AVFoundation chooses hardware or software itself.
-    pub fn software(path: &Path, video: &VideoSpec, audio_tracks: usize, device: &()) -> Result<Self> {
-        Self::new(path, Some(video), audio_tracks, Some(device))
-    }
-
     /// `device`: frames come live from a capture (a slow frame is dropped
     /// rather than waited for). Without it, every frame is written.
     pub fn new(path: &Path, video: Option<&VideoSpec>, audio_tracks: usize, device: Option<&()>) -> Result<Self> {

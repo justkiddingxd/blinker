@@ -107,6 +107,14 @@ fn run_with(shared: &Arc<Shared>, snap: Snapshot, mode: Mode, gif: bool, demo: O
     // whatever was in front (a game, say) gets the focus back after
     #[cfg(windows)]
     let (before, is_demo) = (win::foreground(), demo.is_some());
+    // what a report of a black screen needs to be told apart
+    let opened = std::time::Instant::now();
+    #[cfg(windows)]
+    if !is_demo {
+        FOCUS_BACK.store(before, std::sync::atomic::Ordering::SeqCst);
+        let black = if crate::capture::looks_black(&snap.image) { ", THE PICTURE IS BLACK" } else { "" };
+        crate::config::log::info(format!("capture: opens, {}x{}, in front: {}{black}", target.w, target.h, win::describe_window(before)));
+    }
     let shared2 = shared.clone();
     runtime::run_window(shared, "overlay", viewport, false, move |cc| {
         let hwnd = win::hwnd_of(cc);
@@ -134,8 +142,21 @@ fn run_with(shared: &Arc<Shared>, snap: Snapshot, mode: Mode, gif: bool, demo: O
     });
     #[cfg(windows)]
     if !is_demo {
-        win::give_focus_back(before);
+        let closed = opened.elapsed().as_secs_f32();
+        let taken = if out.borrow().is_some() { "taken" } else { "cancelled" };
+        // in a moment: right as a window goes, nothing is in front yet
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let now = win::foreground();
+            crate::config::log::info(format!(
+                "capture: closed after {closed:.1} s, {taken}, in front: {}{}",
+                win::describe_window(now),
+                if now == before { "" } else { " (not the window from before)" }
+            ));
+        });
     }
+    #[cfg(not(windows))]
+    let _ = opened;
     out.borrow_mut().take()
 }
 
@@ -2125,6 +2146,10 @@ impl OverlayApp {
                 if self.stable >= 2 || self.frame_no > 45 {
                     win::cloak(h, false);
                     self.revealed = true;
+                    // not placed yet or slow to draw: worth knowing in a report
+                    if !placed || self.frame_no > 12 {
+                        crate::config::log::info(format!("capture: shown at frame {}, in place: {placed}", self.frame_no));
+                    }
                     self.shown_frame = self.frame_no;
                     if self.primary {
                         win::force_foreground(h);
@@ -2438,13 +2463,19 @@ fn keycap(ui: &mut egui::Ui, key: &str) {
     ui.painter().galley(r.center() - g.size() / 2.0, g, TEXT());
 }
 
+/// What was in front when the overlay opened (Windows).
+#[cfg(windows)]
+static FOCUS_BACK: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
 /// Closes the overlay: the main window, and with it every display's window.
-/// Windows: `hwnd` is hidden at once (winit destroys a window only when its
-/// thread's messages are next handled; till then the frozen screen would
-/// stay over everything).
+/// Windows: the focus goes back first, while we're still the window in front
+/// and allowed to hand it on; then `hwnd` is hidden at once (winit destroys a
+/// window only when its thread's messages are next handled; till then the
+/// frozen screen would stay over everything).
 fn close_all(ctx: &egui::Context, hwnd: Option<win::HWND>) {
     #[cfg(windows)]
     if let Some(h) = hwnd {
+        win::give_focus_back(FOCUS_BACK.swap(0, std::sync::atomic::Ordering::SeqCst));
         win::cloak(h, true);
         win::show_window(h, false);
     }

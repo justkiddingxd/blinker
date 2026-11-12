@@ -250,6 +250,9 @@ pub struct Replay {
     end: Arc<AtomicI64>,
     clock: Arc<Clock>,
     seg: Arc<Segmenter>,
+    /// The video in memory, off one encoder (None: segments, `seg`).
+    #[cfg(windows)]
+    ring: Option<Arc<super::ring::RingWriter>>,
     rings: Arc<PcmRings>,
     tracks: Vec<Source>,
     secs: std::sync::atomic::AtomicU32,
@@ -287,9 +290,16 @@ impl Replay {
             .ok_or(crate::i18n::t("нет монитора"))?;
         let (w, h) = ((monitor.rect.w as u32) & !1, (monitor.rect.h as u32) & !1);
         let target = super::video::monitor_target(IRect::new(monitor.rect.x, monitor.rect.y, w as i32, h as i32), &monitor);
-        let gpu = Gpu::shared().map_err(|e| format!("{}: {e}", super::video::GPU_API))?;
+        let gpu = Arc::new(Gpu::new().map_err(|e| format!("{}: {e}", super::video::GPU_API))?);
         let spec = super::video_spec(cfg, w, h, 1, &monitor);
         let secs = cfg.replay_secs.clamp(MIN_SECS, MAX_SECS);
+        // one encoder and a ring in memory; without a hardware encoder,
+        // segments from the software one
+        #[cfg(windows)]
+        let (ring, spec) = match super::ring::RingWriter::start(&gpu, &spec, secs) {
+            Some((r, s)) => (Some(r), s),
+            None => (None, super::software_spec(&spec)),
+        };
         let seg = Arc::new(Segmenter {
             dir: dir.clone(),
             spec,
@@ -307,7 +317,14 @@ impl Replay {
         let clock = Clock::new();
         let end = Arc::new(AtomicI64::new(0));
         let capture = Capture::start(&gpu, target, spec.fps, cfg.rec_cursor, clock.clone()).map_err(|e| lf!("захват экрана: {e}", "screen capture: {e}"))?;
-        let pacer = Pacer::start(gpu, &capture, target, VideoOut::Replay(seg.clone()), spec.fps, clock.clone(), None, (monitor.rect.x, monitor.rect.y));
+        #[cfg(windows)]
+        let out = match &ring {
+            Some(r) => VideoOut::Ring(r.clone()),
+            None => VideoOut::Replay(seg.clone()),
+        };
+        #[cfg(not(windows))]
+        let out = VideoOut::Replay(seg.clone());
+        let pacer = Pacer::start(gpu, &capture, target, out, spec.fps, clock.clone(), None, (monitor.rect.x, monitor.rect.y));
         let mut audio = Vec::new();
         for (i, src) in tracks.iter().enumerate() {
             match AudioCapture::start(*src, rings.clone(), i, clock.clone(), end.clone()) {
@@ -322,6 +339,8 @@ impl Replay {
             end,
             clock,
             seg,
+            #[cfg(windows)]
+            ring,
             rings,
             tracks,
             secs: std::sync::atomic::AtomicU32::new(secs),
@@ -337,6 +356,10 @@ impl Replay {
         let secs = secs.clamp(MIN_SECS, MAX_SECS);
         if self.secs.swap(secs, Ordering::SeqCst) != secs {
             self.seg.keep.store(secs as i64 * HNS, Ordering::SeqCst);
+            #[cfg(windows)]
+            if let Some(r) = &self.ring {
+                r.set_keep(secs);
+            }
             self.rings.resize(secs);
         }
     }
@@ -349,6 +372,10 @@ impl Replay {
         }
         for a in std::mem::take(&mut self.audio) {
             a.join();
+        }
+        #[cfg(windows)]
+        if let Some(r) = &self.ring {
+            r.finish();
         }
         self.seg.flush();
         let _ = std::fs::remove_dir_all(dir());
@@ -363,23 +390,12 @@ impl Replay {
         if now - from < HNS {
             return Err(crate::i18n::t("буфер повтора ещё пуст").into());
         }
-        let segs: Vec<(PathBuf, i64)> = self
-            .seg
-            .done
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|s| s.end > from && s.start < now)
-            .map(|s| (s.path.clone(), s.start))
-            .collect();
-        if segs.is_empty() {
-            return Err(crate::i18n::t("буфер повтора ещё пуст").into());
-        }
         let path = super::clip_path(cfg, crate::i18n::t("blinker повтор"), "mp4", super::game_now().as_deref());
-        let duration = remux(&segs, &path, from, now, &self.rings, self.tracks.len()).map_err(|e| {
+        let written = self.write_clip(&path, from, now)?.map_err(|e| {
             let _ = std::fs::remove_file(&path);
             lf!("не удалось сохранить повтор: {e}", "could not save the replay: {e}")
         })?;
+        let duration = written;
         crate::strip::file(&path);
         let thumb = crate::media::VideoReader::open(&path, 640, 360)
             .ok()
@@ -407,6 +423,48 @@ impl Replay {
     }
 }
 
+impl Replay {
+    /// The stretch into `path`: its length. The outer error: nothing to save.
+    #[allow(clippy::type_complexity)]
+    fn write_clip(&self, path: &Path, from: i64, now: i64) -> Result<Result<i64, String>, String> {
+        let empty = || -> String { crate::i18n::t("буфер повтора ещё пуст").into() };
+        #[cfg(windows)]
+        if let Some(r) = &self.ring {
+            let (vtype, list) = r.stretch(from, now).ok_or_else(empty)?;
+            return Ok(from_ring(path, &vtype, &list, now, &self.rings, self.tracks.len()).map_err(|e| e.to_string()));
+        }
+        let segs: Vec<(PathBuf, i64)> = self
+            .seg
+            .done
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| s.end > from && s.start < now)
+            .map(|s| (s.path.clone(), s.start))
+            .collect();
+        if segs.is_empty() {
+            return Err(empty());
+        }
+        Ok(remux(&segs, path, from, now, &self.rings, self.tracks.len()).map_err(|e| e.to_string()))
+    }
+}
+
+/// The ring's packets (`list`, starting on a keyframe) into `dst`, up to `to`;
+/// the sound comes from the PCM rings. Returns the duration.
+#[cfg(windows)]
+fn from_ring(dst: &Path, vtype: &IMFMediaType, list: &[Arc<super::ring::Stored>], to: i64, rings: &PcmRings, tracks: usize) -> windows::core::Result<i64> {
+    crate::media::startup();
+    let b = list[0].p.t;
+    let last = list[list.len() - 1].p.t + list[list.len() - 1].p.dur - b;
+    let len = (to - b).max(last);
+    let mut items = list.iter();
+    write_mp4(dst, vtype, b, len, rings, tracks, || match items.next() {
+        Some(s) => unsafe { super::encoder::packet_sample(&s.p, b) }.map(Some),
+        None => Ok(None),
+    })?;
+    Ok(len)
+}
+
 /// Glues `segs` (path, start on the replay clock) into `dst`, starting at the
 /// first keyframe at or after `from`; the sound comes from the PCM rings.
 /// Returns the duration.
@@ -428,31 +486,6 @@ fn remux(segs: &[(PathBuf, i64)], dst: &Path, from: i64, to: i64, rings: &PcmRin
         let first = crate::media::open_reader(&segs[0].0, false)?;
         let vtype = first.GetNativeMediaType(0, 0)?;
         drop(first);
-        let mut a = None;
-        MFCreateAttributes(&mut a, 2)?;
-        let a = a.unwrap();
-        a.SetGUID(&MF_TRANSCODE_CONTAINERTYPE, &MFTranscodeContainerType_MPEG4)?;
-        a.SetUINT32(&MF_SINK_WRITER_DISABLE_THROTTLING, 1)?;
-        let w = crate::media::wide(dst);
-        let writer = MFCreateSinkWriterFromURL(windows::core::PCWSTR(w.as_ptr()), None, &a)?;
-        // video: compressed samples pass straight through
-        let v = writer.AddStream(&vtype)?;
-        writer.SetInputMediaType(v, &vtype, None)?;
-        let mut audio_idx = Vec::new();
-        for t in 0..tracks {
-            let out = MFCreateMediaType()?;
-            out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
-            out.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_AAC)?;
-            out.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
-            out.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, AUDIO_RATE)?;
-            out.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, AUDIO_CHANNELS)?;
-            out.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, if t == 0 { 16_000 } else { 12_000 })?;
-            let idx = writer.AddStream(&out)?;
-            writer.SetInputMediaType(idx, &audio_pcm_type(AUDIO_RATE, AUDIO_CHANNELS)?, None)?;
-            audio_idx.push(idx);
-        }
-        writer.BeginWriting()?;
-
         // Compressed video samples of the stretch (small: no decoding).
         let mut base: Option<i64> = None;
         let mut video: Vec<IMFSample> = Vec::new();
@@ -490,6 +523,49 @@ fn remux(segs: &[(PathBuf, i64)], dst: &Path, from: i64, to: i64, rings: &PcmRin
             return Err(windows::core::Error::from_hresult(MF_E_INVALIDREQUEST));
         };
         let len = (to - b).max(last_end);
+        let mut items = video.into_iter();
+        write_mp4(dst, &vtype, b, len, rings, tracks, || Ok(items.next()))?;
+        Ok(len)
+    }
+}
+
+/// An MP4 at `dst`: compressed video samples from `next` (times from 0), as
+/// `vtype` describes them, and the sound of the stretch from `b`, `len` long.
+#[cfg(windows)]
+fn write_mp4(
+    dst: &Path,
+    vtype: &IMFMediaType,
+    b: i64,
+    len: i64,
+    rings: &PcmRings,
+    tracks: usize,
+    mut next: impl FnMut() -> windows::core::Result<Option<IMFSample>>,
+) -> windows::core::Result<()> {
+    unsafe {
+        let mut a = None;
+        MFCreateAttributes(&mut a, 2)?;
+        let a = a.unwrap();
+        a.SetGUID(&MF_TRANSCODE_CONTAINERTYPE, &MFTranscodeContainerType_MPEG4)?;
+        a.SetUINT32(&MF_SINK_WRITER_DISABLE_THROTTLING, 1)?;
+        let w = crate::media::wide(dst);
+        let writer = MFCreateSinkWriterFromURL(windows::core::PCWSTR(w.as_ptr()), None, &a)?;
+        // video: compressed samples pass straight through
+        let v = writer.AddStream(vtype)?;
+        writer.SetInputMediaType(v, vtype, None)?;
+        let mut audio_idx = Vec::new();
+        for t in 0..tracks {
+            let out = MFCreateMediaType()?;
+            out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
+            out.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_AAC)?;
+            out.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
+            out.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, AUDIO_RATE)?;
+            out.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, AUDIO_CHANNELS)?;
+            out.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, if t == 0 { 16_000 } else { 12_000 })?;
+            let idx = writer.AddStream(&out)?;
+            writer.SetInputMediaType(idx, &audio_pcm_type(AUDIO_RATE, AUDIO_CHANNELS)?, None)?;
+            audio_idx.push(idx);
+        }
+        writer.BeginWriting()?;
         let f0 = b * AUDIO_RATE as i64 / HNS;
         let f1 = (b + len) * AUDIO_RATE as i64 / HNS;
         let pcm: Vec<Vec<i16>> = (0..audio_idx.len()).map(|t| rings.read(t, f0, f1)).collect();
@@ -520,14 +596,13 @@ fn remux(segs: &[(PathBuf, i64)], dst: &Path, from: i64, to: i64, rings: &PcmRin
                 *k += 1;
             }
         };
-        for s in &video {
+        while let Some(s) = next()? {
             let t = s.GetSampleTime()?;
             write_audio_until(&mut k, t)?;
-            writer.WriteSample(v, s)?;
+            writer.WriteSample(v, &s)?;
         }
         write_audio_until(&mut k, i64::MAX)?;
-        writer.Finalize()?;
-        Ok(len)
+        writer.Finalize()
     }
 }
 
@@ -567,8 +642,56 @@ mod tests {
 
     /// Buffers ~7 s of the primary monitor, saves the replay, checks it,
     /// deletes it. `BLINKER_TEST_RECORD` = scratch folder.
+    fn handles() -> u32 {
+        let mut n = 0u32;
+        unsafe {
+            windows_sys::Win32::System::Threading::GetProcessHandleCount(windows_sys::Win32::System::Threading::GetCurrentProcess(), &mut n);
+        }
+        n
+    }
+
+    /// `BLINKER_TEST_SOAK` = seconds: the replay running, GIF recordings of
+    /// the whole monitor one after another. A stop that takes over 20 s is a
+    /// hang (the process ends with a message); handles are printed as it goes.
+    #[test]
+    fn replay_soak() {
+        let (Ok(dir), Ok(secs)) = (std::env::var("BLINKER_TEST_RECORD"), std::env::var("BLINKER_TEST_SOAK")) else { return };
+        let secs: u64 = secs.parse().unwrap();
+        crate::media::mark_main_thread();
+        let mut cfg = crate::config::Config { save_dir: dir.into(), ..Default::default() };
+        cfg.replay_secs = 30;
+        cfg.replay_mic = false;
+        cfg.rec_mic = false;
+        let r = super::Replay::start(&cfg).expect("replay");
+        let mon = crate::win::monitors()[0];
+        let t0 = std::time::Instant::now();
+        let mut n = 0;
+        while t0.elapsed().as_secs() < secs {
+            let sel = crate::record::Selection { rect: mon.rect, monitor: mon, window: None };
+            let rec = crate::record::start(&cfg, sel, true, || {}, || {}).expect("recording");
+            std::thread::sleep(std::time::Duration::from_secs(4));
+            let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let d2 = done.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(20));
+                if !d2.load(std::sync::atomic::Ordering::SeqCst) {
+                    eprintln!("HANG: a recording's stop took over 20 s");
+                    std::process::exit(3);
+                }
+            });
+            let f = rec.stop().expect("stop");
+            done.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = std::fs::remove_file(&f.path);
+            n += 1;
+            eprintln!("{:>4} s  recording {n}  handles {}", t0.elapsed().as_secs(), handles());
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        r.stop();
+        eprintln!("done, handles {}", handles());
+    }
+
     /// A recording while the replay runs: both off one duplication of the
-    /// monitor and one device, both files whole.
+    /// monitor, each with its own device and encoder, both files whole.
     #[test]
     fn replay_and_recording() {
         let Ok(dir) = std::env::var("BLINKER_TEST_RECORD") else { return };

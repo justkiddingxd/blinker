@@ -336,6 +336,23 @@ pub fn raise(hwnd: HWND) {
     force_foreground(hwnd);
 }
 
+/// The window `hwnd` for the log: its class, and whether it covers its whole
+/// monitor (no titles: they'd say what people are doing).
+pub fn describe_window(hwnd: isize) -> String {
+    let h = hwnd as HWND;
+    unsafe {
+        if h.is_null() || IsWindow(h) == 0 {
+            return "none".into();
+        }
+        let mut buf = [0u16; 128];
+        let n = GetClassNameW(h, buf.as_mut_ptr(), buf.len() as i32).max(0) as usize;
+        let class = String::from_utf16_lossy(&buf[..n]);
+        let b = frame_bounds(h);
+        let full = monitors().iter().any(|m| m.rect == b);
+        format!("{class}{}", if full { ", fullscreen" } else { "" })
+    }
+}
+
 /// The window in front now, to give the focus back to later.
 pub fn foreground() -> isize {
     unsafe { GetForegroundWindow() as isize }
@@ -381,11 +398,22 @@ pub fn force_foreground(hwnd: HWND) {
         }
         if GetForegroundWindow() != hwnd {
             // Windows refuses to hand over focus unless we "own" the last input
-            // event: a synthetic Alt tap satisfies the foreground lock.
-            keybd_event(VK_MENU as u8, 0, KEYEVENTF_EXTENDEDKEY, 0);
-            keybd_event(VK_MENU as u8, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0);
+            // event. A mouse move of nothing gives us that and nobody reacts to
+            // it (a tapped Alt did too, but it lands in the window in front: a
+            // game took it for its menu, and with Shift still held from the
+            // hotkey it switched the keyboard layout)
+            let mut input: INPUT = std::mem::zeroed();
+            input.r#type = INPUT_MOUSE;
+            input.Anonymous.mi.dwFlags = MOUSEEVENTF_MOVE;
+            SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
             SetForegroundWindow(hwnd);
             SetFocus(hwnd);
+            let got = GetForegroundWindow() == hwnd;
+            crate::config::log::info(format!(
+                "focus: Windows held it back for {}, {}",
+                describe_window(fg as isize),
+                if got { "got it after all" } else { "still not ours" }
+            ));
         }
     }
 }

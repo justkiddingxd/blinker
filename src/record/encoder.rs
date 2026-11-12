@@ -26,14 +26,14 @@ pub enum Codec {
 }
 
 impl Codec {
-    fn subtype(self) -> windows::core::GUID {
+    pub fn subtype(self) -> windows::core::GUID {
         match self {
             Codec::H264 => MFVideoFormat_H264,
             Codec::Hevc => MFVideoFormat_HEVC,
             Codec::Av1 => MFVideoFormat_AV1,
         }
     }
-    fn profile(self) -> u32 {
+    pub fn profile(self) -> u32 {
         match self {
             Codec::H264 => eAVEncH264VProfile_High.0 as u32,
             Codec::Hevc => eAVEncH265VProfile_Main_420_8.0 as u32,
@@ -103,9 +103,6 @@ fn never_hardware(v: &VideoSpec) {
         had.push(dx12_key(v));
     }
 }
-
-/// The error of a video the hardware encoder won't write (`Encoder::live`).
-pub const HARDWARE_REFUSED: windows::core::HRESULT = windows::core::HRESULT(0xA0B1_0D13u32 as i32);
 
 /// Which encoder the sink writer took for stream `idx`: logged once per
 /// name, and an error if it's Microsoft's D3D12 one ("Microsoft AVC DX12
@@ -280,6 +277,47 @@ pub fn audio_pcm_type(rate: u32, channels: u32) -> Result<IMFMediaType> {
     }
 }
 
+/// The sound tracks of a file: AAC, from 48 kHz stereo PCM.
+unsafe fn add_audio(writer: &IMFSinkWriter, tracks: usize) -> Result<Vec<u32>> {
+    let mut audio = Vec::new();
+    unsafe {
+        for t in 0..tracks {
+            let out = MFCreateMediaType()?;
+            out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
+            out.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_AAC)?;
+            out.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
+            out.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, AUDIO_RATE)?;
+            out.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, AUDIO_CHANNELS)?;
+            // Track 1 (desktop / mixed sound) 128 kbit/s, the microphone 96 kbit/s.
+            out.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, if t == 0 { 16_000 } else { 12_000 })?;
+            let idx = writer.AddStream(&out)?;
+            writer.SetInputMediaType(idx, &audio_pcm_type(AUDIO_RATE, AUDIO_CHANNELS)?, None)?;
+            audio.push(idx);
+        }
+    }
+    Ok(audio)
+}
+
+/// A packet of compressed video as a sample, `base` taken off its time.
+pub unsafe fn packet_sample(p: &super::live::Packet, base: i64) -> Result<IMFSample> {
+    unsafe {
+        let buf = MFCreateMemoryBuffer(p.data.len() as u32)?;
+        let mut m = std::ptr::null_mut();
+        buf.Lock(&mut m, None, None)?;
+        std::ptr::copy_nonoverlapping(p.data.as_ptr(), m, p.data.len());
+        buf.Unlock()?;
+        buf.SetCurrentLength(p.data.len() as u32)?;
+        let s = MFCreateSample()?;
+        s.AddBuffer(&buf)?;
+        s.SetSampleTime(p.t - base)?;
+        s.SetSampleDuration(p.dur.max(1))?;
+        if p.key {
+            s.SetUINT32(&MFSampleExtension_CleanPoint, 1)?;
+        }
+        Ok(s)
+    }
+}
+
 impl Encoder {
     /// `device`: frames come as GPU textures from this device (zero-copy into
     /// the hardware encoder). Without it, frames are written from memory.
@@ -308,36 +346,38 @@ impl Encoder {
         }
     }
 
-    /// For a recording or the replay, which must keep up with the screen:
-    /// the hardware encoder or an error (`HARDWARE_REFUSED`), never the
-    /// software one at this rate behind the caller's back (it falls behind
-    /// at a high frame rate and the frames pile up).
-    pub fn live(path: &std::path::Path, video: &VideoSpec, audio_tracks: usize, device: &ID3D11Device) -> Result<Self> {
-        crate::media::startup();
-        if !hardware_takes(video) {
-            return Err(windows::core::Error::new(HARDWARE_REFUSED, "the hardware encoder won't take this video"));
-        }
-        match Self::open(path, Some(video), audio_tracks, Some(device), true) {
-            Err(e) if e.code() == DX12_PICKED => {
-                crate::config::log::info(format!(
-                    "video encoder: the D3D12 one was picked for {}x{} at {} fps{}; trying gentler settings",
-                    video.width,
-                    video.height,
-                    video.fps,
-                    if video.quality.is_some() { " (constant quality)" } else { "" }
-                ));
-                never_hardware(video);
-                let _ = std::fs::remove_file(path);
-                Err(windows::core::Error::new(HARDWARE_REFUSED, "the D3D12 encoder was picked"))
-            }
-            r => r,
-        }
-    }
-
     /// The software encoder, whatever the hardware would say.
     pub fn software(path: &std::path::Path, video: &VideoSpec, audio_tracks: usize, device: &ID3D11Device) -> Result<Self> {
         crate::media::startup();
         Self::open(path, Some(video), audio_tracks, Some(device), false)
+    }
+
+    /// A file for video already compressed (`vtype` describes it; see
+    /// `live.rs`, `write_packet`) and sound to compress.
+    pub fn passthrough(path: &std::path::Path, vtype: &IMFMediaType, audio_tracks: usize) -> Result<Self> {
+        crate::media::startup();
+        unsafe {
+            let a = attrs(2)?;
+            a.SetGUID(&MF_TRANSCODE_CONTAINERTYPE, &MFTranscodeContainerType_MPEG4)?;
+            // the encoder's thread must not wait for the file
+            a.SetUINT32(&MF_SINK_WRITER_DISABLE_THROTTLING, 1)?;
+            let wide: Vec<u16> = path.as_os_str().encode_wide_null();
+            let writer = MFCreateSinkWriterFromURL(windows::core::PCWSTR(wide.as_ptr()), None, &a)?;
+            let v = writer.AddStream(vtype)?;
+            writer.SetInputMediaType(v, vtype, None)?;
+            let audio = add_audio(&writer, audio_tracks)?;
+            writer.BeginWriting()?;
+            Ok(Self { writer, path: path.to_path_buf(), video: Some(v), audio, width: 0, height: 0 })
+        }
+    }
+
+    /// A packet of compressed video into a `passthrough` file.
+    pub fn write_packet(&self, p: &super::live::Packet) -> Result<()> {
+        let Some(v) = self.video else { return Ok(()) };
+        unsafe {
+            let sample = packet_sample(p, 0)?;
+            self.writer.WriteSample(v, &sample)
+        }
     }
 
     fn open(path: &std::path::Path, video: Option<&VideoSpec>, audio_tracks: usize, device: Option<&ID3D11Device>, hardware: bool) -> Result<Self> {
@@ -403,20 +443,7 @@ impl Encoder {
                 None => None,
             };
 
-            let mut audio = Vec::new();
-            for t in 0..audio_tracks {
-                let out = MFCreateMediaType()?;
-                out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
-                out.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_AAC)?;
-                out.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
-                out.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, AUDIO_RATE)?;
-                out.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, AUDIO_CHANNELS)?;
-                // Track 1 (desktop / mixed sound) 128 kbit/s, the microphone 96 kbit/s.
-                out.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, if t == 0 { 16_000 } else { 12_000 })?;
-                let idx = writer.AddStream(&out)?;
-                writer.SetInputMediaType(idx, &audio_pcm_type(AUDIO_RATE, AUDIO_CHANNELS)?, None)?;
-                audio.push(idx);
-            }
+            let audio = add_audio(&writer, audio_tracks)?;
             writer.BeginWriting()?;
             Ok(Self { writer, path: path.to_path_buf(), video: video_index, audio, width, height })
         }
@@ -741,38 +768,6 @@ mod tests {
     }
 }
 
-
-#[cfg(test)]
-mod pick_tests {
-    /// `BLINKER_TEST_PICK` = "w,h,fps": which encoder the sink writer takes
-    /// for that video with GPU frames, as the replay asks (see the log).
-    #[test]
-    fn which_encoder() {
-        let Ok(v) = std::env::var("BLINKER_TEST_PICK") else { return };
-        let n: Vec<u32> = v.split(',').map(|x| x.trim().parse().unwrap()).collect();
-        crate::media::mark_main_thread();
-        let gpu = crate::record::video::Gpu::shared().unwrap();
-        let cfg = crate::config::Config::default();
-        let spec = super::VideoSpec {
-            width: n[0],
-            height: n[1],
-            fps: n[2],
-            bitrate: cfg.rec_quality.bitrate(n[0], n[1], n[2]),
-            codec: super::Codec::H264,
-            quality: Some(cfg.rec_quality.quality()),
-            keyframe_secs: 1,
-        };
-        let path = std::env::temp_dir().join(format!("blinker-pick-{}.mp4", std::process::id()));
-        let r = super::Encoder::new(&path, Some(&spec), 2, Some(&gpu.device));
-        eprintln!("quality mode: {:?}", r.as_ref().err());
-        drop(r);
-        let _ = std::fs::remove_file(&path);
-        let r = super::Encoder::new(&path, Some(&super::VideoSpec { quality: None, ..spec }), 2, Some(&gpu.device));
-        eprintln!("vbr: {:?}", r.as_ref().err());
-        drop(r);
-        let _ = std::fs::remove_file(&path);
-    }
-}
 
 #[cfg(test)]
 mod hardware_tests {

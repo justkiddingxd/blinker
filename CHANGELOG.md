@@ -2,6 +2,36 @@
 
 Each version's section has a Russian half, `---`, then an English one: the app shows the one of its language, and GitHub's release notes (and the Discord note) are the English half (`.github/workflows/release.yml`).
 
+## 0.4.7
+
+**Запись и повтор**
+- Новый способ записи на Windows. Кодировщик видеокарты теперь работает напрямую: blinker сам выбирает кодировщик своей видеокарты, а Microsoft DX12 с его окном «Assertion failed» больше просто некому подсунуть.
+- Повтор больше не открывает новый кодировщик и не пишет куски на диск каждые 5 секунд: один кодировщик работает всё время, видео лежит кольцом в памяти (не больше четверти памяти и не больше 2 ГБ), файл собирается только при сохранении. Каждое такое открытие оставляло в драйвере NVIDIA неосвобождённые дескрипторы: за ночь их набегали десятки тысяч.
+- У каждой записи и повтора своё устройство видеокарты, у захвата экрана своё. Если кодировщик не успевает, кадры пропускаются, игре и другим записям это не мешает. Если он завис, повтор запускает новый, а остановка записи не ждёт его вечно: blinker больше не должен намертво вставать после записи.
+- Звук повтора по-прежнему хранится в файле на диске, как и раньше.
+
+**Захват**
+- Windows: blinker больше не нажимает Alt за тебя. Когда Windows не отдавала фокус окну захвата (поверх игры или видео во весь экран), он нажимал Alt, и это нажатие получала игра: она могла выпасть из полноэкранного режима, а с ещё зажатым Shift от горячей клавиши переключалась раскладка. Похоже, отсюда и чёрный экран, после которого приходилось нажимать Alt+Tab. Теперь вместо этого незаметное для программ нулевое движение мыши.
+- Фокус возвращается в окно, где ты был, ещё до того, как окно захвата скроется.
+
+**Журнал**
+- В журнале теперь есть окно захвата: когда открылось и закрылось, какое окно было впереди, во весь экран ли оно и не вышел ли снимок чёрным. Ещё старт и остановка записи, что было впереди через полсекунды после старта и случаи, когда Windows не отдала фокус.
+
+---
+
+**Recording and replay**
+- A new way of recording on Windows. The graphics card's encoder is now driven directly: blinker picks its own card's encoder, and there's nobody left to hand it Microsoft's DX12 one with its "Assertion failed" box.
+- The replay no longer opens a new encoder and writes pieces to disk every 5 seconds: one encoder runs all the time, the video sits in a ring in memory (a quarter of the RAM at most, 2 GB at most), and a file is made only on saving. Every such opening left handles behind in NVIDIA's driver: tens of thousands in a night.
+- Each recording and the replay have their own graphics device, and the screen capture has its own. When an encoder falls behind, frames are skipped without getting in the way of the game or other recordings. When it hangs, the replay starts a new one and stopping a recording doesn't wait for it forever: blinker should no longer lock up after a recording.
+- The replay's sound is still kept in a file on disk, as before.
+
+**Capture**
+- Windows: blinker no longer presses Alt for you. When Windows wouldn't give the capture window the focus (over a game or a fullscreen video), it tapped Alt, and that tap went to the game: it could drop out of fullscreen, and with Shift still held from the hotkey the keyboard layout switched. This looks like where the black screen that took Alt+Tab to leave came from. A mouse move of nothing, which no program notices, does the job now.
+- The focus goes back to the window you were in before the capture window hides.
+
+**Log**
+- The log now covers the capture window: when it opened and closed, which window was in front, whether that one was fullscreen, and whether the picture came out black. Also a recording's start and stop, what was in front half a second into it, and the times Windows held the focus back.
+
 ## 0.4.6
 
 **Захват**

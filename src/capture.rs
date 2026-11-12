@@ -68,6 +68,22 @@ pub fn grab_desktop() -> Option<Snapshot> {
     Some(Snapshot { image, origin: (vs.x, vs.y), windows, monitors })
 }
 
+/// Whether a picture is black all over (what the screen gives back for
+/// something it can't read, a game in exclusive fullscreen, say). Looks at a
+/// grid of points, not at every pixel.
+pub fn looks_black(img: &RgbaImage) -> bool {
+    let (w, h) = img.dimensions();
+    if w == 0 || h == 0 {
+        return false;
+    }
+    (0..24).all(|y| {
+        (0..32).all(|x| {
+            let p = img.get_pixel(x * w / 32, y * h / 24);
+            p[0] < 6 && p[1] < 6 && p[2] < 6
+        })
+    })
+}
+
 /// Grabs an absolute screen rectangle (physical pixels).
 pub fn grab_rect(r: IRect) -> Option<RgbaImage> {
     if r.is_empty() {
